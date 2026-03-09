@@ -1,5 +1,6 @@
 import type { Edge, NodeChange } from '@xyflow/react';
 
+import { updateById } from '../../shared/collections';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
@@ -129,11 +130,13 @@ export function buildCanvasNodes({
 }
 
 export function buildCanvasEdges(workspace: Workspace): Edge[] {
+  const terminalIds = new Set(
+    workspace.terminals.map((terminal) => terminal.id),
+  );
+
   return workspace.markdown.flatMap((markdown) =>
     markdown.linkedTerminalIds
-      .filter((terminalId) =>
-        workspace.terminals.some((terminal) => terminal.id === terminalId),
-      )
+      .filter((terminalId) => terminalIds.has(terminalId))
       .map((terminalId) => ({
         id: `link-${markdown.id}-${terminalId}`,
         source: markdown.id,
@@ -191,45 +194,33 @@ export function updateNodeBounds(
   nodeId: string,
   partialBounds: Partial<Workspace['terminals'][number]['bounds']>,
 ): Workspace {
-  const terminalIndex = workspace.terminals.findIndex(
-    (terminal) => terminal.id === nodeId,
-  );
+  const terminalResult = updateById(workspace.terminals, nodeId, (terminal) => ({
+    ...terminal,
+    bounds: {
+      ...terminal.bounds,
+      ...partialBounds,
+    },
+  }));
 
-  if (terminalIndex !== -1) {
+  if (terminalResult.found && terminalResult.changed) {
     return {
       ...workspace,
-      terminals: workspace.terminals.map((terminal, index) =>
-        index === terminalIndex
-          ? {
-              ...terminal,
-              bounds: {
-                ...terminal.bounds,
-                ...partialBounds,
-              },
-            }
-          : terminal,
-      ),
+      terminals: terminalResult.items,
     };
   }
 
-  const markdownIndex = workspace.markdown.findIndex(
-    (markdown) => markdown.id === nodeId,
-  );
+  const markdownResult = updateById(workspace.markdown, nodeId, (markdown) => ({
+    ...markdown,
+    bounds: {
+      ...markdown.bounds,
+      ...partialBounds,
+    },
+  }));
 
-  if (markdownIndex !== -1) {
+  if (markdownResult.found && markdownResult.changed) {
     return {
       ...workspace,
-      markdown: workspace.markdown.map((markdown, index) =>
-        index === markdownIndex
-          ? {
-              ...markdown,
-              bounds: {
-                ...markdown.bounds,
-                ...partialBounds,
-              },
-            }
-          : markdown,
-      ),
+      markdown: markdownResult.items,
     };
   }
 

@@ -1,4 +1,5 @@
-import type { Workspace } from '../../shared/workspace';
+import { serializeJsonMessage } from '../../shared/jsonTransport';
+import { type Workspace, workspaceSchema } from '../../shared/workspace';
 
 export async function fetchWorkspace(): Promise<Workspace> {
   const response = await fetch('/api/workspace');
@@ -7,7 +8,7 @@ export async function fetchWorkspace(): Promise<Workspace> {
     throw new Error(`Workspace request failed with ${response.status}`);
   }
 
-  return (await response.json()) as Workspace;
+  return workspaceSchema.parse(await response.json());
 }
 
 export async function persistWorkspace(
@@ -18,12 +19,12 @@ export async function persistWorkspace(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(workspace),
+    body: serializeJsonMessage(workspace),
   });
 
   if (!response.ok) {
     throw new Error(`Workspace save failed with ${response.status}`);
   }
 
-  return (await response.json()) as Workspace;
+  return workspaceSchema.parse(await response.json());
 }

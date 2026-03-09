@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 import {
   Background,
   BackgroundVariant,
@@ -68,47 +70,72 @@ export function WorkspaceCanvas({
   focusAutoFocusAtMs,
 }: WorkspaceCanvasProps) {
   const semanticMode = getSemanticZoomMode(workspace.currentViewport.zoom);
-  const livePreviewTerminalIds = new Set(
-    getReadOnlyPreviewTerminalIds(
-      workspace.terminals,
-      selectedNodeId,
-      semanticMode,
-    ),
+  const livePreviewTerminalIds = useMemo(
+    () =>
+      new Set(
+        getReadOnlyPreviewTerminalIds(
+          workspace.terminals,
+          selectedNodeId,
+          semanticMode,
+        ),
+      ),
+    [semanticMode, selectedNodeId, workspace.terminals],
   );
-  const selectedTerminal =
-    semanticMode === 'focus' && selectedNodeId
-      ? (workspace.terminals.find(
-          (terminal) => terminal.id === selectedNodeId,
-        ) ?? null)
-      : null;
+  const selectedTerminal = useMemo(
+    () =>
+      semanticMode === 'focus' && selectedNodeId
+        ? (workspace.terminals.find(
+            (terminal) => terminal.id === selectedNodeId,
+          ) ?? null)
+        : null,
+    [semanticMode, selectedNodeId, workspace.terminals],
+  );
   const selectedSession = selectedTerminal
     ? (sessions[selectedTerminal.id] ?? null)
     : null;
+  const nodes = useMemo(
+    () =>
+      buildCanvasNodes({
+        workspace,
+        selectedNodeId,
+        livePreviewTerminalIds,
+        focusTerminalId: selectedTerminal?.id ?? null,
+        sessions,
+        socketState,
+        onSelect: onSelectedNodeChange,
+        onBoundsChange: (nodeId, bounds) => {
+          onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+        },
+        onTerminalChange,
+        onInput: onTerminalInput,
+        onResize: onTerminalResize,
+        onRestart: onTerminalRestart,
+        onMarkRead: onMarkTerminalRead,
+      }),
+    [
+      livePreviewTerminalIds,
+      onMarkTerminalRead,
+      onSelectedNodeChange,
+      onTerminalChange,
+      onTerminalInput,
+      onTerminalResize,
+      onTerminalRestart,
+      onWorkspaceChange,
+      selectedNodeId,
+      selectedTerminal?.id,
+      sessions,
+      socketState,
+      workspace,
+    ],
+  );
+  const edges = useMemo(() => buildCanvasEdges(workspace), [workspace]);
 
   return (
     <div className="canvas-frame">
       <ReactFlowProvider>
         <ReactFlow
-          nodes={buildCanvasNodes({
-            workspace,
-            selectedNodeId,
-            livePreviewTerminalIds,
-            focusTerminalId: selectedTerminal?.id ?? null,
-            sessions,
-            socketState,
-            onSelect: onSelectedNodeChange,
-            onBoundsChange: (nodeId, bounds) => {
-              onWorkspaceChange((current) =>
-                updateNodeBounds(current, nodeId, bounds),
-              );
-            },
-            onTerminalChange,
-            onInput: onTerminalInput,
-            onResize: onTerminalResize,
-            onRestart: onTerminalRestart,
-            onMarkRead: onMarkTerminalRead,
-          })}
-          edges={buildCanvasEdges(workspace)}
+          nodes={nodes}
+          edges={edges}
           nodeTypes={nodeTypes}
           viewport={workspace.currentViewport}
           onViewportChange={onViewportChange}
@@ -155,7 +182,7 @@ export function WorkspaceCanvas({
           panOnDrag={false}
           panActivationKeyCode="Space"
           deleteKeyCode={null}
-          onlyRenderVisibleElements={false}
+          onlyRenderVisibleElements
         >
           <Background
             variant={BackgroundVariant.Dots}

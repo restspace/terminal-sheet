@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { parseJsonMessage, serializeJsonMessage } from '../../shared/jsonTransport';
 import {
   terminalClientSocketMessageSchema,
   type TerminalClientSocketMessage,
@@ -45,11 +46,7 @@ export async function registerWorkspaceSocket(
 }
 
 function parseClientMessage(payload: string): TerminalClientSocketMessage | null {
-  try {
-    return terminalClientSocketMessageSchema.parse(JSON.parse(payload));
-  } catch {
-    return null;
-  }
+  return parseJsonMessage(payload, terminalClientSocketMessageSchema);
 }
 
 function handleClientMessage(
@@ -87,5 +84,5 @@ function sendJson(
     return;
   }
 
-  socket.send(JSON.stringify(payload));
+  socket.send(serializeJsonMessage(payload));
 }

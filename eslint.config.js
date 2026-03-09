@@ -6,7 +6,14 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default tseslint.config(
   {
-    ignores: ['dist', 'node_modules'],
+    ignores: [
+      'dist',
+      'node_modules',
+      '.terminal-canvas',
+      '.codex-debug',
+      '*.log',
+      '*.png',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

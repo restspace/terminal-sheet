@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { parseJsonMessage, serializeJsonMessage } from '../../shared/jsonTransport';
+import { appendScrollback } from '../../shared/scrollback';
 import {
   type TerminalServerSocketMessage,
   terminalServerSocketMessageSchema,
@@ -10,10 +12,11 @@ import {
 export type TerminalSocketState = 'connecting' | 'open' | 'closed' | 'error';
 
 export function useTerminalSessions() {
-  const [sessions, setSessions] = useState<Record<string, TerminalSessionSnapshot>>(
-    {},
-  );
-  const [socketState, setSocketState] = useState<TerminalSocketState>('connecting');
+  const [sessions, setSessions] = useState<
+    Record<string, TerminalSessionSnapshot>
+  >({});
+  const [socketState, setSocketState] =
+    useState<TerminalSocketState>('connecting');
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
 
@@ -78,58 +81,54 @@ export function useTerminalSessions() {
     };
   }, []);
 
-  function send(message: TerminalClientSocketMessage) {
+  const send = useCallback((message: TerminalClientSocketMessage) => {
     const socket = socketRef.current;
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return;
     }
 
-    socket.send(JSON.stringify(message));
-  }
+    socket.send(serializeJsonMessage(message));
+  }, []);
 
   return {
     sessions,
     socketState,
-    sendInput(sessionId: string, data: string) {
+    sendInput: useCallback((sessionId: string, data: string) => {
       send({
         type: 'terminal.input',
         sessionId,
         data,
       });
-    },
-    resizeSession(sessionId: string, cols: number, rows: number) {
+    }, [send]),
+    resizeSession: useCallback((sessionId: string, cols: number, rows: number) => {
       send({
         type: 'terminal.resize',
         sessionId,
         cols,
         rows,
       });
-    },
-    restartSession(sessionId: string) {
+    }, [send]),
+    restartSession: useCallback((sessionId: string) => {
       send({
         type: 'terminal.restart',
         sessionId,
       });
-    },
-    markSessionRead(sessionId: string) {
+    }, [send]),
+    markSessionRead: useCallback((sessionId: string) => {
       send({
         type: 'terminal.mark-read',
         sessionId,
       });
-    },
+    }, [send]),
   };
 }
 
 function parseServerMessage(payload: unknown): TerminalServerSocketMessage | null {
-  try {
-    return terminalServerSocketMessageSchema.parse(JSON.parse(String(payload)));
-  } catch {
-    return null;
-  }
+  return parseJsonMessage(payload, terminalServerSocketMessageSchema);
 }
 
-function applyServerMessage(
+export function applyServerMessage(
   current: Record<string, TerminalSessionSnapshot>,
   message: TerminalServerSocketMessage,
 ): Record<string, TerminalSessionSnapshot> {
@@ -166,14 +165,4 @@ function applyServerMessage(
       return next;
     }
   }
-}
-
-function appendScrollback(scrollback: string, chunk: string): string {
-  const combined = scrollback + chunk;
-
-  if (combined.length <= 120_000) {
-    return combined;
-  }
-
-  return combined.slice(combined.length - 120_000);
 }

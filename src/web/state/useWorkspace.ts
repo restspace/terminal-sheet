@@ -1,17 +1,22 @@
-import { startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 
 import {
-  createTerminalNode,
-  createPlaceholderMarkdown,
   type CreateTerminalNodeInput,
   type TerminalNode,
   type TerminalNodePatch,
   touchWorkspace,
   type CameraViewport,
-  updateTerminalNode,
   type Workspace,
 } from '../../shared/workspace';
 import { fetchWorkspace, persistWorkspace } from './workspaceClient';
+import {
+  addMarkdownToWorkspace,
+  addTerminalToWorkspace,
+  applyWorkspaceCameraPreset,
+  saveWorkspaceViewportToPreset,
+  setWorkspaceViewport,
+  updateWorkspaceTerminal,
+} from './workspaceActions';
 
 export interface WorkspacePersistenceState {
   phase: 'loading' | 'saving' | 'saved' | 'error';
@@ -31,10 +36,12 @@ export function useWorkspace() {
     error: null,
     lastSavedAt: null,
   });
-  const lastSavedSnapshotRef = useRef<string>('');
   const hasLoadedRef = useRef(false);
   const workspaceRef = useRef<Workspace | null>(null);
-  const skipAutosaveSnapshotRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const localRevisionRef = useRef(0);
+  const lastSavedRevisionRef = useRef(0);
+  const inFlightRevisionRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,9 +54,11 @@ export function useWorkspace() {
           return;
         }
 
-        lastSavedSnapshotRef.current = JSON.stringify(loadedWorkspace);
         hasLoadedRef.current = true;
         workspaceRef.current = loadedWorkspace;
+        localRevisionRef.current = 0;
+        lastSavedRevisionRef.current = 0;
+        inFlightRevisionRef.current = null;
 
         startTransition(() => {
           setWorkspace(loadedWorkspace);
@@ -76,59 +85,76 @@ export function useWorkspace() {
 
     return () => {
       cancelled = true;
-    };
+      clearAutosaveTimer(autosaveTimerRef);
+    }
   }, []);
 
-  useEffect(() => {
-    if (!workspace || !hasLoadedRef.current) {
+  const persistCurrentWorkspace = useCallback(async () => {
+    const nextWorkspace = workspaceRef.current;
+
+    if (
+      !hasLoadedRef.current ||
+      !nextWorkspace ||
+      inFlightRevisionRef.current !== null ||
+      localRevisionRef.current <= lastSavedRevisionRef.current
+    ) {
       return;
     }
 
-    const snapshot = JSON.stringify(workspace);
+    const revision = localRevisionRef.current;
+    inFlightRevisionRef.current = revision;
 
-    if (skipAutosaveSnapshotRef.current === snapshot) {
-      skipAutosaveSnapshotRef.current = null;
-      return;
-    }
+    setPersistence((current) => ({
+      ...current,
+      phase: 'saving',
+      error: null,
+    }));
 
-    if (snapshot === lastSavedSnapshotRef.current) {
-      return;
-    }
+    try {
+      const savedWorkspace = await persistWorkspace(nextWorkspace);
+      lastSavedRevisionRef.current = Math.max(
+        lastSavedRevisionRef.current,
+        revision,
+      );
 
-    const saveTimer = window.setTimeout(async () => {
-      setPersistence((current) => ({
-        ...current,
-        phase: 'saving',
-        error: null,
-      }));
+      if (revision === localRevisionRef.current) {
+        workspaceRef.current = savedWorkspace;
 
-      try {
-        await persistWorkspace(workspace);
-        lastSavedSnapshotRef.current = snapshot;
+        startTransition(() => {
+          setWorkspace(savedWorkspace);
+        });
 
         setPersistence({
           phase: 'saved',
           error: null,
-          lastSavedAt: workspace.updatedAt,
+          lastSavedAt: savedWorkspace.updatedAt,
         });
-      } catch (error) {
-        setPersistence({
-          phase: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error',
-          lastSavedAt: null,
-        });
+      } else {
+        setPersistence((current) => ({
+          phase: 'saving',
+          error: null,
+          lastSavedAt: savedWorkspace.updatedAt ?? current.lastSavedAt,
+        }));
       }
-    }, 450);
+    } catch (error) {
+      setPersistence((current) => ({
+        phase: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        lastSavedAt: current.lastSavedAt,
+      }));
+    } finally {
+      inFlightRevisionRef.current = null;
 
-    return () => {
-      window.clearTimeout(saveTimer);
-    };
-  }, [workspace]);
+      if (localRevisionRef.current > lastSavedRevisionRef.current) {
+        schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
+      }
+    }
+  }, []);
 
-  function updateWorkspace(
+  const updateWorkspace = useCallback((
     updater: WorkspaceUpdater,
     options?: UpdateWorkspaceOptions,
-  ): Workspace | null {
+  ): Workspace | null => {
     const currentWorkspace = workspaceRef.current;
 
     if (!currentWorkspace) {
@@ -142,165 +168,56 @@ export function useWorkspace() {
     }
 
     const touchedWorkspace = touchWorkspace(nextWorkspace);
-    const snapshot = JSON.stringify(touchedWorkspace);
-
     workspaceRef.current = touchedWorkspace;
+    localRevisionRef.current += 1;
 
     startTransition(() => {
       setWorkspace(touchedWorkspace);
     });
 
     if (options?.persistImmediately) {
-      skipAutosaveSnapshotRef.current = snapshot;
-      void saveWorkspaceImmediately(touchedWorkspace, snapshot);
+      schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
+    } else {
+      schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 450);
     }
 
     return touchedWorkspace;
-  }
+  }, [persistCurrentWorkspace]);
 
-  function addTerminal(
+  const addTerminal = useCallback((
     input?: Partial<CreateTerminalNodeInput>,
     options?: UpdateWorkspaceOptions,
-  ): TerminalNode | null {
+  ): TerminalNode | null => {
     let createdTerminal: TerminalNode | null = null;
 
     updateWorkspace((current) => {
-      createdTerminal = createTerminalNode(
-        {
-          label:
-            input?.label?.trim() || `Shell ${current.terminals.length + 1}`,
-          shell: input?.shell?.trim() || defaultShell(),
-          cwd: input?.cwd?.trim() || '.',
-          agentType: input?.agentType ?? 'shell',
-          repoLabel: input?.repoLabel?.trim() || 'local workspace',
-          taskLabel: input?.taskLabel?.trim() || 'live terminal session',
-          tags: input?.tags ?? [],
-        },
-        current.terminals.length,
-        current.currentViewport,
-      );
-
-      return {
-        ...current,
-        terminals: [...current.terminals, createdTerminal],
-      };
+      const nextState = addTerminalToWorkspace(current, input);
+      createdTerminal = nextState.terminal;
+      return nextState.workspace;
     }, options);
 
     return createdTerminal;
-  }
+  }, [updateWorkspace]);
 
-  function addMarkdown() {
-    updateWorkspace((current) => ({
-      ...current,
-      markdown: [
-        ...current.markdown,
-        createPlaceholderMarkdown(
-          current.markdown.length,
-          current.currentViewport,
-        ),
-      ],
-    }));
-  }
+  const addMarkdown = useCallback(() => {
+    updateWorkspace(addMarkdownToWorkspace);
+  }, [updateWorkspace]);
 
-  function updateTerminal(terminalId: string, patch: TerminalNodePatch) {
-    updateWorkspace((current) =>
-      updateTerminalNode(current, terminalId, patch),
-    );
-  }
+  const updateTerminal = useCallback((terminalId: string, patch: TerminalNodePatch) => {
+    updateWorkspace((current) => updateWorkspaceTerminal(current, terminalId, patch));
+  }, [updateWorkspace]);
 
-  function setViewport(viewport: CameraViewport) {
-    updateWorkspace((current) => {
-      if (sameViewport(current.currentViewport, viewport)) {
-        return current;
-      }
+  const setViewport = useCallback((viewport: CameraViewport) => {
+    updateWorkspace((current) => setWorkspaceViewport(current, viewport));
+  }, [updateWorkspace]);
 
-      return {
-        ...current,
-        currentViewport: viewport,
-      };
-    });
-  }
+  const applyCameraPreset = useCallback((presetId: string) => {
+    updateWorkspace((current) => applyWorkspaceCameraPreset(current, presetId));
+  }, [updateWorkspace]);
 
-  function applyCameraPreset(presetId: string) {
-    updateWorkspace((current) => {
-      const preset = current.cameraPresets.find(
-        (candidate) => candidate.id === presetId,
-      );
-
-      if (!preset) {
-        return current;
-      }
-
-      return {
-        ...current,
-        currentViewport: preset.viewport,
-      };
-    });
-  }
-
-  function saveViewportToPreset(presetId: string) {
-    updateWorkspace((current) => ({
-      ...current,
-      cameraPresets: current.cameraPresets.map((preset) =>
-        preset.id === presetId
-          ? { ...preset, viewport: current.currentViewport }
-          : preset,
-      ),
-    }));
-  }
-
-  async function saveWorkspaceImmediately(
-    nextWorkspace: Workspace,
-    snapshot: string,
-  ) {
-    setPersistence((current) => ({
-      ...current,
-      phase: 'saving',
-      error: null,
-    }));
-
-    try {
-      const savedWorkspace = await persistWorkspace(nextWorkspace);
-      const currentSnapshot = workspaceRef.current
-        ? JSON.stringify(workspaceRef.current)
-        : '';
-
-      if (currentSnapshot !== snapshot) {
-        lastSavedSnapshotRef.current = snapshot;
-
-        setPersistence({
-          phase: 'saved',
-          error: null,
-          lastSavedAt: savedWorkspace.updatedAt,
-        });
-
-        return;
-      }
-
-      workspaceRef.current = savedWorkspace;
-      lastSavedSnapshotRef.current = JSON.stringify(savedWorkspace);
-
-      startTransition(() => {
-        setWorkspace(savedWorkspace);
-      });
-
-      setPersistence({
-        phase: 'saved',
-        error: null,
-        lastSavedAt: savedWorkspace.updatedAt,
-      });
-    } catch (error) {
-      if (skipAutosaveSnapshotRef.current === snapshot) {
-        skipAutosaveSnapshotRef.current = null;
-      }
-
-      setPersistence({
-        phase: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        lastSavedAt: null,
-      });
-    }
-  }
+  const saveViewportToPreset = useCallback((presetId: string) => {
+    updateWorkspace((current) => saveWorkspaceViewportToPreset(current, presetId));
+  }, [updateWorkspace]);
 
   return {
     workspace,
@@ -315,22 +232,24 @@ export function useWorkspace() {
   };
 }
 
-function sameViewport(left: CameraViewport, right: CameraViewport): boolean {
-  return (
-    almostEqual(left.x, right.x) &&
-    almostEqual(left.y, right.y) &&
-    almostEqual(left.zoom, right.zoom)
-  );
-}
-
-function almostEqual(left: number, right: number): boolean {
-  return Math.abs(left - right) < 0.001;
-}
-
-function defaultShell(): string {
-  if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Win')) {
-    return 'powershell.exe';
+function clearAutosaveTimer(timerRef: React.RefObject<number | null>): void {
+  if (timerRef.current === null) {
+    return;
   }
 
-  return 'bash';
+  window.clearTimeout(timerRef.current);
+  timerRef.current = null;
+}
+
+function schedulePersist(
+  timerRef: React.RefObject<number | null>,
+  persist: () => Promise<void>,
+  delayMs: number,
+): void {
+  clearAutosaveTimer(timerRef);
+
+  timerRef.current = window.setTimeout(() => {
+    timerRef.current = null;
+    void persist();
+  }, delayMs);
 }

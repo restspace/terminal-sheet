@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { updateById } from './collections';
+import { getDefaultShell } from './platform';
+
 export const terminalStatusSchema = z.enum([
   'idle',
   'running',
@@ -213,7 +216,7 @@ export function createPlaceholderTerminal(
       label: `Shell ${index + 1}`,
       repoLabel: 'local workspace',
       taskLabel: 'placeholder session',
-      shell: defaultShell(),
+      shell: getDefaultShell(),
       cwd: '.',
       agentType: 'shell',
       tags: [],
@@ -288,19 +291,17 @@ export function updateTerminalNode(
   terminalId: string,
   patch: TerminalNodePatch,
 ): Workspace {
-  const terminalIndex = workspace.terminals.findIndex(
-    (terminal) => terminal.id === terminalId,
+  const result = updateById(workspace.terminals, terminalId, (terminal) =>
+    applyTerminalPatch(terminal, patch),
   );
 
-  if (terminalIndex === -1) {
+  if (!result.found || !result.changed) {
     return workspace;
   }
 
   return {
     ...workspace,
-    terminals: workspace.terminals.map((terminal, index) =>
-      index === terminalIndex ? applyTerminalPatch(terminal, patch) : terminal,
-    ),
+    terminals: result.items,
   };
 }
 
@@ -405,14 +406,6 @@ function distanceBetweenCenters(
   const deltaY = left.y - right.y;
 
   return deltaX * deltaX + deltaY * deltaY;
-}
-
-function defaultShell(): string {
-  if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Win')) {
-    return 'powershell.exe';
-  }
-
-  return 'bash';
 }
 
 function getVisibleOrigin(viewport?: CameraViewport): { x: number; y: number } {

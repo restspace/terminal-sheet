@@ -48,6 +48,7 @@ export async function createServer(
 
   if (options.webRoot) {
     const webRoot = resolve(options.webRoot);
+    const indexHtml = await readFile(resolve(webRoot, 'index.html'), 'utf8');
 
     await app.register(fastifyStatic, {
       root: webRoot,
@@ -65,8 +66,6 @@ export async function createServer(
       if (extname(requestPath)) {
         return reply.code(404).send({ message: 'Asset not found' });
       }
-
-      const indexHtml = await readFile(resolve(webRoot, 'index.html'), 'utf8');
 
       return reply.type('text/html').send(indexHtml);
     });

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 import type { TerminalNode, TerminalStatus } from '../../shared/workspace';
 
@@ -20,30 +20,35 @@ export function TerminalTitleBar({
   sidecar,
   onTerminalChange,
 }: TerminalTitleBarProps) {
-  const [labelDraft, setLabelDraft] = useState(terminal.label);
+  const labelInputRef = useRef<HTMLInputElement | null>(null);
   const pathLabel =
     terminal.repoLabel ?? terminal.taskLabel ?? 'local workspace';
 
   useEffect(() => {
-    setLabelDraft(terminal.label);
+    if (
+      labelInputRef.current &&
+      document.activeElement !== labelInputRef.current
+    ) {
+      labelInputRef.current.value = terminal.label;
+    }
   }, [terminal.label]);
 
   return (
     <div className={className}>
       <div className="terminal-header-line">
         <input
+          ref={labelInputRef}
           className="terminal-inline-input terminal-inline-input-label nodrag nopan"
           aria-label="Terminal label"
-          value={labelDraft}
+          defaultValue={terminal.label}
           onChange={(event) => {
             const nextValue = event.target.value;
-            setLabelDraft(nextValue);
             onTerminalChange?.(terminal.id, { label: nextValue });
           }}
-          onBlur={() => {
-            if (!labelDraft.trim()) {
+          onBlur={(event) => {
+            if (!event.target.value.trim()) {
               const fallbackLabel = terminal.label || 'Shell';
-              setLabelDraft(fallbackLabel);
+              event.target.value = fallbackLabel;
               onTerminalChange?.(terminal.id, { label: fallbackLabel });
             }
           }}
