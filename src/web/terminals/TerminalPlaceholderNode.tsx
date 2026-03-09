@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 
-import { NodeResizer, type NodeProps, useViewport } from '@xyflow/react';
+import { type NodeProps, useViewport } from '@xyflow/react';
 
 import { getSemanticZoomMode } from '../../shared/workspace';
-import { TerminalFocusSurface } from './TerminalFocusSurface';
+import { CanvasResizeHandles } from '../canvas/CanvasResizeHandles';
 import type { TerminalFlowNode } from './types';
 
 export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
@@ -12,7 +12,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const mode = getSemanticZoomMode(zoom);
   const terminal = data.terminal;
   const session = data.session;
-  const { onInput, onResize, onRestart, onMarkRead } = data;
+  const { onBoundsChange, onRestart, onMarkRead } = data;
   const canAttachTerminal = mode === 'focus' && selected && data.isInteractive;
   const previewLines = session?.previewLines ?? [];
 
@@ -30,13 +30,15 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
           : 'canvas-node terminal-node'
       }
     >
-      <NodeResizer
+      <CanvasResizeHandles
+        bounds={terminal.bounds}
         isVisible={selected}
         minWidth={260}
         minHeight={180}
-        color="#8ab4d8"
-        lineStyle={{ borderColor: 'rgba(138, 180, 216, 0.55)' }}
-        handleStyle={{ background: '#8ab4d8', borderColor: '#04111d' }}
+        zoom={zoom}
+        onBoundsChange={(bounds) => {
+          onBoundsChange(terminal.id, bounds);
+        }}
       />
 
       <div className="canvas-node-content">
@@ -94,43 +96,37 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
 
         {mode === 'focus' ? (
           <div className="canvas-node-summary">
-            <p>Focus shell</p>
-            {canAttachTerminal && session ? (
-              <>
-                <div className="terminal-focus-toolbar">
-                  <strong>{session.summary}</strong>
-                  {!session.connected ? (
-                    <button
-                      className="nodrag nopan"
-                      type="button"
-                      onClick={() => {
-                        onRestart(terminal.id);
-                      }}
-                    >
-                      Restart
-                    </button>
-                  ) : null}
-                </div>
-                <TerminalFocusSurface
-                  sessionId={terminal.id}
-                  scrollback={session.scrollback}
-                  onInput={onInput}
-                  onResize={onResize}
-                />
-              </>
-            ) : (
-              <>
-                <strong>
-                  {selected
-                    ? 'Waiting for PTY session snapshot.'
-                    : 'Select this node to attach xterm.'}
-                </strong>
-                <span>
-                  Focus mode only mounts the live terminal for the selected node
-                  so overview monitoring stays lightweight.
-                </span>
-              </>
-            )}
+            <div className="terminal-focus-toolbar">
+              <div className="terminal-focus-title">
+                <span className="terminal-focus-label">Focus shell</span>
+                {canAttachTerminal && session ? (
+                  <strong title={session.summary}>{session.summary}</strong>
+                ) : null}
+              </div>
+              {!session?.connected ? (
+                <button
+                  className="nodrag nopan"
+                  type="button"
+                  onClick={() => {
+                    onRestart(terminal.id);
+                  }}
+                >
+                  Restart
+                </button>
+              ) : null}
+            </div>
+            <strong>
+              {canAttachTerminal
+                ? 'Live terminal attached in focus overlay.'
+                : selected
+                  ? 'Waiting for PTY session snapshot.'
+                  : 'Select this node to attach xterm.'}
+            </strong>
+            <span>
+              Focus mode now mounts the interactive terminal in a dedicated
+              overlay above the canvas so terminal clicks do not collide with
+              canvas hit-testing.
+            </span>
           </div>
         ) : null}
       </div>

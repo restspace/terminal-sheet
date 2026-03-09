@@ -255,6 +255,21 @@ export function useWorkspace() {
 
     try {
       const savedWorkspace = await persistWorkspace(nextWorkspace);
+      const currentSnapshot = workspaceRef.current
+        ? JSON.stringify(workspaceRef.current)
+        : '';
+
+      if (currentSnapshot !== snapshot) {
+        lastSavedSnapshotRef.current = snapshot;
+
+        setPersistence({
+          phase: 'saved',
+          error: null,
+          lastSavedAt: savedWorkspace.updatedAt,
+        });
+
+        return;
+      }
 
       workspaceRef.current = savedWorkspace;
       lastSavedSnapshotRef.current = JSON.stringify(savedWorkspace);

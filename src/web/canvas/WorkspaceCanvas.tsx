@@ -14,11 +14,13 @@ import {
 } from '../../shared/workspace';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import { MarkdownPlaceholderNode } from '../markdown/MarkdownPlaceholderNode';
+import { FocusedTerminalOverlay } from '../terminals/FocusedTerminalOverlay';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
 import {
   applyNodeChangesToWorkspace,
   buildCanvasEdges,
   buildCanvasNodes,
+  updateNodeBounds,
 } from './flow';
 
 interface WorkspaceCanvasProps {
@@ -58,6 +60,11 @@ export function WorkspaceCanvas({
   onViewportChange,
 }: WorkspaceCanvasProps) {
   const semanticMode = getSemanticZoomMode(workspace.currentViewport.zoom);
+  const selectedTerminal =
+    semanticMode === 'focus' && selectedNodeId
+      ? workspace.terminals.find((terminal) => terminal.id === selectedNodeId) ?? null
+      : null;
+  const selectedSession = selectedTerminal ? sessions[selectedTerminal.id] ?? null : null;
 
   return (
     <div className="canvas-frame">
@@ -68,6 +75,10 @@ export function WorkspaceCanvas({
             selectedNodeId,
             sessions,
             socketState,
+            onSelect: onSelectedNodeChange,
+            onBoundsChange: (nodeId, bounds) => {
+              onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+            },
             onInput: onTerminalInput,
             onResize: onTerminalResize,
             onRestart: onTerminalRestart,
@@ -82,7 +93,16 @@ export function WorkspaceCanvas({
               applyNodeChangesToWorkspace(current, changes),
             );
           }}
-          onPaneClick={() => {
+          onPaneClick={(event) => {
+            const target = event.target;
+
+            if (
+              target instanceof Element &&
+              target.closest('.react-flow__node, .react-flow__panel')
+            ) {
+              return;
+            }
+
             onSelectedNodeChange(null);
           }}
           onNodeClick={(_event, node) => {
@@ -99,12 +119,13 @@ export function WorkspaceCanvas({
           fitView={false}
           snapToGrid
           snapGrid={[20, 20]}
-          selectionOnDrag
+          selectionOnDrag={false}
           panOnScroll
           panOnScrollSpeed={0.7}
+          panOnDrag={false}
           panActivationKeyCode="Space"
           deleteKeyCode={null}
-          onlyRenderVisibleElements
+          onlyRenderVisibleElements={false}
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -128,6 +149,20 @@ export function WorkspaceCanvas({
           <Controls showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>
+
+      {selectedTerminal ? (
+        <FocusedTerminalOverlay
+          terminal={selectedTerminal}
+          session={selectedSession}
+          viewport={workspace.currentViewport}
+          onInput={onTerminalInput}
+          onResize={onTerminalResize}
+          onBoundsChange={(nodeId, bounds) => {
+            onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+          }}
+          onRestart={onTerminalRestart}
+        />
+      ) : null}
 
       <div className="canvas-overlay">
         <div className="canvas-overlay-chip">

@@ -8,6 +8,11 @@ export interface TerminalNodeData extends Record<string, unknown> {
   session: TerminalSessionSnapshot | null;
   isInteractive: boolean;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
+  onSelect: (nodeId: string) => void;
+  onBoundsChange: (
+    nodeId: string,
+    bounds: Partial<TerminalNode['bounds']>,
+  ) => void;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onRestart: (sessionId: string) => void;
@@ -16,6 +21,11 @@ export interface TerminalNodeData extends Record<string, unknown> {
 
 export interface MarkdownNodeData extends Record<string, unknown> {
   markdown: MarkdownNode;
+  onSelect: (nodeId: string) => void;
+  onBoundsChange: (
+    nodeId: string,
+    bounds: Partial<MarkdownNode['bounds']>,
+  ) => void;
 }
 
 export type TerminalFlowNode = Node<TerminalNodeData, 'terminal'>;

@@ -11,6 +11,11 @@ interface BuildCanvasNodesOptions {
   selectedNodeId: string | null;
   sessions: Record<string, TerminalSessionSnapshot>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
+  onSelect: (nodeId: string) => void;
+  onBoundsChange: (
+    nodeId: string,
+    bounds: Partial<Workspace['terminals'][number]['bounds']>,
+  ) => void;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onRestart: (sessionId: string) => void;
@@ -22,6 +27,8 @@ export function buildCanvasNodes({
   selectedNodeId,
   sessions,
   socketState,
+  onSelect,
+  onBoundsChange,
   onInput,
   onResize,
   onRestart,
@@ -41,6 +48,8 @@ export function buildCanvasNodes({
       session: sessions[terminal.id] ?? null,
       isInteractive: selectedNodeId === terminal.id,
       socketState,
+      onSelect,
+      onBoundsChange,
       onInput,
       onResize,
       onRestart,
@@ -66,6 +75,8 @@ export function buildCanvasNodes({
     height: node.bounds.height,
     data: {
       markdown: node,
+      onSelect,
+      onBoundsChange,
     },
     style: {
       width: node.bounds.width,
@@ -137,7 +148,7 @@ export function applyNodeChangesToWorkspace(
   return nextWorkspace;
 }
 
-function updateNodeBounds(
+export function updateNodeBounds(
   workspace: Workspace,
   nodeId: string,
   partialBounds: Partial<Workspace['terminals'][number]['bounds']>,

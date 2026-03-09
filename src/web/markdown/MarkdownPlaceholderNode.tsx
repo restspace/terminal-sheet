@@ -1,6 +1,7 @@
-import { NodeResizer, type NodeProps, useViewport } from '@xyflow/react';
+import { type NodeProps, useViewport } from '@xyflow/react';
 
 import { getSemanticZoomMode } from '../../shared/workspace';
+import { CanvasResizeHandles } from '../canvas/CanvasResizeHandles';
 import type { MarkdownFlowNode } from '../terminals/types';
 
 export function MarkdownPlaceholderNode(
@@ -10,6 +11,7 @@ export function MarkdownPlaceholderNode(
   const { zoom } = useViewport();
   const mode = getSemanticZoomMode(zoom);
   const markdown = data.markdown;
+  const { onSelect, onBoundsChange } = data;
 
   return (
     <div
@@ -18,14 +20,24 @@ export function MarkdownPlaceholderNode(
           ? 'canvas-node markdown-node is-selected'
           : 'canvas-node markdown-node'
       }
+      onPointerDown={(event) => {
+        if (event.button !== 0) {
+          return;
+        }
+
+        event.stopPropagation();
+        onSelect(markdown.id);
+      }}
     >
-      <NodeResizer
+      <CanvasResizeHandles
+        bounds={markdown.bounds}
         isVisible={selected}
         minWidth={240}
         minHeight={180}
-        color="#ffcf84"
-        lineStyle={{ borderColor: 'rgba(255, 207, 132, 0.5)' }}
-        handleStyle={{ background: '#ffcf84', borderColor: '#2a1700' }}
+        zoom={zoom}
+        onBoundsChange={(bounds) => {
+          onBoundsChange(markdown.id, bounds);
+        }}
       />
 
       <div className="canvas-node-content">

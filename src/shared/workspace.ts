@@ -168,10 +168,10 @@ export function createTerminalNode(
     agentType: input.agentType,
     status: 'idle',
     bounds: {
-      x: visibleOrigin.x + column * 360,
-      y: visibleOrigin.y + row * 250,
-      width: 320,
-      height: 220,
+      x: visibleOrigin.x + column * 440,
+      y: visibleOrigin.y + row * 320,
+      width: 400,
+      height: 280,
     },
     tags: input.tags ?? [],
   };
@@ -192,10 +192,10 @@ export function createPlaceholderMarkdown(
     filePath: `./notes-${index + 1}.md`,
     readOnly: false,
     bounds: {
-      x: visibleOrigin.x + 100 + column * 320,
-      y: visibleOrigin.y + 40 + row * 260,
-      width: 280,
-      height: 220,
+      x: visibleOrigin.x + 120 + column * 360,
+      y: visibleOrigin.y + 60 + row * 300,
+      width: 320,
+      height: 250,
     },
     linkedTerminalIds: [],
   };

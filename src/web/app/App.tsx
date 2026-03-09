@@ -20,6 +20,9 @@ interface HealthState {
   timestamp: string;
 }
 
+const MIN_FOCUS_TERMINAL_WIDTH = 560;
+const MIN_FOCUS_TERMINAL_HEIGHT = 385;
+
 export function App() {
   const {
     workspace,
@@ -84,6 +87,70 @@ export function App() {
     setActivePresetId(workspace.cameraPresets[0]?.id ?? null);
   }, [activePresetId, workspace]);
 
+  useEffect(() => {
+    if (!workspace || selectedNodeId) {
+      return;
+    }
+
+    if (
+      getSemanticZoomMode(workspace.currentViewport.zoom) === 'focus' &&
+      workspace.terminals.length === 1
+    ) {
+      const terminal = workspace.terminals[0];
+
+      if (!terminal) {
+        return;
+      }
+
+      let focusTarget = terminal;
+
+      if (
+        terminal.bounds.width < MIN_FOCUS_TERMINAL_WIDTH ||
+        terminal.bounds.height < MIN_FOCUS_TERMINAL_HEIGHT
+      ) {
+        const resizedWorkspace = updateWorkspace((current) => ({
+          ...current,
+          terminals: current.terminals.map((candidate) =>
+            candidate.id === terminal.id
+              ? {
+                  ...candidate,
+                  bounds: {
+                    ...candidate.bounds,
+                    width: Math.max(
+                      candidate.bounds.width,
+                      MIN_FOCUS_TERMINAL_WIDTH,
+                    ),
+                    height: Math.max(
+                      candidate.bounds.height,
+                      MIN_FOCUS_TERMINAL_HEIGHT,
+                    ),
+                  },
+                }
+              : candidate,
+          ),
+        }));
+
+        focusTarget =
+          resizedWorkspace?.terminals.find(
+            (candidate) => candidate.id === terminal.id,
+          ) ?? {
+            ...terminal,
+            bounds: {
+              ...terminal.bounds,
+              width: Math.max(terminal.bounds.width, MIN_FOCUS_TERMINAL_WIDTH),
+              height: Math.max(
+                terminal.bounds.height,
+                MIN_FOCUS_TERMINAL_HEIGHT,
+              ),
+            },
+          };
+      }
+
+      setSelectedNodeId(terminal.id);
+      setViewport(createFocusViewport(focusTarget, workspace.currentViewport));
+    }
+  }, [selectedNodeId, setViewport, updateWorkspace, workspace]);
+
   if (!workspace) {
     return (
       <div className="app-shell">
@@ -112,6 +179,62 @@ export function App() {
   const currentViewport = workspace.currentViewport;
   const semanticMode = getSemanticZoomMode(currentViewport.zoom);
 
+  function focusTerminalNode(terminal: TerminalNode) {
+    let focusTarget = terminal;
+
+    if (
+      terminal.bounds.width < MIN_FOCUS_TERMINAL_WIDTH ||
+      terminal.bounds.height < MIN_FOCUS_TERMINAL_HEIGHT
+    ) {
+      const resizedWorkspace = updateWorkspace((current) => ({
+        ...current,
+        terminals: current.terminals.map((candidate) =>
+          candidate.id === terminal.id
+            ? {
+                ...candidate,
+                bounds: {
+                  ...candidate.bounds,
+                  width: Math.max(candidate.bounds.width, MIN_FOCUS_TERMINAL_WIDTH),
+                  height: Math.max(
+                    candidate.bounds.height,
+                    MIN_FOCUS_TERMINAL_HEIGHT,
+                  ),
+                },
+              }
+            : candidate,
+        ),
+      }));
+
+      focusTarget =
+        resizedWorkspace?.terminals.find((candidate) => candidate.id === terminal.id) ??
+        {
+          ...terminal,
+          bounds: {
+            ...terminal.bounds,
+            width: Math.max(terminal.bounds.width, MIN_FOCUS_TERMINAL_WIDTH),
+            height: Math.max(terminal.bounds.height, MIN_FOCUS_TERMINAL_HEIGHT),
+          },
+        };
+    }
+
+    setSelectedNodeId(terminal.id);
+    setViewport(createFocusViewport(focusTarget, currentViewport));
+  }
+
+  function handleSelectedNodeChange(nodeId: string | null) {
+    if (
+      nodeId === null &&
+      semanticMode === 'focus' &&
+      terminals.length === 1 &&
+      terminals[0]
+    ) {
+      setSelectedNodeId(terminals[0].id);
+      return;
+    }
+
+    setSelectedNodeId(nodeId);
+  }
+
   function focusTerminal(terminalId: string) {
     const terminal = terminals.find((candidate) => candidate.id === terminalId);
 
@@ -119,8 +242,7 @@ export function App() {
       return;
     }
 
-    setSelectedNodeId(terminal.id);
-    setViewport(createFocusViewport(terminal, currentViewport));
+    focusTerminalNode(terminal);
   }
 
   function launchTerminal(input: CreateTerminalNodeInput) {
@@ -130,7 +252,7 @@ export function App() {
       return;
     }
 
-    focusTerminal(createdTerminal.id);
+    focusTerminalNode(createdTerminal);
   }
 
   return (
@@ -207,7 +329,7 @@ export function App() {
             onTerminalResize={resizeSession}
             onTerminalRestart={restartSession}
             onMarkTerminalRead={markSessionRead}
-            onSelectedNodeChange={setSelectedNodeId}
+            onSelectedNodeChange={handleSelectedNodeChange}
             onTerminalFocusRequest={focusTerminal}
             onWorkspaceChange={updateWorkspace}
             onViewportChange={setViewport}
@@ -234,9 +356,9 @@ function createFocusViewport(
   terminal: TerminalNode,
   currentViewport: CameraViewport,
 ): CameraViewport {
-  const zoom = Math.max(currentViewport.zoom, 1.18);
-  const estimatedCanvasWidth = 920;
-  const estimatedCanvasHeight = 560;
+  const zoom = clamp(currentViewport.zoom, 1.12, 1.32);
+  const estimatedCanvasWidth = 1080;
+  const estimatedCanvasHeight = 720;
   const centerX = terminal.bounds.x + terminal.bounds.width / 2;
   const centerY = terminal.bounds.y + terminal.bounds.height / 2;
 
@@ -245,4 +367,8 @@ function createFocusViewport(
     y: estimatedCanvasHeight / 2 - centerY * zoom,
     zoom,
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
