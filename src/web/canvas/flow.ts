@@ -40,6 +40,10 @@ interface BuildCanvasNodesOptions {
     nodeId: string,
     bounds: Partial<Workspace['terminals'][number]['bounds']>,
   ) => void;
+  onTerminalChange: (
+    nodeId: string,
+    patch: Partial<Pick<Workspace['terminals'][number], 'label' | 'cwd'>>,
+  ) => void;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onRestart: (sessionId: string) => void;
@@ -55,6 +59,7 @@ export function buildCanvasNodes({
   socketState,
   onSelect,
   onBoundsChange,
+  onTerminalChange,
   onInput,
   onResize,
   onRestart,
@@ -62,7 +67,6 @@ export function buildCanvasNodes({
 }: BuildCanvasNodesOptions): CanvasNode[] {
   const terminals = workspace.terminals.map((terminal) => {
     const isFocusTarget = focusTerminalId === terminal.id;
-    const isDimmed = focusTerminalId !== null && !isFocusTarget;
 
     return {
       id: terminal.id,
@@ -81,6 +85,7 @@ export function buildCanvasNodes({
         socketState,
         onSelect,
         onBoundsChange,
+        onTerminalChange,
         onInput,
         onResize,
         onRestart,
@@ -90,19 +95,13 @@ export function buildCanvasNodes({
         width: terminal.bounds.width,
         height: terminal.bounds.height,
       },
-      className: isDimmed
-        ? 'is-dimmed'
-        : isFocusTarget
-          ? 'is-focus-target'
-          : undefined,
+      className: isFocusTarget ? 'is-focus-target' : undefined,
       selected: selectedNodeId === terminal.id,
       selectable: true as const,
     };
   });
 
   const markdown = workspace.markdown.map((node) => {
-    const isDimmed = focusTerminalId !== null && selectedNodeId !== node.id;
-
     return {
       id: node.id,
       type: 'markdown' as const,
@@ -121,7 +120,6 @@ export function buildCanvasNodes({
         width: node.bounds.width,
         height: node.bounds.height,
       },
-      className: isDimmed ? 'is-dimmed' : undefined,
       selected: selectedNodeId === node.id,
       selectable: true as const,
     };

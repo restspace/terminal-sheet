@@ -1,6 +1,7 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 
 import type {
+  AgentType,
   CameraViewport,
   CreateTerminalNodeInput,
   TerminalNode,
@@ -8,18 +9,8 @@ import type {
 } from '../../shared/workspace';
 import { getSemanticZoomMode } from '../../shared/workspace';
 import { WorkspaceCanvas } from '../canvas/WorkspaceCanvas';
-import { EventFeed } from '../event-feed/EventFeed';
 import { useTerminalSessions } from '../state/useTerminalSessions';
 import { useWorkspace } from '../state/useWorkspace';
-
-interface HealthState {
-  status: string;
-  port: number;
-  workspacePath: string;
-  devMode: boolean;
-  liveSessions: number;
-  timestamp: string;
-}
 
 const MIN_FOCUS_TERMINAL_WIDTH = 560;
 const MIN_FOCUS_TERMINAL_HEIGHT = 385;
@@ -33,6 +24,7 @@ export function App() {
     updateWorkspace,
     addTerminal,
     addMarkdown,
+    updateTerminal,
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
@@ -45,10 +37,12 @@ export function App() {
     restartSession,
     markSessionRead,
   } = useTerminalSessions();
-  const [health, setHealth] = useState<HealthState | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [terminalShell, setTerminalShell] = useState(defaultShell());
+  const [terminalAgentType, setTerminalAgentType] =
+    useState<AgentType>('shell');
   const [focusAutoFocusAtMs, setFocusAutoFocusAtMs] = useState<number | null>(
     null,
   );
@@ -71,11 +65,7 @@ export function App() {
           throw new Error(`Health check failed with ${response.status}`);
         }
 
-        const nextHealth = (await response.json()) as HealthState;
-
-        if (!cancelled) {
-          setHealth(nextHealth);
-        }
+        await response.json();
       } catch (error) {
         if (!cancelled) {
           const message =
@@ -128,24 +118,15 @@ export function App() {
 
   if (!workspace) {
     return (
-      <div className="app-shell">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Milestone 3</p>
-            <h1>Terminal Canvas</h1>
-          </div>
-        </header>
-
-        <main className="workspace-layout">
-          <section className="workspace-panel workspace-panel-loading">
-            <p className="eyebrow">Workspace</p>
-            <h2>Loading persisted workspace...</h2>
-            <p>
-              {persistence.error ??
-                'Fetching the saved layout from the local server.'}
-            </p>
-          </section>
-        </main>
+      <div className="app-shell app-shell-loading">
+        <section className="workspace-panel-loading">
+          <p className="eyebrow">Workspace</p>
+          <h2>Loading persisted workspace...</h2>
+          <p>
+            {persistence.error ??
+              'Fetching the saved layout from the local server.'}
+          </p>
+        </section>
       </div>
     );
   }
@@ -206,49 +187,78 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Milestone 3</p>
-          <h1>Terminal Canvas</h1>
-        </div>
-        <div className="topbar-actions">
-          <button type="button" onClick={addMarkdown}>
-            Add Markdown
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!activePresetId) {
-                return;
-              }
+      <WorkspaceCanvas
+        workspace={workspace}
+        selectedNodeId={selectedNodeId}
+        sessions={sessions}
+        socketState={socketState}
+        onTerminalInput={sendInput}
+        onTerminalResize={resizeSession}
+        onTerminalRestart={restartSession}
+        onTerminalChange={updateTerminal}
+        onMarkTerminalRead={markSessionRead}
+        onSelectedNodeChange={handleSelectedNodeChange}
+        onTerminalFocusRequest={focusTerminal}
+        onWorkspaceChange={updateWorkspace}
+        onViewportChange={setViewport}
+        focusAutoFocusAtMs={focusAutoFocusAtMs}
+      />
 
-              saveViewportToPreset(activePresetId);
-            }}
-            disabled={!activePresetId}
-          >
-            Save current view
-          </button>
-        </div>
-      </header>
-
-      <main className="workspace-layout">
-        <section className="workspace-panel">
-          <div className="panel-meta">
-            <div>
-              <span className="meta-label">Workspace</span>
-              <strong>{workspace.name}</strong>
-            </div>
-            <div>
-              <span className="meta-label">Zoom mode</span>
-              <strong>{semanticMode}</strong>
-            </div>
-            <div>
-              <span className="meta-label">Persistence</span>
-              <strong>{persistence.phase}</strong>
-            </div>
+      <header className="workspace-toolbar">
+        <div className="workspace-toolbar-row">
+          <div className="toolbar-cluster toolbar-cluster-primary">
+            <button
+              type="button"
+              onClick={() => {
+                launchTerminal({
+                  label: getDefaultTerminalLabel(
+                    terminalAgentType,
+                    workspace.terminals.length + 1,
+                  ),
+                  shell: terminalShell,
+                  cwd: '.',
+                  agentType: terminalAgentType,
+                });
+              }}
+            >
+              Add Terminal
+            </button>
+            <label className="toolbar-select-field">
+              <span className="meta-label">Shell</span>
+              <select
+                className="toolbar-select"
+                value={terminalShell}
+                onChange={(event) => {
+                  setTerminalShell(event.target.value);
+                }}
+              >
+                <option value={defaultShell()}>
+                  {defaultShell() === 'powershell.exe'
+                    ? 'PowerShell'
+                    : defaultShell()}
+                </option>
+              </select>
+            </label>
+            <label className="toolbar-select-field">
+              <span className="meta-label">Agent</span>
+              <select
+                className="toolbar-select"
+                value={terminalAgentType}
+                onChange={(event) => {
+                  setTerminalAgentType(event.target.value as AgentType);
+                }}
+              >
+                <option value="shell">Shell</option>
+                <option value="claude">Claude</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            <button type="button" onClick={addMarkdown}>
+              Add Markdown
+            </button>
           </div>
 
-          <div className="preset-strip">
+          <div className="preset-strip toolbar-center-strip">
             {workspace.cameraPresets.map((preset) => (
               <button
                 key={preset.id}
@@ -268,38 +278,58 @@ export function App() {
             ))}
           </div>
 
-          <WorkspaceCanvas
-            workspace={workspace}
-            healthError={healthError}
-            selectedNodeId={selectedNodeId}
-            sessions={sessions}
-            socketState={socketState}
-            onTerminalInput={sendInput}
-            onTerminalResize={resizeSession}
-            onTerminalRestart={restartSession}
-            onMarkTerminalRead={markSessionRead}
-            onSelectedNodeChange={handleSelectedNodeChange}
-            onTerminalFocusRequest={focusTerminal}
-            onWorkspaceChange={updateWorkspace}
-            onViewportChange={setViewport}
-            focusAutoFocusAtMs={focusAutoFocusAtMs}
-          />
-        </section>
+          <div className="toolbar-cluster toolbar-cluster-actions">
+            <button
+              type="button"
+              onClick={() => {
+                if (!activePresetId) {
+                  return;
+                }
 
-        <EventFeed
-          health={health}
-          healthError={healthError}
-          persistence={persistence}
-          workspace={workspace}
-          sessions={sessions}
-          socketState={socketState}
-          activePresetId={activePresetId}
-          selectedNodeId={selectedNodeId}
-          onLaunchTerminal={launchTerminal}
-        />
-      </main>
+                saveViewportToPreset(activePresetId);
+              }}
+              disabled={!activePresetId}
+            >
+              Save current view
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <footer className="workspace-footer">
+        <span>WORKSPACE {workspace.name}</span>
+        <span>ZOOM MODE {currentViewport.zoom.toFixed(2)}x</span>
+        <span>PERSISTENCE {persistence.phase}</span>
+        <span>SEMANTIC ZOOM {semanticMode}</span>
+        <span>
+          TERMINAL SOCKET {healthError ? 'backend degraded' : socketState}
+        </span>
+      </footer>
     </div>
   );
+}
+
+function getDefaultTerminalLabel(
+  agentType: AgentType,
+  terminalNumber: number,
+): string {
+  if (agentType === 'claude') {
+    return `Claude ${terminalNumber}`;
+  }
+
+  if (agentType === 'codex') {
+    return `Codex ${terminalNumber}`;
+  }
+
+  return `Shell ${terminalNumber}`;
+}
+
+function defaultShell(): string {
+  if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Win')) {
+    return 'powershell.exe';
+  }
+
+  return 'bash';
 }
 
 function focusTerminalWithTransition(options: {

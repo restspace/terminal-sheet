@@ -11,7 +11,8 @@ import {
   getTerminalLastMeaningfulLine,
   hasAttentionState,
 } from './presentation';
-import { TerminalSurface } from './TerminalFocusSurface';
+import { TerminalScrollPreview } from './TerminalScrollPreview';
+import { TerminalTitleBar } from './TerminalTitleBar';
 import type { TerminalFlowNode } from './types';
 
 export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
@@ -20,7 +21,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const mode = getSemanticZoomMode(zoom);
   const terminal = data.terminal;
   const session = data.session;
-  const { onBoundsChange, onRestart, onMarkRead } = data;
+  const { onBoundsChange, onRestart, onMarkRead, onTerminalChange } = data;
   const canAttachTerminal = mode === 'focus' && selected && data.isInteractive;
   const canMountLivePreview =
     data.mountLivePreview && session !== null && mode !== 'overview';
@@ -36,6 +37,9 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
     session?.summary ?? terminal.taskLabel ?? 'Waiting for session launch';
   const repoLabel = terminal.repoLabel ?? 'No repo label yet';
   const hasAttention = hasAttentionState(status);
+  const hideRedundantMetadata = selected && mode !== 'overview';
+  const hideCardTitleBar = selected && mode === 'focus';
+  const hideReadOnlyStatusRows = canMountLivePreview && !canAttachTerminal;
 
   useEffect(() => {
     if (selected && mode !== 'overview' && session?.unreadCount) {
@@ -68,42 +72,43 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
       />
 
       <div className="canvas-node-content">
-        <div className="node-drag-handle canvas-node-header">
-          <div>
-            <p className="canvas-node-kicker">Terminal node</p>
-            <strong>{terminal.label}</strong>
-          </div>
-          <div className="terminal-header-sidecar">
-            {hasAttention ? (
-              <span className="terminal-pill is-attention">
-                Needs attention
-              </span>
-            ) : null}
-            {unreadCount ? (
-              <span className="terminal-pill is-unread">
-                {unreadCount} unread
-              </span>
-            ) : null}
-            <span className={`canvas-node-status is-${status}`}>{status}</span>
-          </div>
-        </div>
+        {!hideCardTitleBar ? (
+          <TerminalTitleBar
+            className="node-drag-handle canvas-node-header terminal-window-header"
+            terminal={terminal}
+            status={status}
+            onTerminalChange={onTerminalChange}
+          />
+        ) : null}
 
-        <div className="canvas-node-meta">
-          <span>{terminal.agentType}</span>
-          <span>{terminal.shell}</span>
-          <span>{terminal.cwd}</span>
-          <span>
-            {session?.connected
-              ? 'live'
-              : (session?.recoveryState ?? 'pending')}
-          </span>
-        </div>
+        {!hideRedundantMetadata && !hideReadOnlyStatusRows ? (
+          <>
+            <div className="canvas-node-meta">
+              <span>{terminal.agentType}</span>
+              {hasAttention ? (
+                <span className="terminal-pill is-attention">
+                  Needs attention
+                </span>
+              ) : null}
+              {unreadCount ? (
+                <span className="terminal-pill is-unread">
+                  {unreadCount} unread
+                </span>
+              ) : null}
+              <span>
+                {session?.connected
+                  ? 'live'
+                  : (session?.recoveryState ?? 'pending')}
+              </span>
+            </div>
 
-        <div className="terminal-node-insights">
-          <span title={lastMeaningfulLine}>{lastMeaningfulLine}</span>
-          <span>{lastEventTime}</span>
-          <span>{unreadLabel}</span>
-        </div>
+            <div className="terminal-node-insights">
+              <span title={lastMeaningfulLine}>{lastMeaningfulLine}</span>
+              <span>{lastEventTime}</span>
+              <span>{unreadLabel}</span>
+            </div>
+          </>
+        ) : null}
 
         {mode === 'overview' ? (
           <div className="canvas-node-summary terminal-overview-card">
@@ -136,12 +141,28 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         {mode === 'inspect' ? (
           canMountLivePreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
-              <div className="terminal-focus-toolbar">
-                <div className="terminal-focus-title">
-                  <span className="terminal-focus-label">Inspect preview</span>
-                  <strong title={session.summary}>{session.summary}</strong>
+              {!hideRedundantMetadata ? (
+                <div className="terminal-focus-toolbar">
+                  <div className="terminal-focus-title">
+                    <span className="terminal-focus-label">
+                      Inspect preview
+                    </span>
+                    <strong title={session.summary}>{session.summary}</strong>
+                  </div>
+                  {!session.connected ? (
+                    <button
+                      className="nodrag nopan"
+                      type="button"
+                      onClick={() => {
+                        onRestart(terminal.id);
+                      }}
+                    >
+                      Restart
+                    </button>
+                  ) : null}
                 </div>
-                {!session.connected ? (
+              ) : !session.connected ? (
+                <div className="terminal-preview-actions">
                   <button
                     className="nodrag nopan"
                     type="button"
@@ -151,19 +172,12 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   >
                     Restart
                   </button>
-                ) : null}
-              </div>
-              <TerminalSurface
+                </div>
+              ) : null}
+              <TerminalScrollPreview
                 className="terminal-preview-surface"
-                readOnly
-                sessionId={terminal.id}
                 scrollback={session.scrollback}
               />
-              <span>
-                {selected
-                  ? 'Live read-only preview. Press F or zoom further to claim read/write control.'
-                  : 'Live read-only preview. Double-click to focus this terminal for input.'}
-              </span>
             </div>
           ) : (
             <div className="canvas-node-summary">
@@ -192,14 +206,28 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         {mode === 'focus' ? (
           canAttachTerminal ? (
             <div className="canvas-node-summary">
-              <div className="terminal-focus-toolbar">
-                <div className="terminal-focus-title">
-                  <span className="terminal-focus-label">Focus shell</span>
-                  {session ? (
-                    <strong title={session.summary}>{session.summary}</strong>
+              {!hideRedundantMetadata ? (
+                <div className="terminal-focus-toolbar">
+                  <div className="terminal-focus-title">
+                    <span className="terminal-focus-label">Focus shell</span>
+                    {session ? (
+                      <strong title={session.summary}>{session.summary}</strong>
+                    ) : null}
+                  </div>
+                  {!session?.connected ? (
+                    <button
+                      className="nodrag nopan"
+                      type="button"
+                      onClick={() => {
+                        onRestart(terminal.id);
+                      }}
+                    >
+                      Restart
+                    </button>
                   ) : null}
                 </div>
-                {!session?.connected ? (
+              ) : !session?.connected ? (
+                <div className="terminal-preview-actions">
                   <button
                     className="nodrag nopan"
                     type="button"
@@ -209,8 +237,8 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   >
                     Restart
                   </button>
-                ) : null}
-              </div>
+                </div>
+              ) : null}
               <strong>
                 {session
                   ? 'Live terminal attached in focus overlay.'
@@ -223,12 +251,26 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
             </div>
           ) : canMountLivePreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
-              <div className="terminal-focus-toolbar">
-                <div className="terminal-focus-title">
-                  <span className="terminal-focus-label">Context shell</span>
-                  <strong title={session.summary}>{session.summary}</strong>
+              {!hideRedundantMetadata ? (
+                <div className="terminal-focus-toolbar">
+                  <div className="terminal-focus-title">
+                    <span className="terminal-focus-label">Context shell</span>
+                    <strong title={session.summary}>{session.summary}</strong>
+                  </div>
+                  {!session.connected ? (
+                    <button
+                      className="nodrag nopan"
+                      type="button"
+                      onClick={() => {
+                        onRestart(terminal.id);
+                      }}
+                    >
+                      Restart
+                    </button>
+                  ) : null}
                 </div>
-                {!session.connected ? (
+              ) : !session.connected ? (
+                <div className="terminal-preview-actions">
                   <button
                     className="nodrag nopan"
                     type="button"
@@ -238,29 +280,23 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   >
                     Restart
                   </button>
-                ) : null}
-              </div>
-              <TerminalSurface
+                </div>
+              ) : null}
+              <TerminalScrollPreview
                 className="terminal-preview-surface"
-                readOnly
-                sessionId={terminal.id}
                 scrollback={session.scrollback}
               />
-              <span>
-                Live read-only preview. Select and focus this terminal to move
-                it into read/write mode.
-              </span>
             </div>
           ) : (
             <div className="canvas-node-summary">
-              <div className="terminal-focus-toolbar">
-                <div className="terminal-focus-title">
-                  <span className="terminal-focus-label">Focus shell</span>
-                  {session ? (
+              {!hideRedundantMetadata && session ? (
+                <div className="terminal-focus-toolbar">
+                  <div className="terminal-focus-title">
+                    <span className="terminal-focus-label">Focus shell</span>
                     <strong title={session.summary}>{session.summary}</strong>
-                  ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
               <strong>
                 {selected
                   ? 'Waiting for PTY session snapshot.'

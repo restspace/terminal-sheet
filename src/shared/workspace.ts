@@ -83,8 +83,22 @@ export type MarkdownNode = z.infer<typeof markdownNodeSchema>;
 export type WorkspaceFilters = z.infer<typeof workspaceFiltersSchema>;
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type SemanticZoomMode = z.infer<typeof semanticZoomModeSchema>;
+export type TerminalNodePatch = Partial<
+  Pick<
+    TerminalNode,
+    | 'label'
+    | 'repoLabel'
+    | 'taskLabel'
+    | 'shell'
+    | 'cwd'
+    | 'agentType'
+    | 'status'
+    | 'tags'
+  >
+>;
 
-export const MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS = 8;
+export const MAX_LIVE_TERMINAL_SURFACES = 8;
+export const MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS = MAX_LIVE_TERMINAL_SURFACES;
 
 export interface CreateTerminalNodeInput {
   label: string;
@@ -124,15 +138,21 @@ export function getReadOnlyPreviewTerminalIds(
   const selectedTerminal =
     selectedNodeId === null
       ? null
-      : terminals.find((terminal) => terminal.id === selectedNodeId) ?? null;
+      : (terminals.find((terminal) => terminal.id === selectedNodeId) ?? null);
   const orderedCandidates = terminals.filter((terminal) =>
     mode === 'focus' && selectedTerminal
       ? terminal.id !== selectedTerminal.id
       : true,
   );
+  const previewBudget =
+    mode === 'focus' && selectedTerminal
+      ? Math.max(0, maxPreviews - 1)
+      : maxPreviews;
 
   if (!selectedTerminal) {
-    return orderedCandidates.slice(0, maxPreviews).map((terminal) => terminal.id);
+    return orderedCandidates
+      .slice(0, previewBudget)
+      .map((terminal) => terminal.id);
   }
 
   const terminalOrder = new Map(
@@ -160,7 +180,7 @@ export function getReadOnlyPreviewTerminalIds(
         (terminalOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
       );
     })
-    .slice(0, maxPreviews)
+    .slice(0, previewBudget)
     .map((terminal) => terminal.id);
 }
 
@@ -263,6 +283,27 @@ export function touchWorkspace(workspace: Workspace): Workspace {
   };
 }
 
+export function updateTerminalNode(
+  workspace: Workspace,
+  terminalId: string,
+  patch: TerminalNodePatch,
+): Workspace {
+  const terminalIndex = workspace.terminals.findIndex(
+    (terminal) => terminal.id === terminalId,
+  );
+
+  if (terminalIndex === -1) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    terminals: workspace.terminals.map((terminal, index) =>
+      index === terminalIndex ? applyTerminalPatch(terminal, patch) : terminal,
+    ),
+  };
+}
+
 export function createDefaultCameraPresets(): CameraPreset[] {
   return [
     {
@@ -295,6 +336,55 @@ function createId(prefix: string): string {
       : `${Date.now()}-${Math.round(Math.random() * 10_000)}`;
 
   return `${prefix}-${token}`;
+}
+
+function applyTerminalPatch(
+  terminal: TerminalNode,
+  patch: TerminalNodePatch,
+): TerminalNode {
+  const label = normalizeEditableText(patch.label, terminal.label);
+  const repoLabel = normalizeOptionalText(patch.repoLabel, terminal.repoLabel);
+  const taskLabel = normalizeOptionalText(patch.taskLabel, terminal.taskLabel);
+  const shell = normalizeEditableText(patch.shell, terminal.shell);
+  const cwd = normalizeEditableText(patch.cwd, terminal.cwd);
+
+  return {
+    ...terminal,
+    label,
+    repoLabel,
+    taskLabel,
+    shell,
+    cwd,
+    agentType: patch.agentType ?? terminal.agentType,
+    status: patch.status ?? terminal.status,
+    tags: patch.tags ?? terminal.tags,
+  };
+}
+
+function normalizeEditableText(
+  value: string | undefined,
+  fallback: string,
+): string {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+
+  return normalized || fallback;
+}
+
+function normalizeOptionalText(
+  value: string | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+
+  return normalized || fallback;
 }
 
 function getNodeCenter(bounds: z.infer<typeof nodeBoundsSchema>): {

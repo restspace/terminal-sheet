@@ -11,6 +11,7 @@ import {
   getReadOnlyPreviewTerminalIds,
   getSemanticZoomMode,
   type CameraViewport,
+  type TerminalNode,
   type Workspace,
 } from '../../shared/workspace';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
@@ -27,13 +28,16 @@ import {
 
 interface WorkspaceCanvasProps {
   workspace: Workspace;
-  healthError: string | null;
   selectedNodeId: string | null;
   sessions: Record<string, TerminalSessionSnapshot>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onTerminalInput: (sessionId: string, data: string) => void;
   onTerminalResize: (sessionId: string, cols: number, rows: number) => void;
   onTerminalRestart: (sessionId: string) => void;
+  onTerminalChange: (
+    nodeId: string,
+    patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
+  ) => void;
   onMarkTerminalRead: (sessionId: string) => void;
   onSelectedNodeChange: (nodeId: string | null) => void;
   onTerminalFocusRequest: (terminalId: string) => void;
@@ -49,13 +53,13 @@ const nodeTypes = {
 
 export function WorkspaceCanvas({
   workspace,
-  healthError,
   selectedNodeId,
   sessions,
   socketState,
   onTerminalInput,
   onTerminalResize,
   onTerminalRestart,
+  onTerminalChange,
   onMarkTerminalRead,
   onSelectedNodeChange,
   onTerminalFocusRequest,
@@ -98,6 +102,7 @@ export function WorkspaceCanvas({
                 updateNodeBounds(current, nodeId, bounds),
               );
             },
+            onTerminalChange,
             onInput: onTerminalInput,
             onResize: onTerminalResize,
             onRestart: onTerminalRestart,
@@ -159,11 +164,12 @@ export function WorkspaceCanvas({
             color="rgba(91, 110, 130, 0.35)"
           />
           <MiniMap
+            position="bottom-right"
             pannable
             zoomable
             style={{
-              background: 'rgba(5, 11, 18, 0.86)',
-              border: '1px solid rgba(138, 180, 216, 0.18)',
+              width: 160,
+              height: 120,
             }}
             nodeColor={(node) =>
               node.type === 'markdown'
@@ -188,24 +194,10 @@ export function WorkspaceCanvas({
               updateNodeBounds(current, nodeId, bounds),
             );
           }}
+          onTerminalChange={onTerminalChange}
           onRestart={onTerminalRestart}
         />
       ) : null}
-
-      <div className="canvas-overlay">
-        <div className="canvas-overlay-chip">
-          <span className="meta-label">Semantic zoom</span>
-          <strong>{semanticMode}</strong>
-        </div>
-        <div className="canvas-overlay-chip">
-          <span className="meta-label">Selected</span>
-          <strong>{selectedNodeId ?? 'none'}</strong>
-        </div>
-        <div className="canvas-overlay-chip">
-          <span className="meta-label">Terminal socket</span>
-          <strong>{healthError ? 'backend degraded' : socketState}</strong>
-        </div>
-      </div>
 
       {!workspace.terminals.length && !workspace.markdown.length ? (
         <div className="canvas-empty-state">

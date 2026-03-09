@@ -2,7 +2,9 @@ import { useEffect, useEffectEvent, useRef, type CSSProperties } from 'react';
 
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { CameraViewport, TerminalNode } from '../../shared/workspace';
+import { getTerminalDisplayStatus } from './presentation';
 import { TerminalFocusSurface } from './TerminalFocusSurface';
+import { TerminalTitleBar } from './TerminalTitleBar';
 
 interface FocusedTerminalOverlayProps {
   terminal: TerminalNode;
@@ -15,6 +17,10 @@ interface FocusedTerminalOverlayProps {
     nodeId: string,
     bounds: Partial<TerminalNode['bounds']>,
   ) => void;
+  onTerminalChange: (
+    nodeId: string,
+    patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
+  ) => void;
   onRestart: (sessionId: string) => void;
 }
 
@@ -26,9 +32,11 @@ export function FocusedTerminalOverlay({
   onInput,
   onResize,
   onBoundsChange,
+  onTerminalChange,
   onRestart,
 }: FocusedTerminalOverlayProps) {
   const overlayStyle = createOverlayStyle(terminal, viewport);
+  const status = getTerminalDisplayStatus(terminal, session);
   const dragStateRef = useRef<{
     originX: number;
     originY: number;
@@ -104,28 +112,28 @@ export function FocusedTerminalOverlay({
           event.stopPropagation();
         }}
       >
-        <div className="terminal-focus-title">
-          <span className="terminal-focus-label">Focus shell</span>
-          <strong
-            title={session?.summary ?? terminal.taskLabel ?? terminal.label}
-          >
-            {session?.summary ?? terminal.taskLabel ?? terminal.label}
-          </strong>
-        </div>
-        {!session?.connected ? (
-          <button
-            className="nodrag nopan"
-            type="button"
-            onPointerDown={(event) => {
-              event.stopPropagation();
-            }}
-            onClick={() => {
-              onRestart(terminal.id);
-            }}
-          >
-            Restart
-          </button>
-        ) : null}
+        <TerminalTitleBar
+          className="terminal-window-header"
+          terminal={terminal}
+          status={status}
+          onTerminalChange={onTerminalChange}
+          sidecar={
+            !session?.connected ? (
+              <button
+                className="nodrag nopan"
+                type="button"
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={() => {
+                  onRestart(terminal.id);
+                }}
+              >
+                Restart
+              </button>
+            ) : null
+          }
+        />
       </div>
 
       {session ? (
@@ -149,12 +157,12 @@ export function FocusedTerminalOverlay({
 }
 
 const OVERLAY_INSET = {
-  left: 22,
-  right: 22,
-  top: 126,
-  bottom: 22,
+  left: 18,
+  right: 18,
+  top: 54,
+  bottom: 18,
 };
-const OVERLAY_TOOLBAR_HEIGHT = 34;
+const OVERLAY_TOOLBAR_HEIGHT = 42;
 
 function createOverlayStyle(
   terminal: TerminalNode,

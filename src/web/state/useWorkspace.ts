@@ -5,8 +5,10 @@ import {
   createPlaceholderMarkdown,
   type CreateTerminalNodeInput,
   type TerminalNode,
+  type TerminalNodePatch,
   touchWorkspace,
   type CameraViewport,
+  updateTerminalNode,
   type Workspace,
 } from '../../shared/workspace';
 import { fetchWorkspace, persistWorkspace } from './workspaceClient';
@@ -162,29 +164,27 @@ export function useWorkspace() {
   ): TerminalNode | null {
     let createdTerminal: TerminalNode | null = null;
 
-    updateWorkspace(
-      (current) => {
-        createdTerminal = createTerminalNode(
-          {
-            label: input?.label?.trim() || `Shell ${current.terminals.length + 1}`,
-            shell: input?.shell?.trim() || defaultShell(),
-            cwd: input?.cwd?.trim() || '.',
-            agentType: input?.agentType ?? 'shell',
-            repoLabel: input?.repoLabel?.trim() || 'local workspace',
-            taskLabel: input?.taskLabel?.trim() || 'live terminal session',
-            tags: input?.tags ?? [],
-          },
-          current.terminals.length,
-          current.currentViewport,
-        );
+    updateWorkspace((current) => {
+      createdTerminal = createTerminalNode(
+        {
+          label:
+            input?.label?.trim() || `Shell ${current.terminals.length + 1}`,
+          shell: input?.shell?.trim() || defaultShell(),
+          cwd: input?.cwd?.trim() || '.',
+          agentType: input?.agentType ?? 'shell',
+          repoLabel: input?.repoLabel?.trim() || 'local workspace',
+          taskLabel: input?.taskLabel?.trim() || 'live terminal session',
+          tags: input?.tags ?? [],
+        },
+        current.terminals.length,
+        current.currentViewport,
+      );
 
-        return {
-          ...current,
-          terminals: [...current.terminals, createdTerminal],
-        };
-      },
-      options,
-    );
+      return {
+        ...current,
+        terminals: [...current.terminals, createdTerminal],
+      };
+    }, options);
 
     return createdTerminal;
   }
@@ -200,6 +200,12 @@ export function useWorkspace() {
         ),
       ],
     }));
+  }
+
+  function updateTerminal(terminalId: string, patch: TerminalNodePatch) {
+    updateWorkspace((current) =>
+      updateTerminalNode(current, terminalId, patch),
+    );
   }
 
   function setViewport(viewport: CameraViewport) {
@@ -302,6 +308,7 @@ export function useWorkspace() {
     updateWorkspace,
     addTerminal,
     addMarkdown,
+    updateTerminal,
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
