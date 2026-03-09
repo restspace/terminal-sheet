@@ -201,6 +201,10 @@ Completed on 2026-03-09.
 
 ### Milestone 3: Semantic node rendering
 
+#### Status
+
+Completed on 2026-03-09.
+
 #### Goals
 
 - Make the 4-6 terminal supervision use case actually readable.
@@ -221,7 +225,17 @@ Completed on 2026-03-09.
 - Inspect mode exposes enough live context for comparison without stealing input focus.
 - Focus mode feels immediate and stable.
 
-### Milestone 4: Attention event pipeline
+### Milestone 4: UI Fixes
+
+- Remove the EVENT FEED section. Add an Add Terminal button to the left of Add Markdown. Have a Shell dropdown beside it (currently just powershell). Also an Agent dropdown. Make Label and Cwd editable on the card.
+- Remove the h1 Terminal Canvas and MILESTONE 3 label.
+- Extend the canvas to cover the full window area. All controls float on top of it.
+- Have a single-line footer in small font that has WORKSPACE, ZOOM MODE, PERSISTENCE, SEMANTIC ZOOM, TERMINAL SOCKET.
+- Move the minimap over to the bottom right corner and make it 20% smaller.
+- Move the zoom controls up to the top right under Save Current View.
+- On the terminals, remove 'TERMINAL NODE', put the title, shell, cwd, path on one line to the top left of the window and keep the status pill on the top right (e.g. RUNNING).
+
+### Milestone 5: Attention event pipeline
 
 #### Goals
 
@@ -245,7 +259,7 @@ Completed on 2026-03-09.
 - Users can jump directly to the next node needing action.
 - Fallback detection works but is marked as lower confidence.
 
-### Milestone 5: Markdown nodes and linking
+### Milestone 6: Markdown nodes and linking
 
 #### Goals
 
@@ -267,7 +281,7 @@ Completed on 2026-03-09.
 - A Markdown node can stay spatially paired with several terminals.
 - Linked-node filters work from the canvas UI.
 
-### Milestone 6: Organization, filtering, and event ergonomics
+### Milestone 7: Organization, filtering, and event ergonomics
 
 #### Goals
 
@@ -288,7 +302,7 @@ Completed on 2026-03-09.
 - First-launch layout supports the 4-6 terminal supervision workflow.
 - Keyboard navigation reduces pointer-only interaction.
 
-### Milestone 7: Hardening, packaging, and release prep
+### Milestone 8: Hardening, packaging, and release prep
 
 #### Goals
 
