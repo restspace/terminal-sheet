@@ -84,6 +84,8 @@ export type WorkspaceFilters = z.infer<typeof workspaceFiltersSchema>;
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type SemanticZoomMode = z.infer<typeof semanticZoomModeSchema>;
 
+export const MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS = 8;
+
 export interface CreateTerminalNodeInput {
   label: string;
   shell: string;
@@ -107,6 +109,59 @@ export function getSemanticZoomMode(zoom: number): SemanticZoomMode {
   }
 
   return 'focus';
+}
+
+export function getReadOnlyPreviewTerminalIds(
+  terminals: readonly TerminalNode[],
+  selectedNodeId: string | null,
+  mode: SemanticZoomMode,
+  maxPreviews = MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
+): string[] {
+  if (mode === 'overview' || maxPreviews <= 0) {
+    return [];
+  }
+
+  const selectedTerminal =
+    selectedNodeId === null
+      ? null
+      : terminals.find((terminal) => terminal.id === selectedNodeId) ?? null;
+  const orderedCandidates = terminals.filter((terminal) =>
+    mode === 'focus' && selectedTerminal
+      ? terminal.id !== selectedTerminal.id
+      : true,
+  );
+
+  if (!selectedTerminal) {
+    return orderedCandidates.slice(0, maxPreviews).map((terminal) => terminal.id);
+  }
+
+  const terminalOrder = new Map(
+    terminals.map((terminal, index) => [terminal.id, index] as const),
+  );
+  const selectedCenter = getNodeCenter(selectedTerminal.bounds);
+
+  return [...orderedCandidates]
+    .sort((left, right) => {
+      const leftDistance = distanceBetweenCenters(
+        getNodeCenter(left.bounds),
+        selectedCenter,
+      );
+      const rightDistance = distanceBetweenCenters(
+        getNodeCenter(right.bounds),
+        selectedCenter,
+      );
+
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+
+      return (
+        (terminalOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+        (terminalOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+      );
+    })
+    .slice(0, maxPreviews)
+    .map((terminal) => terminal.id);
 }
 
 export function createDefaultWorkspace(): Workspace {
@@ -240,6 +295,26 @@ function createId(prefix: string): string {
       : `${Date.now()}-${Math.round(Math.random() * 10_000)}`;
 
   return `${prefix}-${token}`;
+}
+
+function getNodeCenter(bounds: z.infer<typeof nodeBoundsSchema>): {
+  x: number;
+  y: number;
+} {
+  return {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  };
+}
+
+function distanceBetweenCenters(
+  left: { x: number; y: number },
+  right: { x: number; y: number },
+): number {
+  const deltaX = left.x - right.x;
+  const deltaY = left.y - right.y;
+
+  return deltaX * deltaX + deltaY * deltaY;
 }
 
 function defaultShell(): string {

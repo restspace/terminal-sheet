@@ -8,6 +8,7 @@ interface FocusedTerminalOverlayProps {
   terminal: TerminalNode;
   session: TerminalSessionSnapshot | null;
   viewport: CameraViewport;
+  autoFocusAtMs: number | null;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onBoundsChange: (
@@ -21,6 +22,7 @@ export function FocusedTerminalOverlay({
   terminal,
   session,
   viewport,
+  autoFocusAtMs,
   onInput,
   onResize,
   onBoundsChange,
@@ -76,7 +78,7 @@ export function FocusedTerminalOverlay({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [moveOverlay, stopDragging]);
+  }, []);
 
   return (
     <div
@@ -104,7 +106,9 @@ export function FocusedTerminalOverlay({
       >
         <div className="terminal-focus-title">
           <span className="terminal-focus-label">Focus shell</span>
-          <strong title={session?.summary ?? terminal.taskLabel ?? terminal.label}>
+          <strong
+            title={session?.summary ?? terminal.taskLabel ?? terminal.label}
+          >
             {session?.summary ?? terminal.taskLabel ?? terminal.label}
           </strong>
         </div>
@@ -126,6 +130,7 @@ export function FocusedTerminalOverlay({
 
       {session ? (
         <TerminalFocusSurface
+          autoFocusAtMs={autoFocusAtMs}
           sessionId={terminal.id}
           scrollback={session.scrollback}
           onInput={onInput}
@@ -134,7 +139,9 @@ export function FocusedTerminalOverlay({
       ) : (
         <div className="focus-terminal-overlay-empty">
           <strong>Waiting for PTY session snapshot.</strong>
-          <span>The live terminal will attach here as soon as session data arrives.</span>
+          <span>
+            The live terminal will attach here as soon as session data arrives.
+          </span>
         </div>
       )}
     </div>
@@ -159,12 +166,11 @@ function createOverlayStyle(
     220,
   );
   const height = Math.max(
-    (
-      terminal.bounds.height -
+    (terminal.bounds.height -
       OVERLAY_INSET.top -
       OVERLAY_INSET.bottom +
-      OVERLAY_TOOLBAR_HEIGHT
-    ) * zoom,
+      OVERLAY_TOOLBAR_HEIGHT) *
+      zoom,
     140,
   );
 

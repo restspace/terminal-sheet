@@ -6,9 +6,33 @@ import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
 
 export type CanvasNode = TerminalFlowNode | MarkdownFlowNode;
 
+export function getSelectedNodeIdFromChanges(
+  changes: NodeChange[],
+): string | null | undefined {
+  let sawSelectionChange = false;
+
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const change = changes[index];
+
+    if (change?.type !== 'select') {
+      continue;
+    }
+
+    sawSelectionChange = true;
+
+    if (change.selected) {
+      return change.id;
+    }
+  }
+
+  return sawSelectionChange ? null : undefined;
+}
+
 interface BuildCanvasNodesOptions {
   workspace: Workspace;
   selectedNodeId: string | null;
+  livePreviewTerminalIds: ReadonlySet<string>;
+  focusTerminalId: string | null;
   sessions: Record<string, TerminalSessionSnapshot>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;
@@ -25,6 +49,8 @@ interface BuildCanvasNodesOptions {
 export function buildCanvasNodes({
   workspace,
   selectedNodeId,
+  livePreviewTerminalIds,
+  focusTerminalId,
   sessions,
   socketState,
   onSelect,
@@ -34,58 +60,72 @@ export function buildCanvasNodes({
   onRestart,
   onMarkRead,
 }: BuildCanvasNodesOptions): CanvasNode[] {
-  const terminals = workspace.terminals.map((terminal) => ({
-    id: terminal.id,
-    type: 'terminal' as const,
-    position: {
-      x: terminal.bounds.x,
-      y: terminal.bounds.y,
-    },
-    width: terminal.bounds.width,
-    height: terminal.bounds.height,
-    data: {
-      terminal,
-      session: sessions[terminal.id] ?? null,
-      isInteractive: selectedNodeId === terminal.id,
-      socketState,
-      onSelect,
-      onBoundsChange,
-      onInput,
-      onResize,
-      onRestart,
-      onMarkRead,
-    },
-    style: {
+  const terminals = workspace.terminals.map((terminal) => {
+    const isFocusTarget = focusTerminalId === terminal.id;
+    const isDimmed = focusTerminalId !== null && !isFocusTarget;
+
+    return {
+      id: terminal.id,
+      type: 'terminal' as const,
+      position: {
+        x: terminal.bounds.x,
+        y: terminal.bounds.y,
+      },
       width: terminal.bounds.width,
       height: terminal.bounds.height,
-    },
-    dragHandle: '.node-drag-handle',
-    selected: selectedNodeId === terminal.id,
-    selectable: true as const,
-  }));
+      data: {
+        terminal,
+        session: sessions[terminal.id] ?? null,
+        isInteractive: selectedNodeId === terminal.id,
+        mountLivePreview: livePreviewTerminalIds.has(terminal.id),
+        socketState,
+        onSelect,
+        onBoundsChange,
+        onInput,
+        onResize,
+        onRestart,
+        onMarkRead,
+      },
+      style: {
+        width: terminal.bounds.width,
+        height: terminal.bounds.height,
+      },
+      className: isDimmed
+        ? 'is-dimmed'
+        : isFocusTarget
+          ? 'is-focus-target'
+          : undefined,
+      selected: selectedNodeId === terminal.id,
+      selectable: true as const,
+    };
+  });
 
-  const markdown = workspace.markdown.map((node) => ({
-    id: node.id,
-    type: 'markdown' as const,
-    position: {
-      x: node.bounds.x,
-      y: node.bounds.y,
-    },
-    width: node.bounds.width,
-    height: node.bounds.height,
-    data: {
-      markdown: node,
-      onSelect,
-      onBoundsChange,
-    },
-    style: {
+  const markdown = workspace.markdown.map((node) => {
+    const isDimmed = focusTerminalId !== null && selectedNodeId !== node.id;
+
+    return {
+      id: node.id,
+      type: 'markdown' as const,
+      position: {
+        x: node.bounds.x,
+        y: node.bounds.y,
+      },
       width: node.bounds.width,
       height: node.bounds.height,
-    },
-    dragHandle: '.node-drag-handle',
-    selected: selectedNodeId === node.id,
-    selectable: true as const,
-  }));
+      data: {
+        markdown: node,
+        onSelect,
+        onBoundsChange,
+      },
+      style: {
+        width: node.bounds.width,
+        height: node.bounds.height,
+      },
+      className: isDimmed ? 'is-dimmed' : undefined,
+      selected: selectedNodeId === node.id,
+      selectable: true as const,
+    };
+  });
 
   return [...terminals, ...markdown];
 }

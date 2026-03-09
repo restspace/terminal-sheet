@@ -2,11 +2,14 @@ import { useEffect, useEffectEvent, useRef } from 'react';
 
 import { Terminal } from '@xterm/xterm';
 
-interface TerminalFocusSurfaceProps {
+interface TerminalSurfaceProps {
   sessionId: string;
   scrollback: string;
-  onInput: (sessionId: string, data: string) => void;
-  onResize: (sessionId: string, cols: number, rows: number) => void;
+  className?: string;
+  readOnly?: boolean;
+  autoFocusAtMs?: number | null;
+  onInput?: (sessionId: string, data: string) => void;
+  onResize?: (sessionId: string, cols: number, rows: number) => void;
 }
 
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
@@ -20,28 +23,33 @@ const PROBE_TEXT = 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW';
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
 
-export function TerminalFocusSurface({
+export function TerminalSurface({
   sessionId,
   scrollback,
+  className,
+  readOnly = false,
+  autoFocusAtMs,
   onInput,
   onResize,
-}: TerminalFocusSurfaceProps) {
+}: TerminalSurfaceProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const lastRenderedScrollbackRef = useRef('');
   const lastSizeRef = useRef('');
+  const focusTimerRef = useRef<number | null>(null);
   const cellSizeRef = useRef({
     width: DEFAULT_CELL_WIDTH,
     height: DEFAULT_CELL_HEIGHT,
   });
   const forwardInput = useEffectEvent((data: string) => {
-    onInput(sessionId, data);
+    if (!readOnly) {
+      onInput?.(sessionId, data);
+    }
   });
   const syncBackendSize = useEffectEvent((cols: number, rows: number) => {
-    onResize(sessionId, cols, rows);
-  });
-  const focusTerminal = useEffectEvent(() => {
-    focusTerminalInput(terminalRef.current);
+    if (!readOnly) {
+      onResize?.(sessionId, cols, rows);
+    }
   });
 
   useEffect(() => {
@@ -53,7 +61,8 @@ export function TerminalFocusSurface({
 
     const terminal = new Terminal({
       convertEol: true,
-      cursorBlink: true,
+      cursorBlink: !readOnly,
+      disableStdin: readOnly,
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: TERMINAL_FONT_SIZE,
       lineHeight: TERMINAL_LINE_HEIGHT,
@@ -61,7 +70,7 @@ export function TerminalFocusSurface({
       theme: {
         background: '#07111a',
         foreground: '#d7e4ee',
-        cursor: '#8ab4d8',
+        cursor: readOnly ? 'transparent' : '#8ab4d8',
         selectionBackground: 'rgba(138, 180, 216, 0.25)',
         black: '#0b1722',
         brightBlack: '#395161',
@@ -69,15 +78,21 @@ export function TerminalFocusSurface({
     });
 
     terminal.open(container);
-    markTerminalDomAsCanvasSafe(terminal);
-    focusTerminalInput(terminal);
+    markTerminalDomAsCanvasSafe(terminal, readOnly);
+
+    if (readOnly && terminal.textarea instanceof HTMLTextAreaElement) {
+      terminal.textarea.tabIndex = -1;
+      terminal.textarea.setAttribute('aria-hidden', 'true');
+    }
 
     lastRenderedScrollbackRef.current = '';
     terminalRef.current = terminal;
 
-    const dataDisposable = terminal.onData((data) => {
-      forwardInput(data);
-    });
+    const dataDisposable = readOnly
+      ? null
+      : terminal.onData((data) => {
+          forwardInput(data);
+        });
 
     cellSizeRef.current = measureCellSize(container);
 
@@ -91,7 +106,10 @@ export function TerminalFocusSurface({
 
       lastSizeRef.current = sizeKey;
       terminal.resize(size.cols, size.rows);
-      syncBackendSize(size.cols, size.rows);
+
+      if (!readOnly) {
+        syncBackendSize(size.cols, size.rows);
+      }
     });
 
     resizeObserver.observe(container);
@@ -99,17 +117,49 @@ export function TerminalFocusSurface({
     const initialSize = measureTerminal(container, cellSizeRef.current);
     lastSizeRef.current = `${initialSize.cols}x${initialSize.rows}`;
     terminal.resize(initialSize.cols, initialSize.rows);
-    syncBackendSize(initialSize.cols, initialSize.rows);
+
+    if (!readOnly) {
+      syncBackendSize(initialSize.cols, initialSize.rows);
+    }
 
     return () => {
       resizeObserver.disconnect();
-      dataDisposable.dispose();
+      dataDisposable?.dispose();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
       lastSizeRef.current = '';
     };
-  }, [sessionId]);
+  }, [readOnly, sessionId]);
+
+  useEffect(() => {
+    if (readOnly) {
+      return;
+    }
+
+    const focusTerminal = () => {
+      focusTimerRef.current = null;
+      focusTerminalInput(terminalRef.current);
+    };
+    const focusDelayMs = Math.max(
+      0,
+      (autoFocusAtMs ?? performance.now()) - performance.now(),
+    );
+
+    if (focusDelayMs === 0) {
+      focusTerminal();
+      return;
+    }
+
+    focusTimerRef.current = window.setTimeout(focusTerminal, focusDelayMs);
+
+    return () => {
+      if (focusTimerRef.current !== null) {
+        window.clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = null;
+      }
+    };
+  }, [autoFocusAtMs, readOnly, sessionId]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -119,7 +169,9 @@ export function TerminalFocusSurface({
     }
 
     if (scrollback.startsWith(lastRenderedScrollbackRef.current)) {
-      terminal.write(scrollback.slice(lastRenderedScrollbackRef.current.length));
+      terminal.write(
+        scrollback.slice(lastRenderedScrollbackRef.current.length),
+      );
     } else {
       terminal.reset();
       terminal.write(scrollback);
@@ -131,19 +183,27 @@ export function TerminalFocusSurface({
   return (
     <div
       ref={containerRef}
-      className="terminal-focus-surface nodrag nopan nowheel"
-      onClick={focusTerminalSurface}
-      onWheel={stopCanvasInteractionPropagation}
+      className={buildSurfaceClassName(className, readOnly)}
+      aria-hidden={readOnly}
+      onClick={readOnly ? undefined : focusTerminalSurface}
+      onWheel={readOnly ? undefined : stopCanvasInteractionPropagation}
     />
   );
 
-  function focusTerminalSurface(
-    event:
-      | React.MouseEvent<HTMLDivElement>,
-  ): void {
-    focusTerminal();
+  function focusTerminalSurface(event: React.MouseEvent<HTMLDivElement>): void {
+    focusTerminalInput(terminalRef.current);
     event.stopPropagation();
   }
+}
+
+export function TerminalFocusSurface(props: {
+  autoFocusAtMs?: number | null;
+  sessionId: string;
+  scrollback: string;
+  onInput: (sessionId: string, data: string) => void;
+  onResize: (sessionId: string, cols: number, rows: number) => void;
+}) {
+  return <TerminalSurface {...props} className="terminal-focus-surface" />;
 }
 
 function measureTerminal(
@@ -153,8 +213,14 @@ function measureTerminal(
   cols: number;
   rows: number;
 } {
-  const width = Math.max(container.clientWidth - TERMINAL_HORIZONTAL_PADDING, 0);
-  const height = Math.max(container.clientHeight - TERMINAL_VERTICAL_PADDING, 0);
+  const width = Math.max(
+    container.clientWidth - TERMINAL_HORIZONTAL_PADDING,
+    0,
+  );
+  const height = Math.max(
+    container.clientHeight - TERMINAL_VERTICAL_PADDING,
+    0,
+  );
 
   return {
     cols: clamp(Math.floor(width / cellSize.width), MIN_TERMINAL_COLS, 240),
@@ -186,8 +252,7 @@ function measureCellSize(container: HTMLDivElement): {
   probe.remove();
 
   return {
-    width:
-      Number.isFinite(width) && width > 0 ? width : DEFAULT_CELL_WIDTH,
+    width: Number.isFinite(width) && width > 0 ? width : DEFAULT_CELL_WIDTH,
     height:
       Number.isFinite(measuredLineHeight) && measuredLineHeight > 0
         ? measuredLineHeight
@@ -219,7 +284,14 @@ function focusTerminalInput(terminal: Terminal | null): void {
   terminal.focus();
 }
 
-function markTerminalDomAsCanvasSafe(terminal: Terminal): void {
+function markTerminalDomAsCanvasSafe(
+  terminal: Terminal,
+  readOnly: boolean,
+): void {
+  if (readOnly) {
+    return;
+  }
+
   const classes = ['nodrag', 'nopan', 'nowheel'];
   const elements = [
     terminal.element,
@@ -236,6 +308,25 @@ function markTerminalDomAsCanvasSafe(terminal: Terminal): void {
       element.classList.add(...classes);
     }
   }
+}
+
+function buildSurfaceClassName(
+  className: string | undefined,
+  readOnly: boolean,
+): string {
+  const classes = ['terminal-surface'];
+
+  if (className) {
+    classes.push(className);
+  }
+
+  if (readOnly) {
+    classes.push('is-read-only');
+  } else {
+    classes.push('nodrag', 'nopan', 'nowheel');
+  }
+
+  return classes.join(' ');
 }
 
 function stopCanvasInteractionPropagation(

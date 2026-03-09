@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
   createDefaultWorkspace,
   createPlaceholderMarkdown,
   createPlaceholderTerminal,
+  getReadOnlyPreviewTerminalIds,
   getSemanticZoomMode,
   workspaceSchema,
 } from './workspace';
@@ -36,5 +38,41 @@ describe('workspace schema', () => {
     expect(getSemanticZoomMode(0.5)).toBe('overview');
     expect(getSemanticZoomMode(0.8)).toBe('inspect');
     expect(getSemanticZoomMode(1.3)).toBe('focus');
+  });
+
+  it('limits inspect mode live previews to the selected terminal plus nearest neighbors', () => {
+    const terminals = Array.from({ length: 10 }, (_, index) =>
+      createPlaceholderTerminal(index),
+    );
+    const selectedTerminal = terminals[5];
+
+    expect(selectedTerminal).toBeTruthy();
+
+    const previewIds = getReadOnlyPreviewTerminalIds(
+      terminals,
+      selectedTerminal?.id ?? null,
+      'inspect',
+    );
+
+    expect(previewIds).toHaveLength(MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS);
+    expect(previewIds[0]).toBe(selectedTerminal?.id);
+  });
+
+  it('excludes the focused terminal from the focus-mode read-only preview budget', () => {
+    const terminals = Array.from({ length: 9 }, (_, index) =>
+      createPlaceholderTerminal(index),
+    );
+    const focusedTerminal = terminals[0];
+
+    expect(focusedTerminal).toBeTruthy();
+
+    const previewIds = getReadOnlyPreviewTerminalIds(
+      terminals,
+      focusedTerminal?.id ?? null,
+      'focus',
+    );
+
+    expect(previewIds).toHaveLength(MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS);
+    expect(previewIds).not.toContain(focusedTerminal?.id);
   });
 });

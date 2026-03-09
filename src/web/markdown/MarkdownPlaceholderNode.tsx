@@ -11,7 +11,7 @@ export function MarkdownPlaceholderNode(
   const { zoom } = useViewport();
   const mode = getSemanticZoomMode(zoom);
   const markdown = data.markdown;
-  const { onSelect, onBoundsChange } = data;
+  const { onBoundsChange } = data;
 
   return (
     <div
@@ -20,14 +20,6 @@ export function MarkdownPlaceholderNode(
           ? 'canvas-node markdown-node is-selected'
           : 'canvas-node markdown-node'
       }
-      onPointerDown={(event) => {
-        if (event.button !== 0) {
-          return;
-        }
-
-        event.stopPropagation();
-        onSelect(markdown.id);
-      }}
     >
       <CanvasResizeHandles
         bounds={markdown.bounds}

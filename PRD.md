@@ -2,11 +2,11 @@
 
 ## 1) Product summary
 
-**Terminal Canvas** is a local-first Node application that starts from a single CLI command, launches a local web server, and opens a browser-based infinite workspace for supervising multiple AI-assisted terminal sessions side by side. The core use case is a developer watching **4–6 active terminals at once**, quickly spotting which agent needs attention, and zooming fluidly between a bird’s-eye overview and an interactive close-up.
+**Terminal Canvas** is a local-first Node application that starts from a single CLI command, launches a local web server, and opens a browser-based infinite workspace for supervising multiple AI-assisted terminal sessions side by side. The core use case is a developer watching **4-6 active terminals at once**, with support for **up to 8 live read-only terminal previews** while quickly spotting which agent needs attention and zooming fluidly into a single focused read/write terminal.
 
 The product supports:
 
-- live terminal sessions on a pan/zoom work surface
+- live terminal sessions on a pan/zoom work surface, with up to 8 read-only previews and one focused read/write terminal
 - attention hooks for **Claude Code** and **Codex**
 - Markdown files as first-class workspace objects, viewable and editable on the same surface
 - local-only operation by default
@@ -60,7 +60,7 @@ For users supervising 4–6 sessions, the real need is not just “more terminal
 
 - Launch from a single Node CLI installation.
 - Work locally in a browser with low setup overhead.
-- Support 4–6 live terminals smoothly on mainstream developer hardware.
+- Support 4-6 active sessions smoothly on mainstream developer hardware, including up to 8 live read-only terminal previews plus one focused read/write terminal.
 - Integrate with official Claude Code and Codex notification mechanisms where available.
 - Remain useful even when structured hooks are unavailable by falling back to PTY-level detection.
 
@@ -81,7 +81,7 @@ For users supervising 4–6 sessions, the real need is not just “more terminal
 1. **Local first**
     The app runs on localhost and stores workspaces locally by default.
 2. **Real terminals, not screenshots**
-    Each terminal remains a true interactive terminal widget, preserving keyboard input, selection, mouse support, and TUI compatibility.
+    Each terminal is backed by a real PTY session. The focused terminal is a true interactive terminal widget preserving keyboard input, selection, mouse support, and TUI compatibility, while non-focused live previews remain read-only.
 3. **Overview first, focus fast**
     The user should always be able to answer: “Which session needs me right now?”
 4. **Spatial consistency**
@@ -100,7 +100,9 @@ A Node CLI tool starts a local server and serves a browser UI containing:
 - draggable Markdown editor/viewer nodes
 - an attention layer showing which nodes need user action
 
-Each terminal node is backed by a PTY and rendered in the browser with a terminal component. This is the right architectural shape because xterm.js is built for browser terminal rendering, and `node-pty` is the standard Node PTY layer, including Windows support through ConPTY-backed behavior in its Windows implementation. 
+Each terminal node is backed by a PTY and rendered in the browser with a terminal component. This is the right architectural shape because xterm.js is built for browser terminal rendering, and `node-pty` is the standard Node PTY layer, including Windows support through ConPTY-backed behavior in its Windows implementation.
+
+At inspectable zoom levels, the UI may keep up to 8 terminal nodes mounted as live read-only previews, while exactly one selected terminal owns read/write input.
 
 ------
 
@@ -136,13 +138,15 @@ In this mode, terminals are **not optimized for line-by-line reading**. They are
 
 Used when zoomed in to work directly in one terminal or Markdown file.
 
-The selected terminal becomes fully interactive:
+The selected terminal becomes the single read/write terminal:
 
 - keyboard capture enabled
 - xterm instance at readable font size
 - scrollback visible
 - command input immediate
 - notifications visible in side rail
+
+Other visible terminals may remain mounted as live read-only previews, up to 8 non-focused previews at once. These continue updating in real time but do not accept keyboard or mouse input.
 
 The rest of the canvas remains visible but de-emphasized.
 
@@ -152,16 +156,19 @@ A middle zoom band between Overview and Focus.
 
 Terminal node shows:
 
+- live read-only terminal preview
 - recent transcript preview
 - current prompt / status line
 - key metadata
 - condensed recent events
 
+Inspect mode may keep up to 8 terminals mounted as live read-only previews. These update in real time but never capture input.
+
 This bridges the gap between “map” and “terminal.”
 
 ------
 
-## 8.2 Zoom behavior for 4–6 terminals
+## 8.2 Zoom behavior for multi-terminal supervision
 
 The zoom model should be **semantic**, not just geometric.
 
@@ -178,17 +185,21 @@ Best for monitoring 4–6 sessions simultaneously.
 
 Best for comparing 2–3 sessions.
 
-- terminal preview becomes richer
-- a few readable transcript lines appear
+- terminal preview becomes richer and may mount as a live read-only preview
+- a few readable transcript lines appear inside the preview
 - user can glance at outputs without fully entering terminal interaction
+- keyboard input stays with the focused terminal only
 
 ### Close zoom
 
 Best for active work in one session.
 
 - terminal becomes full xterm interactive surface
+- up to 8 surrounding terminals can remain mounted as live read-only previews
 - Markdown nodes become full editor panes
 - surrounding nodes remain in peripheral vision
+
+If more than 8 non-focused terminals are eligible for live previews, excess terminals fall back to transcript summaries until they are focused or brought into the active preview set.
 
 ### Recommended interaction shortcuts
 
@@ -249,6 +260,9 @@ Users can:
 System must support:
 
 - PTY-backed session per node
+- one focused read/write terminal at a time
+- up to 8 simultaneous live read-only preview terminals
+- non-focused preview terminals that update in real time without accepting input
 - scrollback
 - reconnect after page refresh
 - session restoration metadata
@@ -519,13 +533,14 @@ This preserves orientation.
 - user can monitor 4–6 terminals without switching OS windows
 - time to locate next attention-demanding terminal is under 2 seconds
 - user can move from overview to interactive terminal in one gesture plus one click
+- non-focused live previews never steal keyboard input from the focused terminal
 - user keeps Markdown spec on canvas during active sessions in at least 50% of sessions
 
 ### Secondary
 
 - attention events correctly mapped for Claude and Codex
 - workspace restored successfully across relaunches
-- acceptable performance with 6 live terminals and 2 Markdown nodes
+- acceptable performance with up to 8 live read-only terminal previews, 1 focused read/write terminal, and 2 Markdown nodes
 
 ------
 
@@ -535,7 +550,7 @@ This preserves orientation.
 
 - Node CLI startup
 - browser workspace
-- 4–6 PTY-backed terminal nodes
+- PTY-backed terminal nodes with up to 8 live read-only previews and one focused read/write terminal
 - pan/zoom canvas
 - semantic zoom states
 - Claude Notification hook integration
@@ -582,7 +597,7 @@ The roadmap is justified by current official docs: Claude already supports hooks
 - Should v1 support only browser notifications, or also native OS notifications?
 - Should terminal sessions persist independently via tmux/screen on Unix?
 - Should Markdown nodes allow embedded terminal references or command snippets?
-- How aggressively should the app suspend live terminal rendering at far zoom levels?
+- How aggressively should the app suspend live terminal rendering at far zoom levels or above the 8-preview budget?
 - Should Codex app-server integration replace `notify` entirely in a later release, or remain optional?
 
 ------
@@ -597,6 +612,6 @@ Build v1 as a **local Node CLI + browser app** with:
 - Markdown editor/viewer nodes
 - official Claude hook support
 - Codex `notify` support
-- semantic zoom tuned specifically for supervising **4–6 terminals**
+- semantic zoom tuned for supervising **4-6 terminals comfortably** while allowing up to 8 live read-only previews around one focused read/write terminal
 
 That gives you the right first product: a **terminal operations surface**, not just a terminal multiplexer with prettier windows.

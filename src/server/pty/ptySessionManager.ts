@@ -7,21 +7,16 @@ import {
   type TerminalServerSocketMessage,
   type TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
-import type { TerminalNode, TerminalStatus, Workspace } from '../../shared/workspace';
+import type {
+  TerminalNode,
+  TerminalStatus,
+  Workspace,
+} from '../../shared/workspace';
+import { extractPreviewLines, renderTerminalText } from './outputPreview';
 
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 30;
 const MAX_SCROLLBACK_CHARS = 120_000;
-const MAX_PREVIEW_LINES = 6;
-const OSC_SEQUENCE_PATTERN = new RegExp(
-  String.raw`\u001B\][^\u0007]*(?:\u0007|\u001B\\)`,
-  'g',
-);
-const CSI_SEQUENCE_PATTERN = new RegExp(
-  String.raw`\u001B\[[0-?]*[ -/]*[@-~]`,
-  'g',
-);
-const ESCAPE_SEQUENCE_PATTERN = new RegExp(String.raw`\u001B[@-Z\\-_]`, 'g');
 
 interface SessionRecord {
   terminal: TerminalNode;
@@ -40,7 +35,9 @@ export class PtySessionManager {
   constructor(private readonly logger: FastifyBaseLogger) {}
 
   async syncWithWorkspace(workspace: Workspace): Promise<void> {
-    const activeIds = new Set(workspace.terminals.map((terminal) => terminal.id));
+    const activeIds = new Set(
+      workspace.terminals.map((terminal) => terminal.id),
+    );
 
     for (const terminal of workspace.terminals) {
       const existing = this.sessions.get(terminal.id);
@@ -234,9 +231,10 @@ export class PtySessionManager {
   private handleOutput(record: SessionRecord, chunk: string): void {
     const timestamp = new Date().toISOString();
     const nextScrollback = appendScrollback(record.snapshot.scrollback, chunk);
-    const readableOutput = stripAnsi(nextScrollback);
+    const readableOutput = renderTerminalText(nextScrollback);
     const previewLines = extractPreviewLines(readableOutput);
-    const lastOutputLine = previewLines.at(-1) ?? record.snapshot.lastOutputLine;
+    const lastOutputLine =
+      previewLines.at(-1) ?? record.snapshot.lastOutputLine;
     const unreadDelta = chunk.trim().length > 0 ? 1 : 0;
 
     this.broadcast({
@@ -460,22 +458,6 @@ function appendScrollback(scrollback: string, chunk: string): string {
   }
 
   return combined.slice(combined.length - MAX_SCROLLBACK_CHARS);
-}
-
-function stripAnsi(text: string): string {
-  return text
-    .replace(OSC_SEQUENCE_PATTERN, '')
-    .replace(CSI_SEQUENCE_PATTERN, '')
-    .replace(ESCAPE_SEQUENCE_PATTERN, '')
-    .replace(/\r/g, '');
-}
-
-function extractPreviewLines(text: string): string[] {
-  return text
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0)
-    .slice(-MAX_PREVIEW_LINES);
 }
 
 function clamp(value: number, min: number, max: number): number {

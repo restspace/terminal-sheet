@@ -7,6 +7,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
   terminal: TerminalNode;
   session: TerminalSessionSnapshot | null;
   isInteractive: boolean;
+  mountLivePreview: boolean;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;
   onBoundsChange: (

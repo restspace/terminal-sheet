@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document turns `PRD.md` into an execution plan for a v1 release of Terminal Canvas: a local-first Node CLI that launches a browser workspace for supervising 4-6 AI-driven terminal sessions alongside Markdown files.
+This document turns `PRD.md` into an execution plan for a v1 release of Terminal Canvas: a local-first Node CLI that launches a browser workspace for supervising 4-6 AI-driven terminal sessions alongside Markdown files, with support for up to 8 live read-only terminal previews and one focused read/write terminal.
 
 The plan is milestone-based rather than date-based so it can scale to a solo builder or a small team.
 
@@ -21,6 +21,7 @@ These choices close the main open questions in the PRD so implementation can sta
 - Codex integration: support `notify` in v1; defer app-server integration to post-MVP.
 - Session durability: persist layout and session metadata in v1, but do not attempt tmux-backed process resurrection yet.
 - Zoom strategy: below the overview threshold, suspend live xterm rendering and show semantic cards instead.
+- Terminal mounting strategy: allow up to 8 non-focused live read-only xterm previews while keeping exactly one focused terminal read/write.
 
 ## 3. Target v1 scope
 
@@ -28,7 +29,7 @@ The implementation should deliver:
 
 - `terminal-canvas` CLI with `--port`, `--workspace`, and `--no-open`
 - localhost-only server startup
-- browser canvas with 4-6 PTY-backed terminal nodes
+- browser canvas with PTY-backed terminal nodes, supporting up to 8 live read-only previews plus one focused read/write terminal
 - semantic zoom with Overview, Inspect, and Focus modes
 - Markdown nodes with edit and preview
 - attention pipeline for Claude hooks, Codex `notify`, and PTY fallback detection
@@ -92,7 +93,8 @@ If build complexity grows, split later into `packages/server`, `packages/web`, a
 
 - Render the canvas and camera controls.
 - Switch node presentation by semantic zoom level.
-- Render interactive terminals only in Focus mode.
+- Render up to 8 live read-only terminals in Inspect/Focus within the preview budget.
+- Render exactly one read/write terminal in Focus mode.
 - Render Markdown nodes as card, preview, or editor.
 - Show attention badges, minimap markers, event feed, and filters.
 - Keep local UI state synchronized with server state.
@@ -169,17 +171,22 @@ Completed on 2026-03-09.
 
 ### Milestone 2: PTY session manager and terminal nodes
 
+#### Status
+
+Completed on 2026-03-09.
+
 #### Goals
 
 - Turn terminal nodes into real local sessions.
-- Support reconnects and interactive focus.
+- Support reconnects, live previews, and interactive focus.
 
 #### Tasks
 
 - Build PTY session manager on top of `node-pty`.
 - Add terminal node creation with shell, cwd, label, and agent type.
 - Stream PTY output and input over WebSocket.
-- Attach `xterm.js` only when a node enters Focus mode.
+- Attach `xterm.js` for up to 8 non-focused read-only previews and one focused read/write terminal.
+- Enforce single-terminal input ownership so only the focused terminal can send keyboard input.
 - Store scrollback and a rolling output summary per session.
 - Reconnect the browser to live sessions after refresh.
 - Mark disconnected sessions and expose recovery states.
@@ -188,6 +195,7 @@ Completed on 2026-03-09.
 
 - Multiple concurrent terminals can run side by side.
 - A refreshed browser reconnects without losing session identity.
+- Up to 8 non-focused terminals can remain mounted as live read-only previews.
 - Users can type into the focused terminal and see live output.
 - Overview mode no longer depends on live tiny text rendering.
 
@@ -200,8 +208,9 @@ Completed on 2026-03-09.
 #### Tasks
 
 - Build terminal card view for Overview mode.
-- Build transcript-preview view for Inspect mode.
-- Build fully interactive terminal view for Focus mode.
+- Build live read-only terminal preview view for Inspect mode.
+- Build fully interactive terminal view for the focused terminal in Focus mode.
+- Keep up to 8 non-focused terminals mounted as live read-only previews while the focused terminal remains read/write.
 - Add unread activity count, status stripe, last event time, and last meaningful line.
 - Add smooth camera transition and delayed input focus when entering Focus mode.
 - Dim non-focused nodes while preserving spatial orientation.
@@ -209,7 +218,7 @@ Completed on 2026-03-09.
 #### Exit criteria
 
 - Overview shows all 4-6 sessions clearly as supervision objects.
-- Inspect mode exposes enough transcript context for comparison.
+- Inspect mode exposes enough live context for comparison without stealing input focus.
 - Focus mode feels immediate and stable.
 
 ### Milestone 4: Attention event pipeline
@@ -287,8 +296,8 @@ Completed on 2026-03-09.
 
 #### Tasks
 
-- Profile CPU and memory with 6 live terminals and 2 Markdown nodes.
-- Cap render frequency for overview summaries and event-feed updates.
+- Profile CPU and memory with up to 8 read-only live terminals, 1 focused read/write terminal, and 2 Markdown nodes.
+- Cap render frequency for live previews, overview summaries, and event-feed updates.
 - Test on macOS, Linux, and Windows with special focus on ConPTY behavior.
 - Add crash-safe persistence writes and workspace-file validation.
 - Package CLI for `npx terminal-canvas` and global install.
@@ -338,7 +347,7 @@ Main dependency constraints:
 
 ### End-to-end tests
 
-- launch app, create 4 terminal nodes, and restore workspace
+- launch app, create 8 terminal nodes, keep one focused terminal read/write while others remain live read-only, and restore workspace
 - trigger Claude and Codex notifications into the correct nodes
 - zoom from overview to focus and back
 - edit Markdown beside active terminals
@@ -348,9 +357,10 @@ Main dependency constraints:
 
 Run one realistic scenario:
 
-- open a workspace with 4-6 terminals
+- open a workspace with 6-8 terminals
 - keep a plan Markdown node in the center
 - trigger at least one Claude attention event and one Codex attention event
+- verify up to 8 terminals stay live in read-only mode while one focused terminal remains read/write
 - navigate entirely through overview, inspect, and focus modes
 - close and relaunch the app and verify workspace restore
 
@@ -360,8 +370,8 @@ Run one realistic scenario:
 
 Mitigation:
 
-- render live xterm only for focused nodes
-- keep overview and inspect powered by summaries, not full glyph rendering
+- limit live xterm mounts to one focused read/write terminal plus up to 8 read-only previews
+- fall back from live previews to summaries when the preview budget is exceeded
 - throttle non-critical UI updates
 
 ### Risk: Claude and Codex event payloads differ too much
@@ -400,12 +410,12 @@ Mitigation:
 The v1 release is complete when all of the following are true:
 
 - Users can launch the app from the CLI and reach a local browser workspace.
-- Users can supervise 4-6 active terminal sessions on one canvas.
+- Users can supervise 4-6 active terminal sessions on one canvas, with up to 8 non-focused live read-only previews and one focused read/write terminal.
 - Overview, Inspect, and Focus modes behave as distinct semantic zoom states.
 - Claude Notification hooks and Codex `notify` both map into visible attention states.
 - Markdown nodes can be edited and previewed on the same surface.
 - Workspace layout, links, filters, and camera presets persist across relaunch.
-- Performance is acceptable with 6 terminals and 2 Markdown nodes on mainstream hardware.
+- Performance is acceptable with up to 8 read-only live terminals, 1 focused read/write terminal, and 2 Markdown nodes on mainstream hardware.
 - Basic setup documentation is sufficient for another developer to install and use the product locally.
 
 ## 11. Recommended implementation order

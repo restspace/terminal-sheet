@@ -8,6 +8,7 @@ import {
 } from '@xyflow/react';
 
 import {
+  getReadOnlyPreviewTerminalIds,
   getSemanticZoomMode,
   type CameraViewport,
   type Workspace,
@@ -20,6 +21,7 @@ import {
   applyNodeChangesToWorkspace,
   buildCanvasEdges,
   buildCanvasNodes,
+  getSelectedNodeIdFromChanges,
   updateNodeBounds,
 } from './flow';
 
@@ -37,6 +39,7 @@ interface WorkspaceCanvasProps {
   onTerminalFocusRequest: (terminalId: string) => void;
   onWorkspaceChange: (updater: (workspace: Workspace) => Workspace) => void;
   onViewportChange: (viewport: CameraViewport) => void;
+  focusAutoFocusAtMs: number | null;
 }
 
 const nodeTypes = {
@@ -58,13 +61,25 @@ export function WorkspaceCanvas({
   onTerminalFocusRequest,
   onWorkspaceChange,
   onViewportChange,
+  focusAutoFocusAtMs,
 }: WorkspaceCanvasProps) {
   const semanticMode = getSemanticZoomMode(workspace.currentViewport.zoom);
+  const livePreviewTerminalIds = new Set(
+    getReadOnlyPreviewTerminalIds(
+      workspace.terminals,
+      selectedNodeId,
+      semanticMode,
+    ),
+  );
   const selectedTerminal =
     semanticMode === 'focus' && selectedNodeId
-      ? workspace.terminals.find((terminal) => terminal.id === selectedNodeId) ?? null
+      ? (workspace.terminals.find(
+          (terminal) => terminal.id === selectedNodeId,
+        ) ?? null)
       : null;
-  const selectedSession = selectedTerminal ? sessions[selectedTerminal.id] ?? null : null;
+  const selectedSession = selectedTerminal
+    ? (sessions[selectedTerminal.id] ?? null)
+    : null;
 
   return (
     <div className="canvas-frame">
@@ -73,11 +88,15 @@ export function WorkspaceCanvas({
           nodes={buildCanvasNodes({
             workspace,
             selectedNodeId,
+            livePreviewTerminalIds,
+            focusTerminalId: selectedTerminal?.id ?? null,
             sessions,
             socketState,
             onSelect: onSelectedNodeChange,
             onBoundsChange: (nodeId, bounds) => {
-              onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+              onWorkspaceChange((current) =>
+                updateNodeBounds(current, nodeId, bounds),
+              );
             },
             onInput: onTerminalInput,
             onResize: onTerminalResize,
@@ -89,6 +108,12 @@ export function WorkspaceCanvas({
           viewport={workspace.currentViewport}
           onViewportChange={onViewportChange}
           onNodesChange={(changes) => {
+            const nextSelectedNodeId = getSelectedNodeIdFromChanges(changes);
+
+            if (nextSelectedNodeId !== undefined) {
+              onSelectedNodeChange(nextSelectedNodeId);
+            }
+
             onWorkspaceChange((current) =>
               applyNodeChangesToWorkspace(current, changes),
             );
@@ -146,7 +171,7 @@ export function WorkspaceCanvas({
                 : 'rgba(138, 180, 216, 0.78)'
             }
           />
-          <Controls showInteractive={false} />
+          <Controls position="top-right" showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>
 
@@ -155,10 +180,13 @@ export function WorkspaceCanvas({
           terminal={selectedTerminal}
           session={selectedSession}
           viewport={workspace.currentViewport}
+          autoFocusAtMs={focusAutoFocusAtMs}
           onInput={onTerminalInput}
           onResize={onTerminalResize}
           onBoundsChange={(nodeId, bounds) => {
-            onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+            onWorkspaceChange((current) =>
+              updateNodeBounds(current, nodeId, bounds),
+            );
           }}
           onRestart={onTerminalRestart}
         />

@@ -1,9 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family:
-    'IBM Plex Sans',
-    'Segoe UI',
-    sans-serif;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
   background:
@@ -172,6 +169,43 @@ button:disabled {
   overflow: hidden;
 }
 
+.canvas-frame .react-flow__controls {
+  z-index: 9;
+  margin: 1rem;
+  border: 1px solid rgba(138, 180, 216, 0.24);
+  border-radius: 0.9rem;
+  background: rgba(9, 17, 25, 0.96);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+}
+
+.canvas-frame .react-flow__controls button {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0;
+  background: rgba(6, 12, 18, 0.92);
+  border-color: rgba(138, 180, 216, 0.18);
+}
+
+.canvas-frame .react-flow__controls button:hover:not(:disabled) {
+  background: rgba(17, 32, 47, 0.98);
+}
+
+.canvas-frame .react-flow__node {
+  transition:
+    opacity 180ms ease,
+    filter 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.canvas-frame .react-flow__node.is-dimmed {
+  opacity: 0.5;
+  filter: saturate(0.72) brightness(0.82);
+}
+
+.canvas-frame .react-flow__node.is-focus-target {
+  z-index: 6;
+}
+
 .canvas-overlay {
   position: absolute;
   left: 1rem;
@@ -307,6 +341,15 @@ button:disabled {
   overflow: hidden;
 }
 
+.terminal-node-stripe {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  border-radius: 1rem 0 0 1rem;
+  opacity: 0.92;
+  z-index: 1;
+}
+
 .canvas-node-header {
   display: flex;
   justify-content: space-between;
@@ -319,6 +362,14 @@ button:disabled {
   display: block;
   font-size: 0.88rem;
   line-height: 1.2;
+}
+
+.terminal-header-sidecar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  max-width: 55%;
 }
 
 .canvas-node-meta {
@@ -341,6 +392,67 @@ button:disabled {
   line-height: 1.15;
 }
 
+.terminal-node-insights {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.terminal-node-insights span,
+.terminal-pill {
+  padding: 0.18rem 0.46rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.67rem;
+  line-height: 1.15;
+}
+
+.terminal-node-insights span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-pill {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.terminal-pill.is-attention {
+  background: rgba(255, 194, 102, 0.18);
+  border-color: rgba(255, 194, 102, 0.2);
+  color: #ffd58e;
+}
+
+.terminal-pill.is-unread {
+  background: rgba(94, 196, 139, 0.16);
+  border-color: rgba(94, 196, 139, 0.16);
+  color: #9ae4ba;
+}
+
+.terminal-pill.is-claude,
+.terminal-pill.is-codex,
+.terminal-pill.is-shell {
+  color: #d7e4ee;
+}
+
+.terminal-pill.is-claude {
+  background: rgba(127, 177, 255, 0.16);
+  border-color: rgba(127, 177, 255, 0.14);
+}
+
+.terminal-pill.is-codex {
+  background: rgba(94, 196, 139, 0.16);
+  border-color: rgba(94, 196, 139, 0.14);
+}
+
+.terminal-pill.is-shell {
+  background: rgba(255, 207, 132, 0.12);
+  border-color: rgba(255, 207, 132, 0.12);
+}
+
 .canvas-node-summary {
   display: flex;
   flex-direction: column;
@@ -357,6 +469,57 @@ button:disabled {
   line-height: 1.25;
 }
 
+.terminal-overview-card {
+  justify-content: space-between;
+}
+
+.terminal-overview-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.terminal-overview-copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.terminal-overview-copy strong,
+.terminal-overview-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-overview-badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.terminal-overview-line {
+  font-size: 0.76rem;
+  color: #b7ccde;
+}
+
+.terminal-overview-footer {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.terminal-overview-footer span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.67rem;
+  line-height: 1.15;
+}
+
 .terminal-preview-lines {
   display: grid;
   gap: 0.28rem;
@@ -370,10 +533,7 @@ button:disabled {
   border-radius: 0.55rem;
   background: rgba(3, 9, 14, 0.38);
   color: #d7e4ee;
-  font-family:
-    'IBM Plex Mono',
-    'Cascadia Code',
-    monospace;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
   font-size: 0.72rem;
   line-height: 1.25;
   white-space: nowrap;
@@ -417,7 +577,7 @@ button:disabled {
   text-overflow: clip;
 }
 
-.terminal-focus-surface {
+.terminal-surface {
   position: relative;
   min-height: 0;
   flex: 1;
@@ -428,13 +588,33 @@ button:disabled {
   isolation: isolate;
 }
 
-.terminal-focus-surface .xterm {
+.terminal-focus-surface {
+  min-height: 10rem;
+}
+
+.terminal-preview-surface {
+  min-height: 8.6rem;
+  border-color: rgba(138, 180, 216, 0.12);
+  background: rgba(7, 17, 26, 0.88);
+}
+
+.terminal-surface .xterm {
   width: 100%;
   height: 100%;
 }
 
-.terminal-focus-surface .xterm-viewport {
+.terminal-surface .xterm-viewport {
   inset: 0;
+}
+
+.terminal-surface.is-read-only,
+.terminal-preview-surface,
+.terminal-preview-surface * {
+  pointer-events: none;
+}
+
+.terminal-live-preview-card {
+  gap: 0.55rem;
 }
 
 .canvas-node-status {
@@ -451,15 +631,28 @@ button:disabled {
   color: #d4e5f5;
 }
 
+.terminal-node-stripe.is-idle {
+  background: linear-gradient(180deg, #8aa1b9, rgba(136, 159, 181, 0.18));
+}
+
 .canvas-node-status.is-running,
 .canvas-node-status.is-active-output {
   background: rgba(95, 174, 141, 0.18);
   color: #89d2aa;
 }
 
+.terminal-node-stripe.is-running,
+.terminal-node-stripe.is-active-output {
+  background: linear-gradient(180deg, #7ed0a4, rgba(95, 174, 141, 0.18));
+}
+
 .canvas-node-status.is-completed {
   background: rgba(94, 196, 139, 0.18);
   color: #85d6a7;
+}
+
+.terminal-node-stripe.is-completed {
+  background: linear-gradient(180deg, #85d6a7, rgba(94, 196, 139, 0.18));
 }
 
 .canvas-node-status.is-failed,
@@ -468,10 +661,20 @@ button:disabled {
   color: #ffb2aa;
 }
 
+.terminal-node-stripe.is-failed,
+.terminal-node-stripe.is-disconnected {
+  background: linear-gradient(180deg, #ff9f95, rgba(214, 98, 88, 0.18));
+}
+
 .canvas-node-status.is-needs-input,
 .canvas-node-status.is-approval-needed {
   background: rgba(255, 194, 102, 0.2);
   color: #ffd58e;
+}
+
+.terminal-node-stripe.is-needs-input,
+.terminal-node-stripe.is-approval-needed {
+  background: linear-gradient(180deg, #ffd58e, rgba(255, 194, 102, 0.2));
 }
 
 .canvas-node-status.is-markdown {
@@ -496,6 +699,10 @@ button:disabled {
   box-shadow:
     0 0 0 1px rgba(154, 202, 245, 0.25),
     0 18px 35px rgba(0, 0, 0, 0.34);
+}
+
+.terminal-node.is-selected .terminal-preview-surface {
+  border-color: rgba(154, 202, 245, 0.28);
 }
 
 .canvas-node-resize-handle {
