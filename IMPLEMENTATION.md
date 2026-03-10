@@ -227,6 +227,10 @@ Completed on 2026-03-09.
 
 ### Milestone 4: UI Fixes
 
+#### Status
+
+Completed on 2026-03-10.
+
 - Remove the EVENT FEED section. Add an Add Terminal button to the left of Add Markdown. Have a Shell dropdown beside it (currently just powershell). Also an Agent dropdown. Make Label and Cwd editable on the card.
 - Remove the h1 Terminal Canvas and MILESTONE 3 label.
 - Extend the canvas to cover the full window area. All controls float on top of it.

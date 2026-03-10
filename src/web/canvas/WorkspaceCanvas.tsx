@@ -40,6 +40,7 @@ interface WorkspaceCanvasProps {
     nodeId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onTerminalRemove: (terminalId: string) => void;
   onMarkTerminalRead: (sessionId: string) => void;
   onSelectedNodeChange: (nodeId: string | null) => void;
   onTerminalFocusRequest: (terminalId: string) => void;
@@ -62,6 +63,7 @@ export function WorkspaceCanvas({
   onTerminalResize,
   onTerminalRestart,
   onTerminalChange,
+  onTerminalRemove,
   onMarkTerminalRead,
   onSelectedNodeChange,
   onTerminalFocusRequest,
@@ -107,6 +109,7 @@ export function WorkspaceCanvas({
           onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
         },
         onTerminalChange,
+        onRemove: onTerminalRemove,
         onInput: onTerminalInput,
         onResize: onTerminalResize,
         onRestart: onTerminalRestart,
@@ -118,6 +121,7 @@ export function WorkspaceCanvas({
       onSelectedNodeChange,
       onTerminalChange,
       onTerminalInput,
+      onTerminalRemove,
       onTerminalResize,
       onTerminalRestart,
       onWorkspaceChange,
@@ -222,6 +226,7 @@ export function WorkspaceCanvas({
             );
           }}
           onTerminalChange={onTerminalChange}
+          onRemove={onTerminalRemove}
           onRestart={onTerminalRestart}
         />
       ) : null}

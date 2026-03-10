@@ -13,6 +13,7 @@ import {
   addMarkdownToWorkspace,
   addTerminalToWorkspace,
   applyWorkspaceCameraPreset,
+  removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
   setWorkspaceViewport,
   updateWorkspaceTerminal,
@@ -207,6 +208,16 @@ export function useWorkspace() {
     updateWorkspace((current) => updateWorkspaceTerminal(current, terminalId, patch));
   }, [updateWorkspace]);
 
+  const removeTerminal = useCallback((
+    terminalId: string,
+    options?: UpdateWorkspaceOptions,
+  ) => {
+    updateWorkspace(
+      (current) => removeTerminalFromWorkspace(current, terminalId),
+      options,
+    );
+  }, [updateWorkspace]);
+
   const setViewport = useCallback((viewport: CameraViewport) => {
     updateWorkspace((current) => setWorkspaceViewport(current, viewport));
   }, [updateWorkspace]);
@@ -226,6 +237,7 @@ export function useWorkspace() {
     addTerminal,
     addMarkdown,
     updateTerminal,
+    removeTerminal,
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,

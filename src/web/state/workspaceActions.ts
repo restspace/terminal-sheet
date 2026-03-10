@@ -53,6 +53,30 @@ export function addMarkdownToWorkspace(workspace: Workspace): Workspace {
   };
 }
 
+export function removeTerminalFromWorkspace(
+  workspace: Workspace,
+  terminalId: string,
+): Workspace {
+  const nextTerminals = workspace.terminals.filter(
+    (terminal) => terminal.id !== terminalId,
+  );
+
+  if (nextTerminals.length === workspace.terminals.length) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    terminals: nextTerminals,
+    markdown: workspace.markdown.map((node) => ({
+      ...node,
+      linkedTerminalIds: node.linkedTerminalIds.filter(
+        (linkedTerminalId) => linkedTerminalId !== terminalId,
+      ),
+    })),
+  };
+}
+
 export function updateWorkspaceTerminal(
   workspace: Workspace,
   terminalId: string,

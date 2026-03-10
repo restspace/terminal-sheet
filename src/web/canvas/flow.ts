@@ -45,6 +45,7 @@ interface BuildCanvasNodesOptions {
     nodeId: string,
     patch: Partial<Pick<Workspace['terminals'][number], 'label' | 'cwd'>>,
   ) => void;
+  onRemove: (terminalId: string) => void;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onRestart: (sessionId: string) => void;
@@ -61,6 +62,7 @@ export function buildCanvasNodes({
   onSelect,
   onBoundsChange,
   onTerminalChange,
+  onRemove,
   onInput,
   onResize,
   onRestart,
@@ -87,6 +89,7 @@ export function buildCanvasNodes({
         onSelect,
         onBoundsChange,
         onTerminalChange,
+        onRemove,
         onInput,
         onResize,
         onRestart,

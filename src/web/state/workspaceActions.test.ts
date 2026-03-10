@@ -5,6 +5,7 @@ import {
   addMarkdownToWorkspace,
   addTerminalToWorkspace,
   applyWorkspaceCameraPreset,
+  removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
   setWorkspaceViewport,
 } from './workspaceActions';
@@ -25,6 +26,46 @@ describe('workspace actions', () => {
 
     expect(workspace.markdown).toHaveLength(1);
     expect(workspace.markdown[0]?.label).toBe('Notes 1');
+  });
+
+  it('removes terminal nodes and unlinks markdown references', () => {
+    const workspace = createDefaultWorkspace();
+    const firstTerminal = addTerminalToWorkspace(workspace, {
+      label: 'Build worker',
+    });
+    const secondTerminal = addTerminalToWorkspace(firstTerminal.workspace, {
+      label: 'Review worker',
+    });
+    const nextWorkspace = removeTerminalFromWorkspace(
+      {
+        ...secondTerminal.workspace,
+        markdown: [
+          {
+            id: 'markdown-1',
+            label: 'Notes 1',
+            filePath: './notes-1.md',
+            readOnly: false,
+            bounds: {
+              x: 0,
+              y: 0,
+              width: 320,
+              height: 240,
+            },
+            linkedTerminalIds: [
+              firstTerminal.terminal.id,
+              secondTerminal.terminal.id,
+            ],
+          },
+        ],
+      },
+      firstTerminal.terminal.id,
+    );
+
+    expect(nextWorkspace.terminals).toHaveLength(1);
+    expect(nextWorkspace.terminals[0]?.id).toBe(secondTerminal.terminal.id);
+    expect(nextWorkspace.markdown[0]?.linkedTerminalIds).toEqual([
+      secondTerminal.terminal.id,
+    ]);
   });
 
   it('applies and saves camera presets', () => {

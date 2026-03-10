@@ -21,7 +21,8 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const mode = getSemanticZoomMode(zoom);
   const terminal = data.terminal;
   const session = data.session;
-  const { onBoundsChange, onRestart, onMarkRead, onTerminalChange } = data;
+  const { onBoundsChange, onRestart, onMarkRead, onTerminalChange, onRemove } =
+    data;
   const canAttachTerminal = mode === 'focus' && selected && data.isInteractive;
   const canMountLivePreview =
     data.mountLivePreview && session !== null && mode !== 'overview';
@@ -40,6 +41,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const hideRedundantMetadata = selected && mode !== 'overview';
   const hideCardTitleBar = selected && mode === 'focus';
   const hideReadOnlyStatusRows = canMountLivePreview && !canAttachTerminal;
+  const previewScrollResetKey = `${mode}:${selected}:${canAttachTerminal}`;
 
   useEffect(() => {
     if (selected && mode !== 'overview' && session?.unreadCount) {
@@ -78,6 +80,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
             terminal={terminal}
             status={status}
             onTerminalChange={onTerminalChange}
+            onClose={onRemove}
           />
         ) : null}
 
@@ -177,6 +180,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
               <TerminalScrollPreview
                 className="terminal-preview-surface"
                 scrollback={session.scrollback}
+                scrollResetKey={previewScrollResetKey}
               />
             </div>
           ) : (
@@ -205,7 +209,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
 
         {mode === 'focus' ? (
           canAttachTerminal ? (
-            <div className="canvas-node-summary">
+            <div className="canvas-node-summary terminal-live-preview-card">
               {!hideRedundantMetadata ? (
                 <div className="terminal-focus-toolbar">
                   <div className="terminal-focus-title">
@@ -239,15 +243,11 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   </button>
                 </div>
               ) : null}
-              <strong>
-                {session
-                  ? 'Live terminal attached in focus overlay.'
-                  : 'Waiting for PTY session snapshot.'}
-              </strong>
-              <span>
-                Focus mode mounts the read/write terminal in a dedicated overlay
-                above the canvas while neighboring terminals stay read-only.
-              </span>
+              <TerminalScrollPreview
+                className="terminal-preview-surface"
+                scrollback={session?.scrollback ?? ''}
+                scrollResetKey={previewScrollResetKey}
+              />
             </div>
           ) : canMountLivePreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
@@ -285,6 +285,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
               <TerminalScrollPreview
                 className="terminal-preview-surface"
                 scrollback={session.scrollback}
+                scrollResetKey={previewScrollResetKey}
               />
             </div>
           ) : (

@@ -77,7 +77,7 @@ export function TerminalSurface({
     });
 
     terminal.open(container);
-    markTerminalDomAsCanvasSafe(terminal, readOnly);
+    markTerminalDomAsCanvasSafe(terminal);
 
     if (readOnly && terminal.textarea instanceof HTMLTextAreaElement) {
       terminal.textarea.tabIndex = -1;
@@ -109,6 +109,10 @@ export function TerminalSurface({
 
       lastSizeRef.current = sizeKey;
       terminal.resize(size.cols, size.rows);
+
+      if (readOnly) {
+        syncReadOnlyViewport(terminal);
+      }
 
       if (!readOnly) {
         syncBackendSize(size.cols, size.rows);
@@ -206,16 +210,22 @@ export function TerminalSurface({
     }
 
     if (scrollback.startsWith(lastRenderedScrollbackRef.current)) {
-      terminal.write(
-        scrollback.slice(lastRenderedScrollbackRef.current.length),
-      );
+      terminal.write(scrollback.slice(lastRenderedScrollbackRef.current.length), () => {
+        if (readOnly) {
+          syncReadOnlyViewport(terminal);
+        }
+      });
     } else {
       terminal.reset();
-      terminal.write(scrollback);
+      terminal.write(scrollback, () => {
+        if (readOnly) {
+          syncReadOnlyViewport(terminal);
+        }
+      });
     }
 
     lastRenderedScrollbackRef.current = scrollback;
-  }, [scrollback]);
+  }, [readOnly, scrollback]);
 
   return (
     <div
@@ -223,7 +233,7 @@ export function TerminalSurface({
       className={buildSurfaceClassName(className, readOnly)}
       aria-hidden={readOnly}
       onClick={readOnly ? undefined : focusTerminalSurface}
-      onWheel={readOnly ? undefined : stopCanvasInteractionPropagation}
+      onWheel={stopCanvasInteractionPropagation}
     />
   );
 
@@ -331,12 +341,7 @@ function focusTerminalInput(terminal: Terminal | null): void {
 
 function markTerminalDomAsCanvasSafe(
   terminal: Terminal,
-  readOnly: boolean,
 ): void {
-  if (readOnly) {
-    return;
-  }
-
   const classes = ['nodrag', 'nopan', 'nowheel'];
   const elements = [
     terminal.element,
@@ -359,7 +364,7 @@ function buildSurfaceClassName(
   className: string | undefined,
   readOnly: boolean,
 ): string {
-  const classes = ['terminal-surface'];
+  const classes = ['terminal-surface', 'nodrag', 'nopan', 'nowheel'];
 
   if (className) {
     classes.push(className);
@@ -367,8 +372,6 @@ function buildSurfaceClassName(
 
   if (readOnly) {
     classes.push('is-read-only');
-  } else {
-    classes.push('nodrag', 'nopan', 'nowheel');
   }
 
   return classes.join(' ');
@@ -381,4 +384,9 @@ function stopCanvasInteractionPropagation(
     | React.WheelEvent<HTMLDivElement>,
 ): void {
   event.stopPropagation();
+}
+
+function syncReadOnlyViewport(terminal: Terminal): void {
+  terminal.scrollToBottom();
+  terminal.refresh(0, Math.max(terminal.rows - 1, 0));
 }

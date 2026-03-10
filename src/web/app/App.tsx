@@ -19,6 +19,7 @@ export function App() {
     addTerminal,
     addMarkdown,
     updateTerminal,
+    removeTerminal,
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
@@ -179,6 +180,12 @@ export function App() {
     setSelectedNodeId(nodeId);
   }
 
+  function handleTerminalRemove(terminalId: string) {
+    setFocusAutoFocusAtMs(null);
+    setSelectedNodeId((current) => (current === terminalId ? null : current));
+    removeTerminal(terminalId, { persistImmediately: true });
+  }
+
   return (
     <div className="app-shell">
       <WorkspaceCanvas
@@ -190,6 +197,7 @@ export function App() {
         onTerminalResize={resizeSession}
         onTerminalRestart={restartSession}
         onTerminalChange={updateTerminal}
+        onTerminalRemove={handleTerminalRemove}
         onMarkTerminalRead={markSessionRead}
         onSelectedNodeChange={handleSelectedNodeChange}
         onTerminalFocusRequest={focusTerminal}

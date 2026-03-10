@@ -21,6 +21,7 @@ interface FocusedTerminalOverlayProps {
     nodeId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onRemove: (terminalId: string) => void;
   onRestart: (sessionId: string) => void;
 }
 
@@ -33,6 +34,7 @@ export function FocusedTerminalOverlay({
   onResize,
   onBoundsChange,
   onTerminalChange,
+  onRemove,
   onRestart,
 }: FocusedTerminalOverlayProps) {
   const overlayStyle = createOverlayStyle(terminal, viewport);
@@ -117,6 +119,7 @@ export function FocusedTerminalOverlay({
           terminal={terminal}
           status={status}
           onTerminalChange={onTerminalChange}
+          onClose={onRemove}
           sidecar={
             !session?.connected ? (
               <button

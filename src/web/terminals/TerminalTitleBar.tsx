@@ -11,6 +11,7 @@ interface TerminalTitleBarProps {
     terminalId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onClose?: (terminalId: string) => void;
 }
 
 export function TerminalTitleBar({
@@ -19,6 +20,7 @@ export function TerminalTitleBar({
   className,
   sidecar,
   onTerminalChange,
+  onClose,
 }: TerminalTitleBarProps) {
   const labelInputRef = useRef<HTMLInputElement | null>(null);
   const pathLabel =
@@ -64,6 +66,20 @@ export function TerminalTitleBar({
       </div>
       <div className="terminal-header-sidecar">
         {sidecar}
+        {onClose ? (
+          <button
+            className="terminal-header-close-button nodrag nopan"
+            type="button"
+            aria-label={`Close ${terminal.label}`}
+            onPointerDown={stopPointerEventPropagation}
+            onClick={(event) => {
+              stopEventPropagation(event);
+              onClose(terminal.id);
+            }}
+          >
+            Close
+          </button>
+        ) : null}
         <span className={`canvas-node-status is-${status}`}>{status}</span>
       </div>
     </div>
@@ -71,5 +87,13 @@ export function TerminalTitleBar({
 }
 
 function stopEventPropagation(event: { stopPropagation: () => void }): void {
+  event.stopPropagation();
+}
+
+function stopPointerEventPropagation(event: {
+  stopPropagation: () => void;
+  preventDefault: () => void;
+}): void {
+  event.preventDefault();
   event.stopPropagation();
 }
