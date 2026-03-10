@@ -2,6 +2,12 @@ import { useEffect, useEffectEvent, useRef } from 'react';
 
 import { Terminal } from '@xterm/xterm';
 
+import {
+  DEFAULT_TERMINAL_CELL_SIZE,
+  measureCellSize,
+  type TerminalCellSize,
+} from './terminalSizing';
+
 interface TerminalSurfaceProps {
   sessionId: string;
   scrollback: string;
@@ -15,11 +21,6 @@ interface TerminalSurfaceProps {
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
 const TERMINAL_FONT_SIZE = 10.5;
 const TERMINAL_LINE_HEIGHT = 1.1;
-const TERMINAL_HORIZONTAL_PADDING = 20;
-const TERMINAL_VERTICAL_PADDING = 14;
-const DEFAULT_CELL_WIDTH = 6.4;
-const DEFAULT_CELL_HEIGHT = TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT;
-const PROBE_TEXT = 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW';
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
 
@@ -37,10 +38,8 @@ export function TerminalSurface({
   const lastRenderedScrollbackRef = useRef('');
   const lastSizeRef = useRef('');
   const focusTimerRef = useRef<number | null>(null);
-  const cellSizeRef = useRef({
-    width: DEFAULT_CELL_WIDTH,
-    height: DEFAULT_CELL_HEIGHT,
-  });
+  const resizeFrameRef = useRef<number | null>(null);
+  const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
   const forwardInput = useEffectEvent((data: string) => {
     if (!readOnly) {
       onInput?.(sessionId, data);
@@ -94,9 +93,13 @@ export function TerminalSurface({
           forwardInput(data);
         });
 
-    cellSizeRef.current = measureCellSize(container);
-
-    const resizeObserver = new ResizeObserver(() => {
+    let disposed = false;
+    const fitTerminal = () => {
+      cellSizeRef.current = getTerminalCellSize(
+        terminal,
+        container,
+        cellSizeRef.current,
+      );
       const size = measureTerminal(container, cellSizeRef.current);
       const sizeKey = `${size.cols}x${size.rows}`;
 
@@ -110,20 +113,54 @@ export function TerminalSurface({
       if (!readOnly) {
         syncBackendSize(size.cols, size.rows);
       }
+    };
+    const scheduleFit = () => {
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        fitTerminal();
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      scheduleFit();
     });
 
     resizeObserver.observe(container);
 
-    const initialSize = measureTerminal(container, cellSizeRef.current);
-    lastSizeRef.current = `${initialSize.cols}x${initialSize.rows}`;
-    terminal.resize(initialSize.cols, initialSize.rows);
+    fitTerminal();
+    scheduleFit();
 
-    if (!readOnly) {
-      syncBackendSize(initialSize.cols, initialSize.rows);
+    const fontSet = document.fonts;
+    const handleFontMetricsChange = () => {
+      scheduleFit();
+    };
+
+    if (typeof fontSet?.addEventListener === 'function') {
+      fontSet.addEventListener('loadingdone', handleFontMetricsChange);
+    }
+
+    if (fontSet?.ready) {
+      void fontSet.ready.then(() => {
+        if (!disposed) {
+          scheduleFit();
+        }
+      });
     }
 
     return () => {
+      disposed = true;
       resizeObserver.disconnect();
+      if (typeof fontSet?.removeEventListener === 'function') {
+        fontSet.removeEventListener('loadingdone', handleFontMetricsChange);
+      }
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
       dataDisposable?.dispose();
       terminal.dispose();
       terminalRef.current = null;
@@ -208,19 +245,13 @@ export function TerminalFocusSurface(props: {
 
 function measureTerminal(
   container: HTMLDivElement,
-  cellSize: { width: number; height: number },
+  cellSize: TerminalCellSize,
 ): {
   cols: number;
   rows: number;
 } {
-  const width = Math.max(
-    container.clientWidth - TERMINAL_HORIZONTAL_PADDING,
-    0,
-  );
-  const height = Math.max(
-    container.clientHeight - TERMINAL_VERTICAL_PADDING,
-    0,
-  );
+  const width = Math.max(container.clientWidth, 0);
+  const height = Math.max(container.clientHeight, 0);
 
   return {
     cols: clamp(Math.floor(width / cellSize.width), MIN_TERMINAL_COLS, 240),
@@ -228,36 +259,50 @@ function measureTerminal(
   };
 }
 
-function measureCellSize(container: HTMLDivElement): {
-  width: number;
-  height: number;
-} {
-  const probe = document.createElement('span');
-  probe.textContent = PROBE_TEXT;
-  probe.style.position = 'absolute';
-  probe.style.visibility = 'hidden';
-  probe.style.pointerEvents = 'none';
-  probe.style.whiteSpace = 'pre';
-  probe.style.fontFamily = TERMINAL_FONT_FAMILY;
-  probe.style.fontSize = `${TERMINAL_FONT_SIZE}px`;
-  probe.style.lineHeight = String(TERMINAL_LINE_HEIGHT);
+function getTerminalCellSize(
+  terminal: Terminal,
+  container: HTMLDivElement,
+  fallback: TerminalCellSize,
+): TerminalCellSize {
+  const measuredCellSize = getMeasuredRendererCellSize(terminal);
 
-  container.appendChild(probe);
+  if (measuredCellSize) {
+    return measuredCellSize;
+  }
 
-  const width = probe.getBoundingClientRect().width / PROBE_TEXT.length;
-  const measuredLineHeight = Number.parseFloat(
-    window.getComputedStyle(probe).lineHeight,
-  );
+  return measureCellSize(container, fallback);
+}
 
-  probe.remove();
+function getMeasuredRendererCellSize(
+  terminal: Terminal,
+): TerminalCellSize | null {
+  const core = (terminal as Terminal & {
+    _core?: {
+      _renderService?: {
+        dimensions?: {
+          css?: {
+            cell?: {
+              width?: number;
+              height?: number;
+            };
+          };
+        };
+      };
+    };
+  })._core;
+  const cell = core?._renderService?.dimensions?.css?.cell;
+  const width = cell?.width ?? 0;
+  const height = cell?.height ?? 0;
 
-  return {
-    width: Number.isFinite(width) && width > 0 ? width : DEFAULT_CELL_WIDTH,
-    height:
-      Number.isFinite(measuredLineHeight) && measuredLineHeight > 0
-        ? measuredLineHeight
-        : DEFAULT_CELL_HEIGHT,
-  };
+  if (!Number.isFinite(width) || width <= 0) {
+    return null;
+  }
+
+  if (!Number.isFinite(height) || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
 }
 
 function clamp(value: number, min: number, max: number): number {
