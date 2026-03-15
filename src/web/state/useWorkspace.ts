@@ -13,6 +13,7 @@ import {
   addMarkdownToWorkspace,
   addTerminalToWorkspace,
   applyWorkspaceCameraPreset,
+  removeMarkdownFromWorkspace,
   removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
   setWorkspaceViewport,
@@ -43,42 +44,59 @@ export function useWorkspace() {
   const localRevisionRef = useRef(0);
   const lastSavedRevisionRef = useRef(0);
   const inFlightRevisionRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const pendingExternalWorkspaceRef = useRef<Workspace | null>(null);
+
+  const applyLoadedWorkspace = useCallback((nextWorkspace: Workspace) => {
+    hasLoadedRef.current = true;
+    workspaceRef.current = nextWorkspace;
+    localRevisionRef.current = 0;
+    lastSavedRevisionRef.current = 0;
+    inFlightRevisionRef.current = null;
+    pendingExternalWorkspaceRef.current = null;
+
+    startTransition(() => {
+      setWorkspace(nextWorkspace);
+      setPersistence({
+        phase: 'saved',
+        error: null,
+        lastSavedAt: nextWorkspace.updatedAt,
+      });
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    let attempt = 0;
 
     async function loadWorkspace() {
-      try {
-        const loadedWorkspace = await fetchWorkspace();
+      while (!cancelled) {
+        try {
+          const loadedWorkspace = await fetchWorkspace();
 
-        if (cancelled) {
+          if (cancelled) {
+            return;
+          }
+
+          applyLoadedWorkspace(loadedWorkspace);
           return;
-        }
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
 
-        hasLoadedRef.current = true;
-        workspaceRef.current = loadedWorkspace;
-        localRevisionRef.current = 0;
-        lastSavedRevisionRef.current = 0;
-        inFlightRevisionRef.current = null;
+          attempt += 1;
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
 
-        startTransition(() => {
-          setWorkspace(loadedWorkspace);
           setPersistence({
-            phase: 'saved',
-            error: null,
-            lastSavedAt: loadedWorkspace.updatedAt,
+            phase: 'loading',
+            error: `Workspace server unavailable (${message}). Retrying...`,
+            lastSavedAt: null,
           });
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
 
-        setPersistence({
-          phase: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error',
-          lastSavedAt: null,
-        });
+          await waitForRetry(Math.min(2_500, 350 * attempt));
+        }
       }
     }
 
@@ -88,7 +106,63 @@ export function useWorkspace() {
       cancelled = true;
       clearAutosaveTimer(autosaveTimerRef);
     }
-  }, []);
+  }, [applyLoadedWorkspace]);
+
+  const refreshWorkspaceFromServer = useCallback(async (
+    nextWorkspace?: Workspace | null,
+  ): Promise<boolean> => {
+    const candidateWorkspace = nextWorkspace ?? null;
+
+    if (
+      inFlightRevisionRef.current !== null ||
+      localRevisionRef.current > lastSavedRevisionRef.current
+    ) {
+      pendingExternalWorkspaceRef.current = candidateWorkspace;
+      return false;
+    }
+
+    const currentWorkspace = workspaceRef.current;
+
+    if (
+      candidateWorkspace &&
+      currentWorkspace &&
+      candidateWorkspace.updatedAt === currentWorkspace.updatedAt
+    ) {
+      return true;
+    }
+
+    if (refreshInFlightRef.current) {
+      pendingExternalWorkspaceRef.current = candidateWorkspace;
+      return false;
+    }
+
+    refreshInFlightRef.current = true;
+
+    try {
+      const loadedWorkspace = candidateWorkspace ?? (await fetchWorkspace());
+      const latestWorkspace = workspaceRef.current;
+
+      if (
+        latestWorkspace &&
+        latestWorkspace.updatedAt === loadedWorkspace.updatedAt
+      ) {
+        pendingExternalWorkspaceRef.current = null;
+        return true;
+      }
+
+      applyLoadedWorkspace(loadedWorkspace);
+      return true;
+    } catch (error) {
+      setPersistence((current) => ({
+        phase: current.phase,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        lastSavedAt: current.lastSavedAt,
+      }));
+      return false;
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, [applyLoadedWorkspace]);
 
   const persistCurrentWorkspace = useCallback(async () => {
     const nextWorkspace = workspaceRef.current;
@@ -148,9 +222,11 @@ export function useWorkspace() {
 
       if (localRevisionRef.current > lastSavedRevisionRef.current) {
         schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
+      } else if (pendingExternalWorkspaceRef.current) {
+        void refreshWorkspaceFromServer(pendingExternalWorkspaceRef.current);
       }
     }
-  }, []);
+  }, [refreshWorkspaceFromServer]);
 
   const updateWorkspace = useCallback((
     updater: WorkspaceUpdater,
@@ -185,6 +261,11 @@ export function useWorkspace() {
     return touchedWorkspace;
   }, [persistCurrentWorkspace]);
 
+  const replaceWorkspace = useCallback((nextWorkspace: Workspace) => {
+    clearAutosaveTimer(autosaveTimerRef);
+    applyLoadedWorkspace(nextWorkspace);
+  }, [applyLoadedWorkspace]);
+
   const addTerminal = useCallback((
     input?: Partial<CreateTerminalNodeInput>,
     options?: UpdateWorkspaceOptions,
@@ -218,6 +299,16 @@ export function useWorkspace() {
     );
   }, [updateWorkspace]);
 
+  const removeMarkdown = useCallback((
+    markdownId: string,
+    options?: UpdateWorkspaceOptions,
+  ) => {
+    updateWorkspace(
+      (current) => removeMarkdownFromWorkspace(current, markdownId),
+      options,
+    );
+  }, [updateWorkspace]);
+
   const setViewport = useCallback((viewport: CameraViewport) => {
     updateWorkspace((current) => setWorkspaceViewport(current, viewport));
   }, [updateWorkspace]);
@@ -234,10 +325,13 @@ export function useWorkspace() {
     workspace,
     persistence,
     updateWorkspace,
+    replaceWorkspace,
+    refreshWorkspaceFromServer,
     addTerminal,
     addMarkdown,
     updateTerminal,
     removeTerminal,
+    removeMarkdown,
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
@@ -264,4 +358,10 @@ function schedulePersist(
     timerRef.current = null;
     void persist();
   }, delayMs);
+}
+
+function waitForRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
 }

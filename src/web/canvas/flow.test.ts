@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { getSelectedNodeIdFromChanges } from './flow';
+import { createDefaultWorkspace, createPlaceholderMarkdown, createPlaceholderTerminal } from '../../shared/workspace';
+import { getSelectedNodeIdFromChanges, buildCanvasEdges } from './flow';
 
 describe('getSelectedNodeIdFromChanges', () => {
   it('returns the newly selected node when selection changes include a node selection', () => {
@@ -31,5 +32,28 @@ describe('getSelectedNodeIdFromChanges', () => {
         },
       ]),
     ).toBeUndefined();
+  });
+
+  it('builds transient markdown edges from active runtime links', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const markdown = createPlaceholderMarkdown(0);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      terminals: [terminal],
+      markdown: [markdown],
+    };
+
+    const edges = buildCanvasEdges(workspace, [
+      {
+        markdownNodeId: markdown.id,
+        terminalId: terminal.id,
+        phase: 'active',
+      },
+    ]);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.animated).toBe(true);
+    expect(edges[0]?.source).toBe(markdown.id);
+    expect(edges[0]?.target).toBe(terminal.id);
   });
 });

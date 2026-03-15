@@ -1,8 +1,13 @@
 import type { Edge, NodeChange } from '@xyflow/react';
 
 import { updateById } from '../../shared/collections';
+import type {
+  MarkdownDocumentState,
+  MarkdownLinkState,
+} from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
+import type { TerminalPresentationMode } from '../terminals/presentationMode';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
 
 export type CanvasNode = TerminalFlowNode | MarkdownFlowNode;
@@ -34,7 +39,10 @@ interface BuildCanvasNodesOptions {
   selectedNodeId: string | null;
   livePreviewTerminalIds: ReadonlySet<string>;
   focusTerminalId: string | null;
+  terminalPresentationById: ReadonlyMap<string, TerminalPresentationMode>;
   sessions: Record<string, TerminalSessionSnapshot>;
+  markdownDocuments: Record<string, MarkdownDocumentState>;
+  markdownLinks: readonly MarkdownLinkState[];
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;
   onBoundsChange: (
@@ -50,6 +58,16 @@ interface BuildCanvasNodesOptions {
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onRestart: (sessionId: string) => void;
   onMarkRead: (sessionId: string) => void;
+  onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
+  onMarkdownFocusRequest: (nodeId: string) => void;
+  onMarkdownRemove: (nodeId: string) => void;
+  onDocumentLoad: (nodeId: string) => void;
+  onDocumentChange: (nodeId: string, content: string) => void;
+  onDocumentSave: (nodeId: string) => void;
+  onResolveConflict: (
+    nodeId: string,
+    choice: 'reload-disk' | 'overwrite-disk' | 'keep-buffer',
+  ) => void;
 }
 
 export function buildCanvasNodes({
@@ -57,7 +75,10 @@ export function buildCanvasNodes({
   selectedNodeId,
   livePreviewTerminalIds,
   focusTerminalId,
+  terminalPresentationById,
   sessions,
+  markdownDocuments,
+  markdownLinks,
   socketState,
   onSelect,
   onBoundsChange,
@@ -67,6 +88,13 @@ export function buildCanvasNodes({
   onResize,
   onRestart,
   onMarkRead,
+  onMarkdownDrop,
+  onMarkdownFocusRequest,
+  onMarkdownRemove,
+  onDocumentLoad,
+  onDocumentChange,
+  onDocumentSave,
+  onResolveConflict,
 }: BuildCanvasNodesOptions): CanvasNode[] {
   const terminals = workspace.terminals.map((terminal) => {
     const isFocusTarget = focusTerminalId === terminal.id;
@@ -83,7 +111,8 @@ export function buildCanvasNodes({
       data: {
         terminal,
         session: sessions[terminal.id] ?? null,
-        isInteractive: selectedNodeId === terminal.id,
+        presentationMode:
+          terminalPresentationById.get(terminal.id) ?? 'overview',
         mountLivePreview: livePreviewTerminalIds.has(terminal.id),
         socketState,
         onSelect,
@@ -94,6 +123,9 @@ export function buildCanvasNodes({
         onResize,
         onRestart,
         onMarkRead,
+        onMarkdownDrop,
+        activeMarkdownLink:
+          markdownLinks.find((link) => link.terminalId === terminal.id) ?? null,
       },
       style: {
         width: terminal.bounds.width,
@@ -117,8 +149,18 @@ export function buildCanvasNodes({
       height: node.bounds.height,
       data: {
         markdown: node,
+        document: markdownDocuments[node.id] ?? null,
+        activeLinks: markdownLinks.filter(
+          (link) => link.markdownNodeId === node.id,
+        ),
         onSelect,
+        onFocusRequest: onMarkdownFocusRequest,
+        onRemove: onMarkdownRemove,
         onBoundsChange,
+        onDocumentLoad,
+        onDocumentChange,
+        onDocumentSave,
+        onResolveConflict,
       },
       style: {
         width: node.bounds.width,
@@ -132,27 +174,33 @@ export function buildCanvasNodes({
   return [...terminals, ...markdown];
 }
 
-export function buildCanvasEdges(workspace: Workspace): Edge[] {
-  const terminalIds = new Set(
-    workspace.terminals.map((terminal) => terminal.id),
-  );
+export function buildCanvasEdges(
+  workspace: Workspace,
+  markdownLinks: readonly MarkdownLinkState[],
+): Edge[] {
+  const terminalIds = new Set(workspace.terminals.map((terminal) => terminal.id));
+  const markdownIds = new Set(workspace.markdown.map((markdown) => markdown.id));
 
-  return workspace.markdown.flatMap((markdown) =>
-    markdown.linkedTerminalIds
-      .filter((terminalId) => terminalIds.has(terminalId))
-      .map((terminalId) => ({
-        id: `link-${markdown.id}-${terminalId}`,
-        source: markdown.id,
-        target: terminalId,
-        type: 'smoothstep',
-        animated: false,
-        selectable: false,
-        style: {
-          stroke: 'rgba(136, 182, 221, 0.45)',
-          strokeWidth: 1.5,
-        },
-      })),
-  );
+  return markdownLinks
+    .filter(
+      (link) =>
+        terminalIds.has(link.terminalId) && markdownIds.has(link.markdownNodeId),
+    )
+    .map((link) => ({
+      id: `link-${link.markdownNodeId}-${link.terminalId}`,
+      source: link.markdownNodeId,
+      target: link.terminalId,
+      type: 'smoothstep',
+      animated: link.phase === 'active',
+      selectable: false,
+      style: {
+        stroke:
+          link.phase === 'active'
+            ? 'rgba(255, 180, 92, 0.9)'
+            : 'rgba(136, 182, 221, 0.55)',
+        strokeWidth: link.phase === 'active' ? 2 : 1.5,
+      },
+    }));
 }
 
 export function applyNodeChangesToWorkspace(

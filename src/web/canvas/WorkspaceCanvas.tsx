@@ -10,16 +10,21 @@ import {
 } from '@xyflow/react';
 
 import {
-  getReadOnlyPreviewTerminalIds,
-  getSemanticZoomMode,
   type CameraViewport,
   type TerminalNode,
   type Workspace,
 } from '../../shared/workspace';
+import type {
+  MarkdownDocumentState,
+  MarkdownLinkState,
+} from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
+import { isAttentionRequiredStatus } from '../../shared/events';
 import { MarkdownPlaceholderNode } from '../markdown/MarkdownPlaceholderNode';
 import { FocusedTerminalOverlay } from '../terminals/FocusedTerminalOverlay';
+import { deriveTerminalPresentationState } from '../terminals/presentationMode';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
+import { getTerminalDisplayStatus } from '../terminals/presentation';
 import {
   applyNodeChangesToWorkspace,
   buildCanvasEdges,
@@ -31,7 +36,10 @@ import {
 interface WorkspaceCanvasProps {
   workspace: Workspace;
   selectedNodeId: string | null;
+  terminalInteractionAtMs: Readonly<Record<string, number>>;
   sessions: Record<string, TerminalSessionSnapshot>;
+  markdownDocuments: Record<string, MarkdownDocumentState>;
+  markdownLinks: MarkdownLinkState[];
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onTerminalInput: (sessionId: string, data: string) => void;
   onTerminalResize: (sessionId: string, cols: number, rows: number) => void;
@@ -42,11 +50,21 @@ interface WorkspaceCanvasProps {
   ) => void;
   onTerminalRemove: (terminalId: string) => void;
   onMarkTerminalRead: (sessionId: string) => void;
+  onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
+  onMarkdownFocusRequest: (nodeId: string) => void;
+  onMarkdownRemove: (nodeId: string) => void;
   onSelectedNodeChange: (nodeId: string | null) => void;
   onTerminalFocusRequest: (terminalId: string) => void;
   onWorkspaceChange: (updater: (workspace: Workspace) => Workspace) => void;
   onViewportChange: (viewport: CameraViewport) => void;
   focusAutoFocusAtMs: number | null;
+  onDocumentLoad: (nodeId: string) => void;
+  onDocumentChange: (nodeId: string, content: string) => void;
+  onDocumentSave: (nodeId: string) => void;
+  onResolveConflict: (
+    nodeId: string,
+    choice: 'reload-disk' | 'overwrite-disk' | 'keep-buffer',
+  ) => void;
 }
 
 const nodeTypes = {
@@ -57,7 +75,10 @@ const nodeTypes = {
 export function WorkspaceCanvas({
   workspace,
   selectedNodeId,
+  terminalInteractionAtMs,
   sessions,
+  markdownDocuments,
+  markdownLinks,
   socketState,
   onTerminalInput,
   onTerminalResize,
@@ -65,36 +86,56 @@ export function WorkspaceCanvas({
   onTerminalChange,
   onTerminalRemove,
   onMarkTerminalRead,
+  onMarkdownDrop,
+  onMarkdownFocusRequest,
+  onMarkdownRemove,
   onSelectedNodeChange,
   onTerminalFocusRequest,
   onWorkspaceChange,
   onViewportChange,
   focusAutoFocusAtMs,
+  onDocumentLoad,
+  onDocumentChange,
+  onDocumentSave,
+  onResolveConflict,
 }: WorkspaceCanvasProps) {
-  const semanticMode = getSemanticZoomMode(workspace.currentViewport.zoom);
-  const livePreviewTerminalIds = useMemo(
+  const terminalPresentationState = useMemo(
     () =>
-      new Set(
-        getReadOnlyPreviewTerminalIds(
-          workspace.terminals,
-          selectedNodeId,
-          semanticMode,
-        ),
-      ),
-    [semanticMode, selectedNodeId, workspace.terminals],
+      deriveTerminalPresentationState({
+        terminals: workspace.terminals,
+        selectedNodeId,
+        sessions,
+        interactionAtByTerminalId: terminalInteractionAtMs,
+      }),
+    [selectedNodeId, sessions, terminalInteractionAtMs, workspace.terminals],
+  );
+  const livePreviewTerminalIds = useMemo(
+    () => new Set(terminalPresentationState.inspectTerminalIds),
+    [terminalPresentationState.inspectTerminalIds],
   );
   const selectedTerminal = useMemo(
     () =>
-      semanticMode === 'focus' && selectedNodeId
+      terminalPresentationState.focusedTerminalId
         ? (workspace.terminals.find(
-            (terminal) => terminal.id === selectedNodeId,
+            (terminal) =>
+              terminal.id === terminalPresentationState.focusedTerminalId,
           ) ?? null)
         : null,
-    [semanticMode, selectedNodeId, workspace.terminals],
+    [terminalPresentationState.focusedTerminalId, workspace.terminals],
   );
   const selectedSession = selectedTerminal
     ? (sessions[selectedTerminal.id] ?? null)
     : null;
+  const terminalStatusById = useMemo(
+    () =>
+      new Map(
+        workspace.terminals.map((terminal) => [
+          terminal.id,
+          getTerminalDisplayStatus(terminal, sessions[terminal.id] ?? null),
+        ]),
+      ),
+    [sessions, workspace.terminals],
+  );
   const nodes = useMemo(
     () =>
       buildCanvasNodes({
@@ -102,7 +143,10 @@ export function WorkspaceCanvas({
         selectedNodeId,
         livePreviewTerminalIds,
         focusTerminalId: selectedTerminal?.id ?? null,
+        terminalPresentationById: terminalPresentationState.presentationById,
         sessions,
+        markdownDocuments,
+        markdownLinks,
         socketState,
         onSelect: onSelectedNodeChange,
         onBoundsChange: (nodeId, bounds) => {
@@ -114,10 +158,23 @@ export function WorkspaceCanvas({
         onResize: onTerminalResize,
         onRestart: onTerminalRestart,
         onMarkRead: onMarkTerminalRead,
+        onMarkdownDrop,
+        onMarkdownFocusRequest,
+        onMarkdownRemove,
+        onDocumentLoad,
+        onDocumentChange,
+        onDocumentSave,
+        onResolveConflict,
       }),
     [
       livePreviewTerminalIds,
       onMarkTerminalRead,
+      onMarkdownDrop,
+      onMarkdownFocusRequest,
+      onMarkdownRemove,
+      onDocumentChange,
+      onDocumentLoad,
+      onDocumentSave,
       onSelectedNodeChange,
       onTerminalChange,
       onTerminalInput,
@@ -128,11 +185,18 @@ export function WorkspaceCanvas({
       selectedNodeId,
       selectedTerminal?.id,
       sessions,
+      markdownDocuments,
+      markdownLinks,
       socketState,
+      terminalPresentationState.presentationById,
       workspace,
+      onResolveConflict,
     ],
   );
-  const edges = useMemo(() => buildCanvasEdges(workspace), [workspace]);
+  const edges = useMemo(
+    () => buildCanvasEdges(workspace, markdownLinks),
+    [markdownLinks, workspace],
+  );
 
   return (
     <div className="canvas-frame">
@@ -172,6 +236,11 @@ export function WorkspaceCanvas({
           onNodeDoubleClick={(_event, node) => {
             if (node.type === 'terminal') {
               onTerminalFocusRequest(node.id);
+              return;
+            }
+
+            if (node.type === 'markdown') {
+              onMarkdownFocusRequest(node.id);
             }
           }}
           proOptions={{ hideAttribution: true }}
@@ -202,11 +271,29 @@ export function WorkspaceCanvas({
               width: 160,
               height: 120,
             }}
-            nodeColor={(node) =>
-              node.type === 'markdown'
-                ? 'rgba(255, 207, 132, 0.75)'
-                : 'rgba(138, 180, 216, 0.78)'
-            }
+            nodeColor={(node) => {
+              if (node.type === 'markdown') {
+                return 'rgba(255, 207, 132, 0.75)';
+              }
+
+              const status = terminalStatusById.get(node.id);
+
+              if (!status) {
+                return 'rgba(138, 180, 216, 0.78)';
+              }
+
+              if (isAttentionRequiredStatus(status)) {
+                return status === 'approval-needed' || status === 'needs-input'
+                  ? 'rgba(255, 194, 102, 0.9)'
+                  : 'rgba(255, 123, 114, 0.9)';
+              }
+
+              if (status === 'completed') {
+                return 'rgba(94, 196, 139, 0.82)';
+              }
+
+              return 'rgba(138, 180, 216, 0.78)';
+            }}
           />
           <Controls position="top-right" showInteractive={false} />
         </ReactFlow>

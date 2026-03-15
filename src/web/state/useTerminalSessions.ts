@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import type { AttentionEvent } from '../../shared/events';
+import type {
+  MarkdownDocumentState,
+  MarkdownLinkState,
+} from '../../shared/markdown';
 import { parseJsonMessage, serializeJsonMessage } from '../../shared/jsonTransport';
 import { appendScrollback } from '../../shared/scrollback';
 import {
@@ -8,6 +13,7 @@ import {
   type TerminalClientSocketMessage,
   type TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
+import type { Workspace } from '../../shared/workspace';
 
 export type TerminalSocketState = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -15,10 +21,38 @@ export function useTerminalSessions() {
   const [sessions, setSessions] = useState<
     Record<string, TerminalSessionSnapshot>
   >({});
+  const [markdownDocuments, setMarkdownDocuments] = useState<
+    Record<string, MarkdownDocumentState>
+  >({});
+  const [markdownLinks, setMarkdownLinks] = useState<MarkdownLinkState[]>([]);
+  const [attentionEvents, setAttentionEvents] = useState<AttentionEvent[]>([]);
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState<Workspace | null>(null);
   const [socketState, setSocketState] =
     useState<TerminalSocketState>('connecting');
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const pendingSessionTimersRef = useRef(new Map<string, number>());
+
+  const refreshSnapshots = useCallback(async () => {
+    try {
+      const response = await fetch('/api/sessions');
+
+      if (!response.ok) {
+        return [] as TerminalSessionSnapshot[];
+      }
+
+      const body = (await response.json()) as {
+        sessions?: TerminalSessionSnapshot[];
+      };
+      const nextSessions = Array.isArray(body.sessions) ? body.sessions : [];
+
+      setSessions((current) => mergeSessionSnapshots(current, nextSessions));
+      return nextSessions;
+    } catch {
+      // WebSocket remains the primary transport; polling is only a safety net.
+      return [] as TerminalSessionSnapshot[];
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +98,12 @@ export function useTerminalSessions() {
         }
 
         setSessions((current) => applyServerMessage(current, parsed));
+        setMarkdownDocuments((current) =>
+          applyMarkdownDocumentMessage(current, parsed),
+        );
+        setMarkdownLinks((current) => applyMarkdownLinkMessage(current, parsed));
+        setAttentionEvents((current) => applyAttentionMessage(current, parsed));
+        setWorkspaceSnapshot((current) => applyWorkspaceMessage(current, parsed));
       });
     };
 
@@ -81,6 +121,26 @@ export function useTerminalSessions() {
     };
   }, []);
 
+  useEffect(() => {
+    const pendingSessionTimers = pendingSessionTimersRef.current;
+    const initialRefreshTimerId = window.setTimeout(() => {
+      void refreshSnapshots();
+    }, 0);
+    const intervalId = window.setInterval(() => {
+      void refreshSnapshots();
+    }, 2_000);
+
+    return () => {
+      window.clearTimeout(initialRefreshTimerId);
+      window.clearInterval(intervalId);
+
+      for (const timerId of pendingSessionTimers.values()) {
+        window.clearTimeout(timerId);
+      }
+      pendingSessionTimers.clear();
+    };
+  }, [refreshSnapshots]);
+
   const send = useCallback((message: TerminalClientSocketMessage) => {
     const socket = socketRef.current;
 
@@ -93,7 +153,46 @@ export function useTerminalSessions() {
 
   return {
     sessions,
+    markdownDocuments,
+    markdownLinks,
+    attentionEvents,
+    workspaceSnapshot,
     socketState,
+    awaitSession: useCallback((sessionId: string) => {
+      if (pendingSessionTimersRef.current.has(sessionId)) {
+        return;
+      }
+
+      let attemptsRemaining = 12;
+
+      const pollForSession = async () => {
+        const sessionsSnapshot = await refreshSnapshots();
+
+        if (sessionsSnapshot.some((session) => session.sessionId === sessionId)) {
+          const timerId = pendingSessionTimersRef.current.get(sessionId);
+
+          if (timerId !== undefined) {
+            window.clearTimeout(timerId);
+          }
+          pendingSessionTimersRef.current.delete(sessionId);
+          return;
+        }
+
+        attemptsRemaining -= 1;
+
+        if (attemptsRemaining <= 0) {
+          pendingSessionTimersRef.current.delete(sessionId);
+          return;
+        }
+
+        const timerId = window.setTimeout(() => {
+          void pollForSession();
+        }, 250);
+        pendingSessionTimersRef.current.set(sessionId, timerId);
+      };
+
+      void pollForSession();
+    }, [refreshSnapshots]),
     sendInput: useCallback((sessionId: string, data: string) => {
       send({
         type: 'terminal.input',
@@ -134,6 +233,7 @@ export function applyServerMessage(
 ): Record<string, TerminalSessionSnapshot> {
   switch (message.type) {
     case 'ready':
+    case 'workspace.updated':
       return current;
     case 'session.init':
       return Object.fromEntries(
@@ -164,5 +264,87 @@ export function applyServerMessage(
       delete next[message.sessionId];
       return next;
     }
+    case 'attention.init':
+    case 'attention.event':
+    case 'markdown.init':
+    case 'markdown.document':
+    case 'markdown.link.init':
+    case 'markdown.link':
+      return current;
+  }
+}
+
+export function applyWorkspaceMessage(
+  current: Workspace | null,
+  message: TerminalServerSocketMessage,
+): Workspace | null {
+  switch (message.type) {
+    case 'workspace.updated':
+      return message.workspace;
+    default:
+      return current;
+  }
+}
+
+export function applyAttentionMessage(
+  current: AttentionEvent[],
+  message: TerminalServerSocketMessage,
+): AttentionEvent[] {
+  switch (message.type) {
+    case 'attention.init':
+      return message.events;
+    case 'attention.event':
+      return [message.event, ...current].slice(0, 48);
+    default:
+      return current;
+  }
+}
+
+function mergeSessionSnapshots(
+  current: Record<string, TerminalSessionSnapshot>,
+  sessions: TerminalSessionSnapshot[],
+): Record<string, TerminalSessionSnapshot> {
+  if (!sessions.length) {
+    return current;
+  }
+
+  const next = { ...current };
+
+  for (const session of sessions) {
+    next[session.sessionId] = session;
+  }
+
+  return next;
+}
+
+function applyMarkdownDocumentMessage(
+  current: Record<string, MarkdownDocumentState>,
+  message: TerminalServerSocketMessage,
+): Record<string, MarkdownDocumentState> {
+  switch (message.type) {
+    case 'markdown.init':
+      return Object.fromEntries(
+        message.documents.map((document) => [document.nodeId, document]),
+      );
+    case 'markdown.document':
+      return {
+        ...current,
+        [message.document.nodeId]: message.document,
+      };
+    default:
+      return current;
+  }
+}
+
+function applyMarkdownLinkMessage(
+  current: MarkdownLinkState[],
+  message: TerminalServerSocketMessage,
+): MarkdownLinkState[] {
+  switch (message.type) {
+    case 'markdown.link.init':
+    case 'markdown.link':
+      return message.links;
+    default:
+      return current;
   }
 }

@@ -91,3 +91,69 @@ export function formatTerminalEventTime(
     minute: '2-digit',
   }).format(eventDate);
 }
+
+export function getTerminalIntegrationBadgeLabel(
+  terminal: TerminalNode,
+  session: TerminalSessionSnapshot | null,
+): string {
+  if (!session) {
+    return terminal.agentType === 'shell'
+      ? 'shell pending'
+      : `${terminal.agentType} pending`;
+  }
+
+  const owner = session?.integration.owner ?? getDefaultIntegrationOwner(terminal);
+  const status = session?.integration.status ?? 'not-required';
+
+  return `${owner} ${status}`;
+}
+
+export function getTerminalIntegrationMessage(
+  terminal: TerminalNode,
+  session: TerminalSessionSnapshot | null,
+): string {
+  if (!session) {
+    return 'Waiting for PTY session snapshot.';
+  }
+
+  if (session?.integration.message?.trim()) {
+    return session.integration.message;
+  }
+
+  if (terminal.agentType === 'shell') {
+    return 'Integration is not required for shell sessions.';
+  }
+
+  return 'Waiting for integration state.';
+}
+
+export function getTerminalRuntimePath(
+  terminal: TerminalNode,
+  session: TerminalSessionSnapshot | null,
+  kind: 'cwd' | 'root',
+): string {
+  if (kind === 'cwd') {
+    return session?.liveCwd ?? terminal.cwd;
+  }
+
+  return session?.projectRoot ?? 'Waiting for project root detection.';
+}
+
+export function getTerminalIntegrationDisplayStatus(
+  terminal: TerminalNode,
+  session: TerminalSessionSnapshot | null,
+): string {
+  if (!session) {
+    return terminal.agentType === 'shell' ? 'pending' : 'pending';
+  }
+
+  return session.integration.status;
+}
+
+function getDefaultIntegrationOwner(terminal: TerminalNode): string {
+  if (terminal.agentType === 'shell') {
+    return 'shell';
+  }
+
+  return terminal.agentType;
+}

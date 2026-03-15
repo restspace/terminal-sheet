@@ -5,8 +5,12 @@ import { createPlaceholderTerminal } from '../../shared/workspace';
 import {
   formatTerminalEventTime,
   getTerminalDisplayStatus,
+  getTerminalIntegrationBadgeLabel,
+  getTerminalIntegrationDisplayStatus,
+  getTerminalIntegrationMessage,
   getTerminalLastEventAt,
   getTerminalLastMeaningfulLine,
+  getTerminalRuntimePath,
   hasAttentionState,
 } from './presentation';
 
@@ -15,8 +19,10 @@ function createSessionSnapshot(
 ): TerminalSessionSnapshot {
   return {
     sessionId: 'terminal-1',
+    backendId: 'local',
     pid: 1234,
     status: 'running',
+    commandState: 'running-command',
     connected: true,
     recoveryState: 'live',
     startedAt: '2026-03-09T16:00:00.000Z',
@@ -31,6 +37,14 @@ function createSessionSnapshot(
     disconnectReason: null,
     cols: 100,
     rows: 30,
+    liveCwd: 'C:/dev/terminal-sheet',
+    projectRoot: 'C:/dev/terminal-sheet',
+    integration: {
+      owner: null,
+      status: 'not-required',
+      message: 'Integration is not required for shell sessions.',
+      updatedAt: null,
+    },
     ...overrides,
   };
 }
@@ -97,5 +111,67 @@ describe('terminal presentation helpers', () => {
         new Date('2026-03-09T17:00:00.000Z'),
       ),
     ).toBe('30m ago');
+  });
+
+  it('formats integration labels and runtime paths from session context', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const session = createSessionSnapshot({
+      integration: {
+        owner: 'claude',
+        status: 'configured',
+        message: 'Claude Notification hook already configured.',
+        updatedAt: '2026-03-09T16:03:00.000Z',
+      },
+      liveCwd: 'C:/dev/terminal-sheet/packages/app',
+      projectRoot: 'C:/dev/terminal-sheet',
+    });
+
+    expect(getTerminalIntegrationBadgeLabel(terminal, session)).toBe(
+      'claude configured',
+    );
+    expect(getTerminalIntegrationDisplayStatus(terminal, session)).toBe(
+      'configured',
+    );
+    expect(getTerminalIntegrationMessage(terminal, session)).toContain(
+      'already configured',
+    );
+    expect(getTerminalRuntimePath(terminal, session, 'cwd')).toBe(
+      'C:/dev/terminal-sheet/packages/app',
+    );
+    expect(getTerminalRuntimePath(terminal, session, 'root')).toBe(
+      'C:/dev/terminal-sheet',
+    );
+  });
+
+  it('falls back to generic integration copy when no session exists', () => {
+    const terminal = createPlaceholderTerminal(0);
+
+    expect(getTerminalIntegrationBadgeLabel(terminal, null)).toBe(
+      'shell pending',
+    );
+    expect(getTerminalIntegrationDisplayStatus(terminal, null)).toBe(
+      'pending',
+    );
+    expect(getTerminalIntegrationMessage(terminal, null)).toContain(
+      'Waiting for PTY session snapshot',
+    );
+    expect(getTerminalRuntimePath(terminal, null, 'cwd')).toBe('.');
+    expect(getTerminalRuntimePath(terminal, null, 'root')).toBe(
+      'Waiting for project root detection.',
+    );
+  });
+
+  it('uses pending integration copy for codex terminals before attach', () => {
+    const terminal = {
+      ...createPlaceholderTerminal(0),
+      agentType: 'codex' as const,
+    };
+
+    expect(getTerminalIntegrationBadgeLabel(terminal, null)).toBe(
+      'codex pending',
+    );
+    expect(getTerminalIntegrationDisplayStatus(terminal, null)).toBe(
+      'pending',
+    );
   });
 });

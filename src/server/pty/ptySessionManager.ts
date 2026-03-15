@@ -3,13 +3,32 @@ import { resolve } from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 import { spawn, type IDisposable, type IPty } from 'node-pty';
 
+import { LOCAL_BACKEND_ID } from '../../shared/backends';
+import type { AttentionEvent } from '../../shared/events';
 import {
+  type TerminalIntegrationState,
   type TerminalServerSocketMessage,
   type TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
-import type { TerminalNode, Workspace } from '../../shared/workspace';
+import type { AgentType, TerminalNode, Workspace } from '../../shared/workspace';
+import { createAgentIntegrationRegistry } from '../integrations/agentIntegrationRegistry';
+import type {
+  AgentIntegrationProvider,
+  AgentIntegrationRegistry,
+} from '../integrations/agentIntegration';
+import type { AttentionService } from '../integrations/attentionService';
+import type { MarkdownService } from '../markdown/markdownService';
 import { parseCommand } from './commandLine';
 import {
+  augmentShellEnvironmentForTracking,
+  augmentPowerShellArgsForCwdTracking,
+  parseCwdTrackingOutput,
+  supportsPowerShellCwdTracking,
+} from './cwdTracking';
+import {
+  applyAttentionEventSnapshot,
+  createCommandStateSnapshot,
+  createContextSnapshot,
   createExitSnapshot,
   createInitialSnapshot,
   createInputSnapshot,
@@ -25,6 +44,18 @@ interface SessionRecord {
   pty: IPty | null;
   disposables: IDisposable[];
   snapshot: TerminalSessionSnapshot;
+  runtime: SessionRuntimeState;
+}
+
+interface SessionRuntimeState {
+  liveCwd: string;
+  projectRoot: string | null;
+  pendingOutput: string;
+  contextVersion: number;
+  lastPreparedProjectRoot: string | null;
+  currentIntegrationProjectRoot: string | null;
+  queuedIntegrationProjectRoot: string | null;
+  integrationTask: Promise<void> | null;
 }
 
 type SessionListener = (message: TerminalServerSocketMessage) => void;
@@ -34,14 +65,46 @@ export class PtySessionManager {
 
   private readonly listeners = new Set<SessionListener>();
 
-  constructor(private readonly logger: FastifyBaseLogger) {}
+  private readonly integrationRegistry: AgentIntegrationRegistry;
+
+  constructor(
+    private readonly logger: FastifyBaseLogger,
+    private readonly options: {
+      attentionService: AttentionService;
+      attentionReceiverUrl: string;
+      attentionToken: string;
+      markdownService: MarkdownService;
+      workspaceRoot?: string;
+      backendId?: string;
+      integrationRegistry?: AgentIntegrationRegistry;
+    },
+  ) {
+    this.integrationRegistry =
+      options.integrationRegistry ??
+      createAgentIntegrationRegistry({
+        attentionReceiverUrl: options.attentionReceiverUrl,
+      });
+  }
 
   async syncWithWorkspace(workspace: Workspace): Promise<void> {
     const activeIds = new Set(
-      workspace.terminals.map((terminal) => terminal.id),
+      workspace.terminals
+        .filter(
+          (terminal) =>
+            (terminal.backendId || LOCAL_BACKEND_ID) ===
+            (this.options.backendId ?? LOCAL_BACKEND_ID),
+        )
+        .map((terminal) => terminal.id),
     );
 
     for (const terminal of workspace.terminals) {
+      if (
+        (terminal.backendId || LOCAL_BACKEND_ID) !==
+        (this.options.backendId ?? LOCAL_BACKEND_ID)
+      ) {
+        continue;
+      }
+
       const existing = this.sessions.get(terminal.id);
 
       if (existing) {
@@ -49,7 +112,7 @@ export class PtySessionManager {
         continue;
       }
 
-      this.createSession(terminal);
+      await this.createSession(terminal);
     }
 
     for (const [sessionId] of this.sessions) {
@@ -58,6 +121,7 @@ export class PtySessionManager {
         this.broadcast({
           type: 'session.removed',
           sessionId,
+          backendId: this.options.backendId ?? LOCAL_BACKEND_ID,
         });
       }
     }
@@ -65,6 +129,10 @@ export class PtySessionManager {
 
   getSnapshots(): TerminalSessionSnapshot[] {
     return [...this.sessions.values()].map((record) => record.snapshot);
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
   }
 
   subscribe(listener: SessionListener): () => void {
@@ -82,10 +150,22 @@ export class PtySessionManager {
       return false;
     }
 
+    const timestamp = new Date().toISOString();
     record.pty.write(data);
+    if (/[\r\n]/.test(data)) {
+      this.options.markdownService.activateQueuedLink(sessionId);
+      this.setSnapshot(
+        record,
+        createCommandStateSnapshot(
+          createInputSnapshot(record.snapshot, timestamp),
+          'running-command',
+        ),
+      );
+      return true;
+    }
     this.setSnapshot(
       record,
-      createInputSnapshot(record.snapshot, new Date().toISOString()),
+      createInputSnapshot(record.snapshot, timestamp),
     );
 
     return true;
@@ -117,8 +197,9 @@ export class PtySessionManager {
       return false;
     }
 
+    this.options.markdownService.clearTerminalLink(sessionId);
     this.disposePty(record);
-    this.spawnTerminal(record);
+    void this.spawnTerminal(record);
     return true;
   }
 
@@ -142,39 +223,95 @@ export class PtySessionManager {
     this.listeners.clear();
   }
 
-  private createSession(terminal: TerminalNode): void {
+  private async createSession(terminal: TerminalNode): Promise<void> {
+    const liveCwd = resolve(
+      this.options.workspaceRoot ?? process.cwd(),
+      terminal.cwd,
+    );
     const record: SessionRecord = {
       terminal,
       pty: null,
       disposables: [],
-      snapshot: createInitialSnapshot(terminal.id),
+      snapshot: createInitialSnapshot(
+        terminal.id,
+        this.options.backendId ?? LOCAL_BACKEND_ID,
+        terminal.agentType,
+        liveCwd,
+      ),
+      runtime: {
+        liveCwd,
+        projectRoot: null,
+        pendingOutput: '',
+        contextVersion: 0,
+        lastPreparedProjectRoot: null,
+        currentIntegrationProjectRoot: null,
+        queuedIntegrationProjectRoot: null,
+        integrationTask: null,
+      },
     };
 
     this.sessions.set(terminal.id, record);
-    this.spawnTerminal(record);
+    await this.spawnTerminal(record);
   }
 
-  private spawnTerminal(record: SessionRecord): void {
+  private async spawnTerminal(record: SessionRecord): Promise<void> {
     const command = parseCommand(record.terminal.shell);
-    const cwd = resolve(process.cwd(), record.terminal.cwd);
+    const cwd = resolve(
+      this.options.workspaceRoot ?? process.cwd(),
+      record.terminal.cwd,
+    );
     const startedAt = new Date().toISOString();
+    const args = supportsPowerShellCwdTracking(command.file)
+      ? augmentPowerShellArgsForCwdTracking(command.args)
+      : command.args;
+    record.runtime.liveCwd = cwd;
+    record.runtime.pendingOutput = '';
+    record.runtime.contextVersion += 1;
 
     try {
-      const pty = spawn(command.file, command.args, {
+      const pty = spawn(command.file, args, {
         name: 'xterm-256color',
         cwd,
         cols: record.snapshot.cols,
         rows: record.snapshot.rows,
-        env: process.env,
+        env: {
+          ...augmentShellEnvironmentForTracking(command.file, process.env),
+          TERMINAL_CANVAS_SESSION_ID: record.terminal.id,
+          TERMINAL_CANVAS_ATTENTION_URL: this.options.attentionReceiverUrl,
+          TERMINAL_CANVAS_ATTENTION_TOKEN: this.options.attentionToken,
+          TERMINAL_CANVAS_AGENT_TYPE: record.terminal.agentType,
+        },
       });
 
       record.pty = pty;
       record.disposables = [
         pty.onData((data) => {
-          this.handleOutput(record, data);
+          try {
+            this.handleOutput(record, data);
+          } catch (error) {
+            this.logger.error(
+              {
+                sessionId: record.terminal.id,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              'PTY output handler failed',
+            );
+          }
         }),
         pty.onExit(({ exitCode, signal }) => {
-          this.handleExit(record, exitCode, signal);
+          try {
+            this.handleExit(record, exitCode, signal);
+          } catch (error) {
+            this.logger.error(
+              {
+                sessionId: record.terminal.id,
+                exitCode,
+                signal,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              'PTY exit handler failed',
+            );
+          }
         }),
       ];
 
@@ -195,7 +332,14 @@ export class PtySessionManager {
           terminal: record.terminal,
           pid: pty.pid,
           startedAt,
+          summary: `${record.terminal.shell} started in ${record.terminal.cwd}`,
         }),
+      );
+      void this.refreshSessionContext(
+        record,
+        cwd,
+        record.runtime.contextVersion,
+        true,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -220,23 +364,52 @@ export class PtySessionManager {
   }
 
   private handleOutput(record: SessionRecord, chunk: string): void {
+    const cwdResult = parseCwdTrackingOutput(chunk, record.runtime.pendingOutput);
+    record.runtime.pendingOutput = cwdResult.pending;
+
+    if (cwdResult.liveCwd) {
+      this.updateLiveCwd(record, cwdResult.liveCwd);
+    }
+
+    if (cwdResult.promptReturned) {
+      this.options.markdownService.clearTerminalLink(record.terminal.id);
+      this.setSnapshot(
+        record,
+        createCommandStateSnapshot(record.snapshot, 'idle-at-prompt'),
+      );
+    }
+
+    if (!cwdResult.output.length) {
+      return;
+    }
+
     const timestamp = new Date().toISOString();
+    let nextSnapshot = createOutputSnapshot({
+      snapshot: record.snapshot,
+      terminal: record.terminal,
+      chunk: cwdResult.output,
+      timestamp,
+    });
+    const attentionEvent = this.options.attentionService.detectFromPtyOutput({
+      sessionId: record.terminal.id,
+      terminal: record.terminal,
+      snapshot: nextSnapshot,
+      chunk: cwdResult.output,
+      timestamp,
+    });
+
+    if (attentionEvent) {
+      nextSnapshot = applyAttentionEventSnapshot(nextSnapshot, attentionEvent);
+    }
 
     this.broadcast({
       type: 'session.output',
       sessionId: record.terminal.id,
-      data: chunk,
+      backendId: this.options.backendId ?? LOCAL_BACKEND_ID,
+      data: cwdResult.output,
     });
 
-    this.setSnapshot(
-      record,
-      createOutputSnapshot({
-        snapshot: record.snapshot,
-        terminal: record.terminal,
-        chunk,
-        timestamp,
-      }),
-    );
+    this.setSnapshot(record, nextSnapshot);
   }
 
   private handleExit(
@@ -245,6 +418,7 @@ export class PtySessionManager {
     signal?: number,
   ): void {
     this.disposePty(record, false);
+    this.options.markdownService.clearTerminalLink(record.terminal.id);
 
     this.setSnapshot(
       record,
@@ -297,16 +471,331 @@ export class PtySessionManager {
     }
 
     this.disposePty(record);
+    this.options.markdownService.clearTerminalLink(sessionId);
     this.sessions.delete(sessionId);
   }
 
   private broadcast(message: TerminalServerSocketMessage): void {
     for (const listener of this.listeners) {
-      listener(message);
+      try {
+        listener(message);
+      } catch (error) {
+        this.logger.warn(
+          {
+            messageType: message.type,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'PTY listener callback failed',
+        );
+      }
+    }
+  }
+
+  applyAttentionEvent(event: AttentionEvent): boolean {
+    const record = this.sessions.get(event.sessionId);
+
+    if (!record) {
+      return false;
+    }
+
+    this.setSnapshot(record, applyAttentionEventSnapshot(record.snapshot, event));
+    return true;
+  }
+
+  private updateLiveCwd(record: SessionRecord, liveCwd: string): void {
+    if (record.runtime.liveCwd === liveCwd) {
+      return;
+    }
+
+    record.runtime.liveCwd = liveCwd;
+    record.runtime.contextVersion += 1;
+    this.setSnapshot(
+      record,
+      createContextSnapshot(record.snapshot, {
+        liveCwd,
+      }),
+    );
+    void this.refreshSessionContext(
+      record,
+      liveCwd,
+      record.runtime.contextVersion,
+      false,
+    );
+  }
+
+  private async refreshSessionContext(
+    record: SessionRecord,
+    liveCwd: string,
+    contextVersion: number,
+    forceSnapshot: boolean,
+  ): Promise<void> {
+    const provider = this.integrationRegistry.get(record.terminal.agentType);
+
+    if (!provider) {
+      if (contextVersion !== record.runtime.contextVersion) {
+        return;
+      }
+
+      record.runtime.projectRoot = null;
+      this.applyContext(
+        record,
+        {
+          liveCwd,
+          projectRoot: null,
+          integration: createIntegrationState(
+            record.terminal.agentType,
+            'not-required',
+            record.terminal.agentType === 'shell'
+              ? 'Integration is not required for shell sessions.'
+              : `No integration provider is registered for ${record.terminal.agentType}.`,
+          ),
+        },
+        forceSnapshot,
+      );
+      return;
+    }
+
+    const projectRoot = await provider.resolveProjectRoot(liveCwd);
+
+    if (
+      contextVersion !== record.runtime.contextVersion ||
+      record.runtime.liveCwd !== liveCwd
+    ) {
+      return;
+    }
+
+    record.runtime.projectRoot = projectRoot;
+
+    if (!projectRoot) {
+      this.applyContext(
+        record,
+        {
+          liveCwd,
+          projectRoot: null,
+          integration: createIntegrationState(
+            record.terminal.agentType,
+            'not-configured',
+            'Waiting for a project root to be detected.',
+          ),
+        },
+        forceSnapshot || record.snapshot.projectRoot !== null,
+      );
+      return;
+    }
+
+    const shouldPrepare = projectRoot !== record.runtime.lastPreparedProjectRoot;
+    const integration = shouldPrepare
+      ? createIntegrationState(
+          record.terminal.agentType,
+          'not-configured',
+          `Project root detected at ${projectRoot}.`,
+        )
+      : record.snapshot.integration;
+
+    this.applyContext(
+      record,
+      {
+        liveCwd,
+        projectRoot,
+        integration,
+      },
+      forceSnapshot ||
+        record.snapshot.projectRoot !== projectRoot ||
+        integration !== record.snapshot.integration,
+    );
+
+    if (shouldPrepare) {
+      this.scheduleIntegration(record, provider, projectRoot);
+    }
+  }
+
+  private applyContext(
+    record: SessionRecord,
+    context: {
+      liveCwd: string;
+      projectRoot: string | null;
+      integration: TerminalIntegrationState;
+    },
+    force: boolean,
+  ): void {
+    if (
+      !force &&
+      record.snapshot.liveCwd === context.liveCwd &&
+      record.snapshot.projectRoot === context.projectRoot &&
+      areIntegrationStatesEqual(record.snapshot.integration, context.integration)
+    ) {
+      return;
+    }
+
+    this.setSnapshot(
+      record,
+      createContextSnapshot(record.snapshot, context),
+    );
+  }
+
+  private scheduleIntegration(
+    record: SessionRecord,
+    provider: AgentIntegrationProvider,
+    projectRoot: string,
+  ): void {
+    if (record.runtime.currentIntegrationProjectRoot === projectRoot) {
+      return;
+    }
+
+    if (record.runtime.integrationTask) {
+      record.runtime.queuedIntegrationProjectRoot = projectRoot;
+      return;
+    }
+
+    record.runtime.currentIntegrationProjectRoot = projectRoot;
+    record.runtime.queuedIntegrationProjectRoot = null;
+    const startedAt = new Date().toISOString();
+
+    this.applyContext(
+      record,
+      {
+        liveCwd: record.runtime.liveCwd,
+        projectRoot,
+        integration: createIntegrationState(
+          record.terminal.agentType,
+          'configuring',
+          `Preparing ${capitalize(record.terminal.agentType)} integration in ${projectRoot}.`,
+          startedAt,
+        ),
+      },
+      true,
+    );
+
+    const task = this.runIntegration(record, provider, projectRoot);
+    record.runtime.integrationTask = task;
+    void task.finally(() => {
+      record.runtime.integrationTask = null;
+      record.runtime.currentIntegrationProjectRoot = null;
+      const queuedProjectRoot = record.runtime.queuedIntegrationProjectRoot;
+      record.runtime.queuedIntegrationProjectRoot = null;
+
+      if (
+        queuedProjectRoot &&
+        queuedProjectRoot !== record.runtime.lastPreparedProjectRoot
+      ) {
+        this.scheduleIntegration(record, provider, queuedProjectRoot);
+      }
+    });
+  }
+
+  private async runIntegration(
+    record: SessionRecord,
+    provider: AgentIntegrationProvider,
+    projectRoot: string,
+  ): Promise<void> {
+    try {
+      const result = await provider.prepareForProject({
+        terminal: record.terminal,
+        projectRoot,
+      });
+      record.runtime.lastPreparedProjectRoot = projectRoot;
+
+      this.logger.info(
+        {
+          sessionId: record.terminal.id,
+          agentType: record.terminal.agentType,
+          projectRoot,
+          status: result.status,
+        },
+        'Prepared terminal integration for project root',
+      );
+
+      if (record.runtime.projectRoot !== projectRoot) {
+        return;
+      }
+
+      this.applyContext(
+        record,
+        {
+          liveCwd: record.runtime.liveCwd,
+          projectRoot,
+          integration: createIntegrationState(
+            record.terminal.agentType,
+            result.status,
+            result.message,
+            new Date().toISOString(),
+          ),
+        },
+        true,
+      );
+    } catch (error) {
+      record.runtime.lastPreparedProjectRoot = projectRoot;
+      const message =
+        error instanceof Error
+          ? `Integration setup failed: ${error.message}`
+          : 'Integration setup failed.';
+
+      this.logger.error(
+        {
+          sessionId: record.terminal.id,
+          agentType: record.terminal.agentType,
+          projectRoot,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Terminal integration preparation failed',
+      );
+
+      if (record.runtime.projectRoot !== projectRoot) {
+        return;
+      }
+
+      this.applyContext(
+        record,
+        {
+          liveCwd: record.runtime.liveCwd,
+          projectRoot,
+          integration: createIntegrationState(
+            record.terminal.agentType,
+            'error',
+            message,
+            new Date().toISOString(),
+          ),
+        },
+        true,
+      );
     }
   }
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function createIntegrationState(
+  agentType: AgentType,
+  status: TerminalIntegrationState['status'],
+  message: string,
+  updatedAt: string | null = null,
+): TerminalIntegrationState {
+  return {
+    owner: agentType === 'shell' ? null : agentType,
+    status,
+    message,
+    updatedAt,
+  };
+}
+
+function areIntegrationStatesEqual(
+  left: TerminalIntegrationState,
+  right: TerminalIntegrationState,
+): boolean {
+  return (
+    left.owner === right.owner &&
+    left.status === right.status &&
+    left.message === right.message &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
+function capitalize(value: string): string {
+  if (!value.length) {
+    return value;
+  }
+
+  return `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
 }

@@ -5,10 +5,14 @@ import {
   terminalClientSocketMessageSchema,
   type TerminalClientSocketMessage,
 } from '../../shared/terminalSessions';
-import type { PtySessionManager } from '../pty/ptySessionManager';
+import type { MarkdownService } from '../markdown/markdownService';
+import type { WorkspaceService } from '../persistence/workspaceService';
+import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
 
 interface WorkspaceSocketOptions {
-  ptySessionManager: PtySessionManager;
+  runtimeManager: BackendRuntimeManager;
+  markdownService: MarkdownService;
+  workspaceService: WorkspaceService;
 }
 
 export async function registerWorkspaceSocket(
@@ -21,12 +25,54 @@ export async function registerWorkspaceSocket(
       timestamp: new Date().toISOString(),
     });
     sendJson(socket, {
+      type: 'workspace.updated',
+      workspace: options.workspaceService.getWorkspace(),
+    });
+    sendJson(socket, {
       type: 'session.init',
-      sessions: options.ptySessionManager.getSnapshots(),
+      sessions: options.runtimeManager.getSnapshots(),
+    });
+    sendJson(socket, {
+      type: 'attention.init',
+      events: options.runtimeManager.getAttentionEvents(),
+    });
+    sendJson(socket, {
+      type: 'markdown.init',
+      documents: options.markdownService.getDocuments(),
+    });
+    sendJson(socket, {
+      type: 'markdown.link.init',
+      links: options.markdownService.getLinks(),
     });
 
-    const unsubscribe = options.ptySessionManager.subscribe((message) => {
+    const unsubscribe = options.runtimeManager.subscribeSession((message) => {
       sendJson(socket, message);
+    });
+    const unsubscribeAttention = options.runtimeManager.subscribeAttention((event) => {
+      sendJson(socket, {
+        type: 'attention.event',
+        event,
+      });
+    });
+    const unsubscribeDocuments = options.markdownService.subscribeDocuments(
+      (document) => {
+        sendJson(socket, {
+          type: 'markdown.document',
+          document,
+        });
+      },
+    );
+    const unsubscribeLinks = options.markdownService.subscribeLinks((links) => {
+      sendJson(socket, {
+        type: 'markdown.link',
+        links,
+      });
+    });
+    const unsubscribeWorkspace = options.workspaceService.subscribe((workspace) => {
+      sendJson(socket, {
+        type: 'workspace.updated',
+        workspace,
+      });
     });
 
     socket.on('message', (payload: Buffer) => {
@@ -36,11 +82,15 @@ export async function registerWorkspaceSocket(
         return;
       }
 
-      handleClientMessage(options.ptySessionManager, parsed);
+      handleClientMessage(options.runtimeManager, parsed);
     });
 
     socket.on('close', () => {
       unsubscribe();
+      unsubscribeAttention();
+      unsubscribeDocuments();
+      unsubscribeLinks();
+      unsubscribeWorkspace();
     });
   });
 }
@@ -50,25 +100,25 @@ function parseClientMessage(payload: string): TerminalClientSocketMessage | null
 }
 
 function handleClientMessage(
-  ptySessionManager: PtySessionManager,
+  runtimeManager: BackendRuntimeManager,
   message: TerminalClientSocketMessage,
 ): void {
   switch (message.type) {
     case 'terminal.input':
-      ptySessionManager.sendInput(message.sessionId, message.data);
+      runtimeManager.sendInput(message.sessionId, message.data);
       return;
     case 'terminal.resize':
-      ptySessionManager.resizeSession(
+      runtimeManager.resizeSession(
         message.sessionId,
         message.cols,
         message.rows,
       );
       return;
     case 'terminal.restart':
-      ptySessionManager.restartSession(message.sessionId);
+      runtimeManager.restartSession(message.sessionId);
       return;
     case 'terminal.mark-read':
-      ptySessionManager.markRead(message.sessionId);
+      runtimeManager.markRead(message.sessionId);
       return;
   }
 }
@@ -84,5 +134,9 @@ function sendJson(
     return;
   }
 
-  socket.send(serializeJsonMessage(payload));
+  try {
+    socket.send(serializeJsonMessage(payload));
+  } catch {
+    // Ignore send races against socket shutdown; reconnect logic handles recovery.
+  }
 }

@@ -6,6 +6,7 @@ import {
   createDefaultWorkspace,
   createPlaceholderMarkdown,
   createPlaceholderTerminal,
+  createWorkspaceMarkdownNode,
   getReadOnlyPreviewTerminalIds,
   getSemanticZoomMode,
   updateTerminalNode,
@@ -18,8 +19,8 @@ describe('workspace schema', () => {
 
     expect(() => workspaceSchema.parse(workspace)).not.toThrow();
     expect(workspace.name).toBe('Terminal Canvas');
-    expect(workspace.version).toBe(1);
-    expect(workspace.cameraPresets).toHaveLength(4);
+    expect(workspace.version).toBe(2);
+    expect(workspace.cameraPresets).toHaveLength(3);
     expect(workspace.currentViewport.zoom).toBeGreaterThan(0);
   });
 
@@ -114,5 +115,42 @@ describe('workspace schema', () => {
 
     expect(previewIds).toHaveLength(MAX_LIVE_TERMINAL_SURFACES - 1);
     expect(previewIds).not.toContain(focusedTerminal?.id);
+  });
+
+  it('positions new markdown beside the node nearest the current viewport center', () => {
+    const anchorTerminal = createPlaceholderTerminal(0, {
+      x: -240,
+      y: -120,
+      zoom: 1.2,
+    });
+    const workspace = {
+      ...createDefaultWorkspace(),
+      currentViewport: {
+        x: -140,
+        y: -40,
+        zoom: 1.2,
+      },
+      terminals: [
+        {
+          ...anchorTerminal,
+          bounds: {
+            x: 80,
+            y: 120,
+            width: 400,
+            height: 280,
+          },
+        },
+      ],
+    };
+
+    const markdown = createWorkspaceMarkdownNode(workspace, {
+      label: 'Discovery',
+      filePath: './DISCOVERY.md',
+    });
+
+    expect(markdown.bounds.x).toBeGreaterThanOrEqual(
+      workspace.terminals[0]!.bounds.x + workspace.terminals[0]!.bounds.width,
+    );
+    expect(markdown.bounds.y).toBe(workspace.terminals[0]!.bounds.y);
   });
 });

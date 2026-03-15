@@ -1,8 +1,9 @@
 import { getDefaultShell } from '../../shared/platform';
 import {
-  createPlaceholderMarkdown,
+  createWorkspaceMarkdownNode,
   createTerminalNode,
   type CreateTerminalNodeInput,
+  type CreateMarkdownNodeInput,
   type CameraViewport,
   type TerminalNode,
   type TerminalNodePatch,
@@ -40,14 +41,21 @@ export function addTerminalToWorkspace(
   };
 }
 
-export function addMarkdownToWorkspace(workspace: Workspace): Workspace {
+export function addMarkdownToWorkspace(
+  workspace: Workspace,
+  input?: Partial<CreateMarkdownNodeInput>,
+): Workspace {
   return {
     ...workspace,
     markdown: [
       ...workspace.markdown,
-      createPlaceholderMarkdown(
-        workspace.markdown.length,
-        workspace.currentViewport,
+      createWorkspaceMarkdownNode(
+        workspace,
+        {
+          label: input?.label?.trim() || `Notes ${workspace.markdown.length + 1}`,
+          filePath: input?.filePath?.trim() || `./notes-${workspace.markdown.length + 1}.md`,
+          readOnly: input?.readOnly ?? false,
+        },
       ),
     ],
   };
@@ -68,12 +76,31 @@ export function removeTerminalFromWorkspace(
   return {
     ...workspace,
     terminals: nextTerminals,
-    markdown: workspace.markdown.map((node) => ({
-      ...node,
-      linkedTerminalIds: node.linkedTerminalIds.filter(
-        (linkedTerminalId) => linkedTerminalId !== terminalId,
-      ),
-    })),
+  };
+}
+
+export function removeMarkdownFromWorkspace(
+  workspace: Workspace,
+  markdownId: string,
+): Workspace {
+  const nextMarkdown = workspace.markdown.filter(
+    (markdown) => markdown.id !== markdownId,
+  );
+
+  if (nextMarkdown.length === workspace.markdown.length) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    markdown: nextMarkdown,
+    filters: {
+      ...workspace.filters,
+      activeMarkdownId:
+        workspace.filters.activeMarkdownId === markdownId
+          ? null
+          : workspace.filters.activeMarkdownId,
+    },
   };
 }
 

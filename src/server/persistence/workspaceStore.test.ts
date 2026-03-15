@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -24,7 +24,8 @@ describe('workspace store', () => {
     const workspace = await loadOrCreateWorkspace(workspaceFile);
 
     expect(workspace.name).toBe('Terminal Canvas');
-    expect(workspace.cameraPresets).toHaveLength(4);
+    expect(workspace.version).toBe(2);
+    expect(workspace.cameraPresets).toHaveLength(3);
     expect(workspace.currentViewport.zoom).toBeGreaterThan(0);
   });
 
@@ -45,5 +46,38 @@ describe('workspace store', () => {
     expect(reloaded.terminals).toHaveLength(1);
     expect(reloaded.markdown).toHaveLength(1);
     expect(reloaded.terminals[0]?.label).toBe('Shell 1');
+    expect(Date.parse(reloaded.updatedAt)).toBeGreaterThanOrEqual(
+      Date.parse(workspace.updatedAt),
+    );
+  });
+
+  it('replaces older workspace versions with a fresh default workspace', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-'));
+    const workspaceFile = join(tempDirectory, 'workspace.json');
+
+    await writeFile(
+      workspaceFile,
+      JSON.stringify({
+        version: 1,
+        id: 'workspace-default',
+        name: 'Old Workspace',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        currentViewport: { x: 0, y: 0, zoom: 1 },
+        terminals: [],
+        markdown: [],
+        cameraPresets: [],
+        filters: {
+          attentionOnly: false,
+          activeMarkdownId: null,
+        },
+      }),
+      'utf8',
+    );
+
+    const workspace = await loadOrCreateWorkspace(workspaceFile);
+
+    expect(workspace.version).toBe(2);
+    expect(workspace.name).toBe('Terminal Canvas');
   });
 });

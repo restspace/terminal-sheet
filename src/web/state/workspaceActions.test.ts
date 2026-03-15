@@ -5,6 +5,7 @@ import {
   addMarkdownToWorkspace,
   addTerminalToWorkspace,
   applyWorkspaceCameraPreset,
+  removeMarkdownFromWorkspace,
   removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
   setWorkspaceViewport,
@@ -28,7 +29,7 @@ describe('workspace actions', () => {
     expect(workspace.markdown[0]?.label).toBe('Notes 1');
   });
 
-  it('removes terminal nodes and unlinks markdown references', () => {
+  it('removes terminal nodes without mutating markdown nodes', () => {
     const workspace = createDefaultWorkspace();
     const firstTerminal = addTerminalToWorkspace(workspace, {
       label: 'Build worker',
@@ -51,10 +52,6 @@ describe('workspace actions', () => {
               width: 320,
               height: 240,
             },
-            linkedTerminalIds: [
-              firstTerminal.terminal.id,
-              secondTerminal.terminal.id,
-            ],
           },
         ],
       },
@@ -63,16 +60,31 @@ describe('workspace actions', () => {
 
     expect(nextWorkspace.terminals).toHaveLength(1);
     expect(nextWorkspace.terminals[0]?.id).toBe(secondTerminal.terminal.id);
-    expect(nextWorkspace.markdown[0]?.linkedTerminalIds).toEqual([
-      secondTerminal.terminal.id,
-    ]);
+    expect(nextWorkspace.markdown).toHaveLength(1);
+  });
+
+  it('removes markdown nodes', () => {
+    const workspace = addMarkdownToWorkspace(createDefaultWorkspace());
+    const markdownId = workspace.markdown[0]?.id;
+
+    expect(markdownId).toBeTruthy();
+
+    const nextWorkspace = removeMarkdownFromWorkspace(
+      workspace,
+      markdownId as string,
+    );
+
+    expect(nextWorkspace.markdown).toHaveLength(0);
   });
 
   it('applies and saves camera presets', () => {
     const workspace = createDefaultWorkspace();
-    const presetApplied = applyWorkspaceCameraPreset(workspace, 'active-pair');
+    const presetApplied = applyWorkspaceCameraPreset(
+      workspace,
+      'writing-surface',
+    );
 
-    expect(presetApplied.currentViewport.zoom).toBe(1.04);
+    expect(presetApplied.currentViewport.zoom).toBe(1.15);
 
     const updatedViewport = setWorkspaceViewport(presetApplied, {
       x: 200,
@@ -81,12 +93,13 @@ describe('workspace actions', () => {
     });
     const savedPreset = saveWorkspaceViewportToPreset(
       updatedViewport,
-      'active-pair',
+      'writing-surface',
     );
 
     expect(
-      savedPreset.cameraPresets.find((preset) => preset.id === 'active-pair')
-        ?.viewport,
+      savedPreset.cameraPresets.find(
+        (preset) => preset.id === 'writing-surface',
+      )?.viewport,
     ).toEqual({
       x: 200,
       y: -20,

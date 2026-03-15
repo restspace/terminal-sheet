@@ -4,8 +4,20 @@ import type { CameraViewport, TerminalNode, Workspace } from '../../shared/works
 
 const MIN_FOCUS_TERMINAL_WIDTH = 560;
 const MIN_FOCUS_TERMINAL_HEIGHT = 385;
+const MIN_FOCUS_MARKDOWN_WIDTH = 640;
+const MIN_FOCUS_MARKDOWN_HEIGHT = 420;
 const FOCUS_CAMERA_TRANSITION_MS = 240;
 const FOCUS_INPUT_SETTLE_MS = 90;
+
+interface FocusableCanvasNode {
+  id: string;
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
 
 export function focusTerminalWithTransition(options: {
   terminal: TerminalNode;
@@ -27,7 +39,11 @@ export function focusTerminalWithTransition(options: {
     onViewportChange,
     animationFrameRef,
   } = options;
-  const focusTarget = ensureFocusTargetSize(terminal, updateWorkspace);
+  const focusTarget = ensureFocusTargetSize({
+    node: terminal,
+    updateWorkspace,
+    kind: 'terminal',
+  });
   const targetViewport = createFocusViewport(focusTarget, startViewport);
   const transitionDuration = shouldAnimateViewport(
     startViewport,
@@ -49,6 +65,43 @@ export function focusTerminalWithTransition(options: {
   });
 }
 
+export function focusMarkdownWithTransition(options: {
+  markdown: FocusableCanvasNode;
+  startViewport: CameraViewport;
+  updateWorkspace: (
+    updater: (workspace: Workspace) => Workspace,
+  ) => Workspace | null;
+  onSelectMarkdown: (markdownId: string) => void;
+  onViewportChange: (viewport: CameraViewport) => void;
+  animationFrameRef: RefObject<number | null>;
+}): void {
+  const {
+    markdown,
+    startViewport,
+    updateWorkspace,
+    onSelectMarkdown,
+    onViewportChange,
+    animationFrameRef,
+  } = options;
+  const focusTarget = ensureFocusTargetSize({
+    node: markdown,
+    updateWorkspace,
+    kind: 'markdown',
+  });
+  const targetViewport = createFocusViewport(focusTarget, startViewport);
+
+  onSelectMarkdown(markdown.id);
+  animateViewportTransition({
+    from: startViewport,
+    to: targetViewport,
+    durationMs: shouldAnimateViewport(startViewport, targetViewport)
+      ? FOCUS_CAMERA_TRANSITION_MS
+      : 0,
+    onFrame: onViewportChange,
+    animationFrameRef,
+  });
+}
+
 export function cancelViewportAnimation(
   animationFrameRef: RefObject<number | null>,
 ): void {
@@ -60,61 +113,84 @@ export function cancelViewportAnimation(
   animationFrameRef.current = null;
 }
 
-function ensureFocusTargetSize(
-  terminal: TerminalNode,
+function ensureFocusTargetSize(options: {
+  node: FocusableCanvasNode;
+  kind: 'terminal' | 'markdown';
   updateWorkspace: (
     updater: (workspace: Workspace) => Workspace,
   ) => Workspace | null,
-): TerminalNode {
+}): FocusableCanvasNode {
+  const { node, kind, updateWorkspace } = options;
+  const minWidth =
+    kind === 'terminal' ? MIN_FOCUS_TERMINAL_WIDTH : MIN_FOCUS_MARKDOWN_WIDTH;
+  const minHeight =
+    kind === 'terminal' ? MIN_FOCUS_TERMINAL_HEIGHT : MIN_FOCUS_MARKDOWN_HEIGHT;
+
   if (
-    terminal.bounds.width >= MIN_FOCUS_TERMINAL_WIDTH &&
-    terminal.bounds.height >= MIN_FOCUS_TERMINAL_HEIGHT
+    node.bounds.width >= minWidth &&
+    node.bounds.height >= minHeight
   ) {
-    return terminal;
+    return node;
   }
 
   const resizedWorkspace = updateWorkspace((current) => ({
     ...current,
-    terminals: current.terminals.map((candidate) =>
-      candidate.id === terminal.id
-        ? {
-            ...candidate,
-            bounds: {
-              ...candidate.bounds,
-              width: Math.max(candidate.bounds.width, MIN_FOCUS_TERMINAL_WIDTH),
-              height: Math.max(
-                candidate.bounds.height,
-                MIN_FOCUS_TERMINAL_HEIGHT,
-              ),
-            },
-          }
-        : candidate,
-    ),
+    terminals:
+      kind === 'terminal'
+        ? current.terminals.map((candidate) =>
+            candidate.id === node.id
+              ? {
+                  ...candidate,
+                  bounds: {
+                    ...candidate.bounds,
+                    width: Math.max(candidate.bounds.width, minWidth),
+                    height: Math.max(candidate.bounds.height, minHeight),
+                  },
+                }
+              : candidate,
+          )
+        : current.terminals,
+    markdown:
+      kind === 'markdown'
+        ? current.markdown.map((candidate) =>
+            candidate.id === node.id
+              ? {
+                  ...candidate,
+                  bounds: {
+                    ...candidate.bounds,
+                    width: Math.max(candidate.bounds.width, minWidth),
+                    height: Math.max(candidate.bounds.height, minHeight),
+                  },
+                }
+              : candidate,
+          )
+        : current.markdown,
   }));
 
   return (
-    resizedWorkspace?.terminals.find(
-      (candidate) => candidate.id === terminal.id,
-    ) ?? {
-      ...terminal,
+    (kind === 'terminal'
+      ? resizedWorkspace?.terminals.find((candidate) => candidate.id === node.id)
+      : resizedWorkspace?.markdown.find((candidate) => candidate.id === node.id)) ??
+    {
+      ...node,
       bounds: {
-        ...terminal.bounds,
-        width: Math.max(terminal.bounds.width, MIN_FOCUS_TERMINAL_WIDTH),
-        height: Math.max(terminal.bounds.height, MIN_FOCUS_TERMINAL_HEIGHT),
+        ...node.bounds,
+        width: Math.max(node.bounds.width, minWidth),
+        height: Math.max(node.bounds.height, minHeight),
       },
     }
   );
 }
 
 function createFocusViewport(
-  terminal: TerminalNode,
+  node: FocusableCanvasNode,
   currentViewport: CameraViewport,
 ): CameraViewport {
   const zoom = clamp(currentViewport.zoom, 1.12, 1.32);
   const estimatedCanvasWidth = 1080;
   const estimatedCanvasHeight = 720;
-  const centerX = terminal.bounds.x + terminal.bounds.width / 2;
-  const centerY = terminal.bounds.y + terminal.bounds.height / 2;
+  const centerX = node.bounds.x + node.bounds.width / 2;
+  const centerY = node.bounds.y + node.bounds.height / 2;
 
   return {
     x: estimatedCanvasWidth / 2 - centerX * zoom,

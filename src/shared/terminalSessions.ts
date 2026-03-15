@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
-import { terminalStatusSchema } from './workspace';
+import { LOCAL_BACKEND_ID } from './backends';
+import { attentionEventSchema } from './events';
+import {
+  markdownDocumentInitMessageSchema,
+  markdownDocumentMessageSchema,
+  markdownLinkInitMessageSchema,
+  markdownLinkMessageSchema,
+} from './markdown';
+import { workspaceSchema } from './workspace';
+import { agentTypeSchema, terminalStatusSchema } from './workspace';
 
 export const terminalRecoveryStateSchema = z.enum([
   'live',
@@ -8,10 +17,33 @@ export const terminalRecoveryStateSchema = z.enum([
   'spawn-failed',
 ]);
 
+export const terminalCommandStateSchema = z.enum([
+  'idle-at-prompt',
+  'running-command',
+]);
+
+export const terminalIntegrationStatusSchema = z.enum([
+  'not-required',
+  'not-configured',
+  'configuring',
+  'configured',
+  'conflict',
+  'error',
+]);
+
+export const terminalIntegrationStateSchema = z.object({
+  owner: agentTypeSchema.nullable(),
+  status: terminalIntegrationStatusSchema,
+  message: z.string().nullable(),
+  updatedAt: z.iso.datetime().nullable(),
+});
+
 export const terminalSessionSnapshotSchema = z.object({
   sessionId: z.string(),
+  backendId: z.string().default(LOCAL_BACKEND_ID),
   pid: z.number().int().nullable(),
   status: terminalStatusSchema,
+  commandState: terminalCommandStateSchema,
   connected: z.boolean(),
   recoveryState: terminalRecoveryStateSchema,
   startedAt: z.iso.datetime().nullable(),
@@ -26,11 +58,19 @@ export const terminalSessionSnapshotSchema = z.object({
   disconnectReason: z.string().nullable(),
   cols: z.number().int().positive(),
   rows: z.number().int().positive(),
+  liveCwd: z.string().nullable(),
+  projectRoot: z.string().nullable(),
+  integration: terminalIntegrationStateSchema,
 });
 
 export const terminalSocketReadyMessageSchema = z.object({
   type: z.literal('ready'),
   timestamp: z.iso.datetime(),
+});
+
+export const workspaceUpdatedMessageSchema = z.object({
+  type: z.literal('workspace.updated'),
+  workspace: workspaceSchema,
 });
 
 export const terminalSessionInitMessageSchema = z.object({
@@ -46,20 +86,39 @@ export const terminalSessionSnapshotMessageSchema = z.object({
 export const terminalSessionOutputMessageSchema = z.object({
   type: z.literal('session.output'),
   sessionId: z.string(),
+  backendId: z.string().default(LOCAL_BACKEND_ID),
   data: z.string(),
 });
 
 export const terminalSessionRemovedMessageSchema = z.object({
   type: z.literal('session.removed'),
   sessionId: z.string(),
+  backendId: z.string().default(LOCAL_BACKEND_ID),
+});
+
+export const attentionInitMessageSchema = z.object({
+  type: z.literal('attention.init'),
+  events: z.array(attentionEventSchema),
+});
+
+export const attentionEventMessageSchema = z.object({
+  type: z.literal('attention.event'),
+  event: attentionEventSchema,
 });
 
 export const terminalServerSocketMessageSchema = z.discriminatedUnion('type', [
   terminalSocketReadyMessageSchema,
+  workspaceUpdatedMessageSchema,
   terminalSessionInitMessageSchema,
   terminalSessionSnapshotMessageSchema,
   terminalSessionOutputMessageSchema,
   terminalSessionRemovedMessageSchema,
+  attentionInitMessageSchema,
+  attentionEventMessageSchema,
+  markdownDocumentInitMessageSchema,
+  markdownDocumentMessageSchema,
+  markdownLinkInitMessageSchema,
+  markdownLinkMessageSchema,
 ]);
 
 export const terminalInputMessageSchema = z.object({
@@ -93,6 +152,13 @@ export const terminalClientSocketMessageSchema = z.discriminatedUnion('type', [
 ]);
 
 export type TerminalRecoveryState = z.infer<typeof terminalRecoveryStateSchema>;
+export type TerminalCommandState = z.infer<typeof terminalCommandStateSchema>;
+export type TerminalIntegrationStatus = z.infer<
+  typeof terminalIntegrationStatusSchema
+>;
+export type TerminalIntegrationState = z.infer<
+  typeof terminalIntegrationStateSchema
+>;
 export type TerminalSessionSnapshot = z.infer<
   typeof terminalSessionSnapshotSchema
 >;

@@ -2,7 +2,14 @@ import { useEffect, useEffectEvent, useRef, type CSSProperties } from 'react';
 
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { CameraViewport, TerminalNode } from '../../shared/workspace';
-import { getTerminalDisplayStatus } from './presentation';
+import {
+  formatTerminalEventTime,
+  getTerminalDisplayStatus,
+  getTerminalIntegrationBadgeLabel,
+  getTerminalIntegrationDisplayStatus,
+  getTerminalIntegrationMessage,
+  getTerminalRuntimePath,
+} from './presentation';
 import { TerminalFocusSurface } from './TerminalFocusSurface';
 import { TerminalTitleBar } from './TerminalTitleBar';
 
@@ -39,6 +46,17 @@ export function FocusedTerminalOverlay({
 }: FocusedTerminalOverlayProps) {
   const overlayStyle = createOverlayStyle(terminal, viewport);
   const status = getTerminalDisplayStatus(terminal, session);
+  const integrationBadgeLabel = getTerminalIntegrationBadgeLabel(
+    terminal,
+    session,
+  );
+  const integrationMessage = getTerminalIntegrationMessage(terminal, session);
+  const integrationStatus = getTerminalIntegrationDisplayStatus(
+    terminal,
+    session,
+  );
+  const liveCwd = getTerminalRuntimePath(terminal, session, 'cwd');
+  const projectRoot = getTerminalRuntimePath(terminal, session, 'root');
   const dragStateRef = useRef<{
     originX: number;
     originY: number;
@@ -139,19 +157,39 @@ export function FocusedTerminalOverlay({
         />
       </div>
 
+      <div className="focus-terminal-overlay-meta">
+        <div className="focus-terminal-overlay-meta-topline">
+          <span
+            className={`terminal-pill terminal-pill-integration is-${integrationStatus}`}
+          >
+            {integrationBadgeLabel}
+          </span>
+          {session?.integration.updatedAt ? (
+            <span>{formatTerminalEventTime(session.integration.updatedAt)}</span>
+          ) : null}
+        </div>
+        <strong title={integrationMessage}>{integrationMessage}</strong>
+        <div className="focus-terminal-overlay-paths">
+          <span title={liveCwd}>cwd {liveCwd}</span>
+          <span title={projectRoot}>root {projectRoot}</span>
+        </div>
+      </div>
+
       {session ? (
         <TerminalFocusSurface
           autoFocusAtMs={autoFocusAtMs}
           sessionId={terminal.id}
           scrollback={session.scrollback}
+          visualScale={viewport.zoom}
           onInput={onInput}
           onResize={onResize}
         />
       ) : (
         <div className="focus-terminal-overlay-empty">
-          <strong>Waiting for PTY session snapshot.</strong>
+          <strong>Launching terminal session.</strong>
           <span>
-            The live terminal will attach here as soon as session data arrives.
+            The live terminal will attach here as soon as the backend publishes
+            the first session snapshot.
           </span>
         </div>
       )}

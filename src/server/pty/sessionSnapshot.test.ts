@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { TerminalNode } from '../../shared/workspace';
 import {
+  applyAttentionEventSnapshot,
+  createInputSnapshot,
   createExitSnapshot,
   createInitialSnapshot,
   createOutputSnapshot,
@@ -12,6 +14,7 @@ import {
 
 const terminal: TerminalNode = {
   id: 'terminal-1',
+  backendId: 'local',
   label: 'Shell 1',
   repoLabel: 'local workspace',
   taskLabel: 'live terminal session',
@@ -31,7 +34,7 @@ const terminal: TerminalNode = {
 describe('session snapshot helpers', () => {
   it('creates a running snapshot with cleared output state', () => {
     const snapshot = createRunningSnapshot({
-      snapshot: createInitialSnapshot(terminal.id),
+      snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),
       terminal,
       pid: 42,
       startedAt: '2026-03-09T20:00:00.000Z',
@@ -40,12 +43,13 @@ describe('session snapshot helpers', () => {
     expect(snapshot.connected).toBe(true);
     expect(snapshot.pid).toBe(42);
     expect(snapshot.summary).toContain('started');
+    expect(snapshot.commandState).toBe('running-command');
   });
 
   it('tracks output preview and unread counts', () => {
     const snapshot = createOutputSnapshot({
       snapshot: createRunningSnapshot({
-        snapshot: createInitialSnapshot(terminal.id),
+        snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),
         terminal,
         pid: 42,
         startedAt: '2026-03-09T20:00:00.000Z',
@@ -57,12 +61,13 @@ describe('session snapshot helpers', () => {
 
     expect(snapshot.previewLines.at(-1)).toBe('hello world');
     expect(snapshot.unreadCount).toBe(1);
+    expect(snapshot.commandState).toBe('running-command');
   });
 
   it('clears unread counts and updates size/exit state', () => {
     const withOutput = createOutputSnapshot({
       snapshot: createRunningSnapshot({
-        snapshot: createInitialSnapshot(terminal.id),
+        snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),
         terminal,
         pid: 42,
         startedAt: '2026-03-09T20:00:00.000Z',
@@ -84,5 +89,43 @@ describe('session snapshot helpers', () => {
     expect(resized.cols).toBe(120);
     expect(resized.rows).toBe(40);
     expect(exited.status).toBe('failed');
+    expect(exited.commandState).toBe('idle-at-prompt');
+  });
+
+  it('preserves attention status through output and clears it on input', () => {
+    const attentionSnapshot = applyAttentionEventSnapshot(
+      createRunningSnapshot({
+        snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),
+        terminal,
+        pid: 42,
+        startedAt: '2026-03-09T20:00:00.000Z',
+      }),
+      {
+        id: 'attention-1',
+        backendId: 'local',
+        sessionId: terminal.id,
+        source: 'claude',
+        eventType: 'approval-needed',
+        status: 'approval-needed',
+        timestamp: '2026-03-09T20:00:01.000Z',
+        title: 'Claude needs approval',
+        detail: 'Review file edits',
+        confidence: 'high',
+      },
+    );
+    const afterOutput = createOutputSnapshot({
+      snapshot: attentionSnapshot,
+      terminal,
+      chunk: 'still waiting...\r\n',
+      timestamp: '2026-03-09T20:00:02.000Z',
+    });
+    const afterInput = createInputSnapshot(
+      afterOutput,
+      '2026-03-09T20:00:03.000Z',
+    );
+
+    expect(afterOutput.status).toBe('approval-needed');
+    expect(afterInput.status).toBe('running');
+    expect(afterInput.commandState).toBe('running-command');
   });
 });

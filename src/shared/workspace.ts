@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 import { updateById } from './collections';
+import {
+  backendConnectionSchema,
+  LOCAL_BACKEND_ID,
+} from './backends';
 import { getDefaultShell } from './platform';
 
 export const terminalStatusSchema = z.enum([
@@ -37,6 +41,7 @@ export const cameraPresetSchema = z.object({
 
 export const terminalNodeSchema = z.object({
   id: z.string(),
+  backendId: z.string().default(LOCAL_BACKEND_ID),
   label: z.string(),
   repoLabel: z.string().optional(),
   taskLabel: z.string().optional(),
@@ -54,7 +59,6 @@ export const markdownNodeSchema = z.object({
   filePath: z.string(),
   readOnly: z.boolean(),
   bounds: nodeBoundsSchema,
-  linkedTerminalIds: z.array(z.string()),
 });
 
 export const workspaceFiltersSchema = z.object({
@@ -63,7 +67,7 @@ export const workspaceFiltersSchema = z.object({
 });
 
 export const workspaceSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   id: z.string(),
   name: z.string(),
   createdAt: z.iso.datetime(),
@@ -71,6 +75,7 @@ export const workspaceSchema = z.object({
   currentViewport: cameraViewportSchema,
   terminals: z.array(terminalNodeSchema),
   markdown: z.array(markdownNodeSchema),
+  backends: z.array(backendConnectionSchema).default([]),
   cameraPresets: z.array(cameraPresetSchema),
   filters: workspaceFiltersSchema,
 });
@@ -83,6 +88,7 @@ export type CameraViewport = z.infer<typeof cameraViewportSchema>;
 export type CameraPreset = z.infer<typeof cameraPresetSchema>;
 export type TerminalNode = z.infer<typeof terminalNodeSchema>;
 export type MarkdownNode = z.infer<typeof markdownNodeSchema>;
+export type WorkspaceBackend = z.infer<typeof backendConnectionSchema>;
 export type WorkspaceFilters = z.infer<typeof workspaceFiltersSchema>;
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type SemanticZoomMode = z.infer<typeof semanticZoomModeSchema>;
@@ -108,9 +114,20 @@ export interface CreateTerminalNodeInput {
   shell: string;
   cwd: string;
   agentType: AgentType;
+  backendId?: string;
   repoLabel?: string;
   taskLabel?: string;
   tags?: string[];
+}
+
+export interface CreateMarkdownNodeInput {
+  label: string;
+  filePath: string;
+  readOnly?: boolean;
+}
+
+interface PositionedNodeBounds {
+  bounds: z.infer<typeof nodeBoundsSchema>;
 }
 
 const overviewThreshold = 0.68;
@@ -191,7 +208,7 @@ export function createDefaultWorkspace(): Workspace {
   const timestamp = new Date().toISOString();
 
   return {
-    version: 1,
+    version: 2,
     id: 'workspace-default',
     name: 'Terminal Canvas',
     createdAt: timestamp,
@@ -199,6 +216,7 @@ export function createDefaultWorkspace(): Workspace {
     currentViewport: { x: 0, y: 0, zoom: 0.72 },
     terminals: [],
     markdown: [],
+    backends: [],
     cameraPresets: createDefaultCameraPresets(),
     filters: {
       attentionOnly: false,
@@ -214,6 +232,7 @@ export function createPlaceholderTerminal(
   return createTerminalNode(
     {
       label: `Shell ${index + 1}`,
+      backendId: LOCAL_BACKEND_ID,
       repoLabel: 'local workspace',
       taskLabel: 'placeholder session',
       shell: getDefaultShell(),
@@ -238,6 +257,7 @@ export function createTerminalNode(
 
   return {
     id,
+    backendId: input.backendId ?? LOCAL_BACKEND_ID,
     label: input.label,
     repoLabel: input.repoLabel,
     taskLabel: input.taskLabel,
@@ -259,6 +279,22 @@ export function createPlaceholderMarkdown(
   index: number,
   viewport?: CameraViewport,
 ): MarkdownNode {
+  return createMarkdownNode(
+    {
+      label: `Notes ${index + 1}`,
+      filePath: `./notes-${index + 1}.md`,
+      readOnly: false,
+    },
+    index,
+    viewport,
+  );
+}
+
+export function createMarkdownNode(
+  input: CreateMarkdownNodeInput,
+  index: number,
+  viewport?: CameraViewport,
+): MarkdownNode {
   const id = createId('markdown');
   const column = index % 2;
   const row = Math.floor(index / 2);
@@ -266,16 +302,31 @@ export function createPlaceholderMarkdown(
 
   return {
     id,
-    label: `Notes ${index + 1}`,
-    filePath: `./notes-${index + 1}.md`,
-    readOnly: false,
+    label: input.label,
+    filePath: input.filePath,
+    readOnly: input.readOnly ?? false,
     bounds: {
       x: visibleOrigin.x + 120 + column * 360,
       y: visibleOrigin.y + 60 + row * 300,
       width: 320,
       height: 250,
     },
-    linkedTerminalIds: [],
+  };
+}
+
+export function createWorkspaceMarkdownNode(
+  workspace: Workspace,
+  input: CreateMarkdownNodeInput,
+): MarkdownNode {
+  const id = createId('markdown');
+  const bounds = getNextMarkdownBounds(workspace);
+
+  return {
+    id,
+    label: input.label,
+    filePath: input.filePath,
+    readOnly: input.readOnly ?? false,
+    bounds,
   };
 }
 
@@ -316,11 +367,6 @@ export function createDefaultCameraPresets(): CameraPreset[] {
       id: 'needs-attention',
       name: 'Needs attention',
       viewport: { x: 60, y: -10, zoom: 0.9 },
-    },
-    {
-      id: 'active-pair',
-      name: 'Active pair',
-      viewport: { x: 180, y: 0, zoom: 1.04 },
     },
     {
       id: 'writing-surface',
@@ -417,4 +463,130 @@ function getVisibleOrigin(viewport?: CameraViewport): { x: number; y: number } {
     x: Math.round(-viewport.x / viewport.zoom + 80),
     y: Math.round(-viewport.y / viewport.zoom + 80),
   };
+}
+
+function getNextMarkdownBounds(
+  workspace: Workspace,
+): z.infer<typeof nodeBoundsSchema> {
+  const defaultBounds = createMarkdownNode(
+    {
+      label: 'Notes',
+      filePath: './notes.md',
+      readOnly: false,
+    },
+    workspace.markdown.length,
+    workspace.currentViewport,
+  ).bounds;
+  const anchor = getViewportAnchorNode(workspace);
+
+  if (!anchor) {
+    return defaultBounds;
+  }
+
+  const preferredPositions = [
+    {
+      x: anchor.bounds.x + anchor.bounds.width + 40,
+      y: anchor.bounds.y,
+    },
+    {
+      x: anchor.bounds.x - defaultBounds.width - 40,
+      y: anchor.bounds.y,
+    },
+    {
+      x: anchor.bounds.x,
+      y: anchor.bounds.y + anchor.bounds.height + 40,
+    },
+    {
+      x: anchor.bounds.x,
+      y: anchor.bounds.y - defaultBounds.height - 40,
+    },
+  ];
+
+  for (const position of preferredPositions) {
+    const candidate = {
+      ...defaultBounds,
+      x: position.x,
+      y: position.y,
+    };
+
+    if (!hasNodeOverlap(candidate, workspace)) {
+      return candidate;
+    }
+  }
+
+  let candidate = {
+    ...defaultBounds,
+    x: anchor.bounds.x + anchor.bounds.width + 40,
+    y: anchor.bounds.y,
+  };
+
+  while (hasNodeOverlap(candidate, workspace)) {
+    candidate = {
+      ...candidate,
+      y: candidate.y + candidate.height + 32,
+    };
+  }
+
+  return candidate;
+}
+
+function getViewportAnchorNode(workspace: Workspace): PositionedNodeBounds | null {
+  const candidates: PositionedNodeBounds[] = [
+    ...workspace.terminals,
+    ...workspace.markdown,
+  ];
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const viewportCenter = getViewportCenter(workspace.currentViewport);
+
+  return [...candidates].sort((left, right) => {
+    const leftDistance = distanceBetweenCenters(
+      getNodeCenter(left.bounds),
+      viewportCenter,
+    );
+    const rightDistance = distanceBetweenCenters(
+      getNodeCenter(right.bounds),
+      viewportCenter,
+    );
+
+    return leftDistance - rightDistance;
+  })[0] ?? null;
+}
+
+function getViewportCenter(viewport: CameraViewport): { x: number; y: number } {
+  const estimatedCanvasWidth = 1080;
+  const estimatedCanvasHeight = 720;
+
+  return {
+    x: (estimatedCanvasWidth / 2 - viewport.x) / viewport.zoom,
+    y: (estimatedCanvasHeight / 2 - viewport.y) / viewport.zoom,
+  };
+}
+
+function hasNodeOverlap(
+  bounds: z.infer<typeof nodeBoundsSchema>,
+  workspace: Workspace,
+): boolean {
+  const allBounds = [
+    ...workspace.terminals.map((terminal) => terminal.bounds),
+    ...workspace.markdown.map((markdown) => markdown.bounds),
+  ];
+
+  return allBounds.some((candidate) => rectanglesOverlap(bounds, candidate, 24));
+}
+
+function rectanglesOverlap(
+  left: z.infer<typeof nodeBoundsSchema>,
+  right: z.infer<typeof nodeBoundsSchema>,
+  gap: number,
+): boolean {
+  return !(
+    left.x + left.width + gap <= right.x ||
+    right.x + right.width + gap <= left.x ||
+    left.y + left.height + gap <= right.y ||
+    right.y + right.height + gap <= left.y
+  );
 }

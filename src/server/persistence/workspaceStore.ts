@@ -3,9 +3,11 @@ import { dirname, resolve } from 'node:path';
 
 import {
   createDefaultWorkspace,
+  touchWorkspace,
   type Workspace,
   workspaceSchema,
 } from '../../shared/workspace';
+import { ZodError } from 'zod';
 
 export function resolveWorkspaceFilePath(inputPath?: string): string {
   if (inputPath) {
@@ -23,17 +25,15 @@ export async function loadOrCreateWorkspace(
   try {
     const raw = await readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-
     return workspaceSchema.parse(parsed);
   } catch (error) {
-    if (isMissingFileError(error)) {
-      const workspace = createDefaultWorkspace();
-
-      await saveWorkspace(filePath, workspace);
-      return workspace;
+    if (!isMissingFileError(error) && !isRecoverableWorkspaceError(error)) {
+      throw error;
     }
 
-    throw error;
+    const workspace = createDefaultWorkspace();
+    await saveWorkspace(filePath, workspace);
+    return workspace;
   }
 }
 
@@ -43,7 +43,7 @@ export async function saveWorkspace(
 ): Promise<Workspace> {
   await mkdir(dirname(filePath), { recursive: true });
 
-  const normalized = workspaceSchema.parse(workspace);
+  const normalized = touchWorkspace(workspaceSchema.parse(workspace));
 
   await writeFile(filePath, JSON.stringify(normalized, null, 2), 'utf8');
 
@@ -57,4 +57,8 @@ function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
       'code' in error &&
       (error as NodeJS.ErrnoException).code === 'ENOENT',
   );
+}
+
+function isRecoverableWorkspaceError(error: unknown): boolean {
+  return error instanceof SyntaxError || error instanceof ZodError;
 }

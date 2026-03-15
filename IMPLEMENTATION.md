@@ -241,6 +241,10 @@ Completed on 2026-03-10.
 
 ### Milestone 5: Attention event pipeline
 
+#### Status
+
+Completed on 2026-03-12.
+
 #### Goals
 
 - Convert agent events into visible, actionable attention states.
@@ -263,7 +267,69 @@ Completed on 2026-03-10.
 - Users can jump directly to the next node needing action.
 - Fallback detection works but is marked as lower confidence.
 
-### Milestone 6: Markdown nodes and linking
+### Milestone 6: Claude prelaunch hook setup
+
+#### Status
+
+Completed on 2026-03-12.
+
+#### Goals
+
+- Make Claude terminals self-configuring so attention routing works without manual hook setup.
+
+#### Tasks
+
+- Add a Claude launch preparation flow that runs before `claude` starts in a Terminal Canvas PTY.
+- Prefer project-local `.claude/settings.local.json` for automation scope so setup stays repo-specific and non-global.
+- Read and merge existing Claude settings instead of overwriting them.
+- Add or update a Terminal-Canvas-managed `Notification` hook entry only.
+- Configure the managed hook to call the local attention receiver using terminal-local environment variables for session ID and token.
+- Preserve unrelated Claude settings and unrelated hooks.
+- Detect incompatible existing `Notification` hooks and surface a clear warning instead of silently overriding them.
+- Make the managed hook idempotent so repeated launches do not duplicate entries.
+- Surface setup status in the UI, including whether the Claude settings file was created, updated, skipped, or blocked by conflict.
+- Add tests for merge behavior, idempotency, conflict detection, and launch preparation.
+
+#### Exit criteria
+
+- Launching Claude from a Terminal Canvas terminal automatically prepares hook configuration before Claude starts.
+- Multiple Claude terminals in the same repo route notifications to the correct terminal node through terminal-local environment variables.
+- Existing Claude settings survive the automation unchanged except for the managed hook entry.
+- Incompatible existing `Notification` hooks are reported clearly and not overwritten silently.
+
+### Milestone 7: Remote backend federation
+
+#### Goals
+
+- Allow one home Terminal Canvas server to supervise terminals hosted by multiple Terminal Canvas backends.
+- Keep user setup simple with a backend URL and generated token.
+- Preserve a single persisted canvas while routing live terminal actions to the backend that owns each session.
+
+#### Tasks
+
+- Add a home-server backend registry for saved remote connections and connection status.
+- Extend terminal and session models with backend ownership so the home server can merge local and remote state safely.
+- Add authenticated remote backend APIs for health checks, session snapshots, terminal creation, terminal control, and live event streaming.
+- Add outbound home-server connection management for remote REST and WebSocket connections.
+- Merge remote session updates and attention events into the existing browser-facing workspace stream.
+- Route terminal input, resize, restart, and mark-read actions to the owning backend.
+- Add a simple Connections UI and backend picker in terminal creation.
+- Add remote token generation, show, and rotate flows.
+- Document the architecture, setup flow, and defaults in `REMOTE_BACKENDS.md`.
+
+#### Exit criteria
+
+- A home server can connect to at least one remote backend and show its terminals in the main canvas.
+- Users can create and control a terminal on a selected backend from the home UI.
+- Remote backend disconnects degrade terminal state without removing layout from the workspace.
+- Remote setup requires only Terminal Canvas, a backend URL, and a generated token.
+- The detailed design and setup flow are captured in `REMOTE_BACKENDS.md`.
+
+### Milestone 8: Markdown nodes and linking
+
+#### Status
+
+Completed on 2026-03-13.
 
 #### Goals
 
@@ -272,20 +338,18 @@ Completed on 2026-03-10.
 #### Tasks
 
 - Add Markdown node creation and open-from-disk flow.
-- Implement low-zoom card, medium-zoom preview, and close-zoom editor modes.
+- Implement overview, inspect (shows preview pane), and focus editor modes similar to terminal nodes.
 - Add CodeMirror editing with syntax highlighting.
-- Add rendered preview pane with checklist, heading, link, and code fence support.
+- Add rendered preview pane for unfocussed windows with checklist, heading, link, and code fence support. Allow for toggle into preview on the focussed window.
 - Add autosave, read-only mode, and external-change detection.
-- Add links from Markdown nodes to terminal nodes with relationship labels such as `plan`, `spec`, and `notes`.
-- Add filter for terminals linked to the selected Markdown node.
+- Allow the header bar of a Markdown node to be dragged into a terminal window. This internally creates a link between the Markdown node and the terminal until the command completes (if it's possible to track this) whether in shell mode, or in Claude or Codex. Completion means return of the prompt, not requests for user interaction.
 
 #### Exit criteria
 
 - Markdown nodes can be edited inline and saved to disk.
-- A Markdown node can stay spatially paired with several terminals.
-- Linked-node filters work from the canvas UI.
+- Preview behaves as defined
 
-### Milestone 7: Organization, filtering, and event ergonomics
+### Milestone 9: Organization, filtering, and event ergonomics
 
 #### Goals
 
@@ -306,7 +370,7 @@ Completed on 2026-03-10.
 - First-launch layout supports the 4-6 terminal supervision workflow.
 - Keyboard navigation reduces pointer-only interaction.
 
-### Milestone 8: Hardening, packaging, and release prep
+### Milestone 10: Hardening, packaging, and release prep
 
 #### Goals
 
@@ -445,9 +509,11 @@ Build in this order to reduce rework:
 3. PTY manager and focused terminal interaction
 4. Overview and Inspect terminal representations
 5. Attention pipeline and event feed
-6. Markdown nodes and linking
-7. Filters, shortcuts, starter layout, and polish
-8. Packaging, docs, cross-platform validation, and release hardening
+6. Claude prelaunch hook setup
+7. Remote backend federation
+8. Markdown nodes and linking
+9. Filters, shortcuts, starter layout, and polish
+10. Packaging, docs, cross-platform validation, and release hardening
 
 ## 12. Immediate next actions
 
