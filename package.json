@@ -4,6 +4,7 @@
   "description": "Local-first browser canvas for supervising multiple AI terminal sessions.",
   "type": "module",
   "bin": {
+    "tsheet": "./dist/server/index.js",
     "terminal-canvas": "./dist/server/index.js"
   },
   "files": [
@@ -14,9 +15,9 @@
   },
   "scripts": {
     "clean": "rimraf dist",
-    "dev": "concurrently -k -n web,server -c magenta,cyan \"npm:dev:web\" \"npm:dev:server\"",
+    "dev": "tsx src/dev/devLauncher.ts",
     "dev:web": "vite --host 127.0.0.1 --port 4313 --strictPort --open",
-    "dev:server": "cross-env NODE_ENV=development TERMINAL_CANVAS_DEV_WEB_URL=http://127.0.0.1:4313 tsx watch src/cli/index.ts --no-open",
+    "dev:server": "cross-env NODE_ENV=development TERMINAL_CANVAS_DEV_WEB_URL=http://127.0.0.1:4313 tsx watch src/cli/index.ts serve --no-open",
     "build": "npm run clean && npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "tsup src/cli/index.ts --format esm --target node20 --out-dir dist/server --clean --sourcemap",
@@ -42,6 +43,8 @@
     "@codemirror/view": "^6.39.16",
     "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.2.0",
+    "@xterm/addon-canvas": "^0.7.0",
+    "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
     "@xyflow/react": "^12.10.1",
     "fastify": "^5.8.2",
@@ -49,6 +52,8 @@
     "open": "^11.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {

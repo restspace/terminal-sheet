@@ -1,5 +1,7 @@
 import { useEffect, useEffectEvent, useRef } from 'react';
 
+import { CanvasAddon } from '@xterm/addon-canvas';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 
 import {
@@ -33,6 +35,7 @@ const TERMINAL_SCROLLBACK_LINES = 20_000;
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
 const SLIDING_SCROLLBACK_PROBE_CHARS = 1_024;
+const WEBGL_PRESERVE_DRAWING_BUFFER = true;
 const TERMINAL_THEME = {
   background: '#07111a',
   foreground: '#d7e4ee',
@@ -55,6 +58,13 @@ const TERMINAL_THEME = {
   brightCyan: '#7ce7ef',
   brightWhite: '#f4fbff',
 } as const;
+
+type RendererMode = 'default' | 'canvas' | 'webgl';
+
+interface RendererController {
+  mode: RendererMode;
+  dispose: () => void;
+}
 
 export function TerminalSurface({
   sessionId,
@@ -104,6 +114,7 @@ export function TerminalSurface({
     const terminal = new Terminal(createTerminalOptions(readOnly, visualScale));
 
     terminal.open(container);
+    const rendererController = initializeTerminalRenderer(terminal);
     markTerminalDomAsCanvasSafe(terminal);
 
     if (readOnly && terminal.textarea instanceof HTMLTextAreaElement) {
@@ -232,6 +243,7 @@ export function TerminalSurface({
       }
       dataDisposable?.dispose();
       userScrollCleanup?.();
+      rendererController.dispose();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
@@ -518,6 +530,79 @@ function isReadOnlyViewportNearBottom(terminal: Terminal): boolean {
   const activeBuffer = terminal.buffer.active;
 
   return activeBuffer.baseY - activeBuffer.viewportY <= 1;
+}
+
+function initializeTerminalRenderer(terminal: Terminal): RendererController {
+  const webglRenderer = installWebglRenderer(terminal);
+
+  if (webglRenderer) {
+    return webglRenderer;
+  }
+
+  const canvasRenderer = installCanvasRenderer(terminal);
+
+  if (canvasRenderer) {
+    return canvasRenderer;
+  }
+
+  return {
+    mode: 'default',
+    dispose: () => {},
+  };
+}
+
+function installWebglRenderer(terminal: Terminal): RendererController | null {
+  try {
+    const addon = new WebglAddon(WEBGL_PRESERVE_DRAWING_BUFFER);
+    let currentFallback: RendererController | null = null;
+    let disposed = false;
+    let contextLossSubscription: { dispose(): void } | null =
+      addon.onContextLoss(() => {
+        if (disposed || currentFallback) {
+          return;
+        }
+
+        contextLossSubscription?.dispose();
+        contextLossSubscription = null;
+        currentFallback = installCanvasRenderer(terminal);
+      });
+
+    terminal.loadAddon(addon);
+    markTerminalDomAsCanvasSafe(terminal);
+
+    return {
+      mode: 'webgl',
+      dispose: () => {
+        if (disposed) {
+          return;
+        }
+
+        disposed = true;
+        contextLossSubscription?.dispose();
+        contextLossSubscription = null;
+        currentFallback?.dispose();
+        currentFallback = null;
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function installCanvasRenderer(terminal: Terminal): RendererController | null {
+  try {
+    const addon = new CanvasAddon();
+    terminal.loadAddon(addon);
+    markTerminalDomAsCanvasSafe(terminal);
+
+    return {
+      mode: 'canvas',
+      // terminal.loadAddon transfers ownership to xterm's addon manager.
+      dispose: () => {},
+    };
+  } catch {
+    return null;
+  }
 }
 
 function createTerminalOptions(
