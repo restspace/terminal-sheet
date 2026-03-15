@@ -1,16 +1,21 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { type NodeProps, useViewport } from '@xyflow/react';
 
-import { getSemanticZoomMode } from '../../shared/workspace';
 import { CanvasResizeHandles } from '../canvas/CanvasResizeHandles';
+import { shouldAutoMarkRead } from './autoMarkRead';
 import {
   formatTerminalEventTime,
   getTerminalDisplayStatus,
+  getTerminalIntegrationBadgeLabel,
+  getTerminalIntegrationDisplayStatus,
+  getTerminalIntegrationMessage,
   getTerminalLastEventAt,
   getTerminalLastMeaningfulLine,
+  getTerminalRuntimePath,
   hasAttentionState,
 } from './presentation';
+import { ReadOnlyTerminalSurface } from './TerminalFocusSurface';
 import { TerminalScrollPreview } from './TerminalScrollPreview';
 import { TerminalTitleBar } from './TerminalTitleBar';
 import type { TerminalFlowNode } from './types';
@@ -18,14 +23,13 @@ import type { TerminalFlowNode } from './types';
 export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const { data, selected } = props;
   const { zoom } = useViewport();
-  const mode = getSemanticZoomMode(zoom);
+  const mode = data.presentationMode;
   const terminal = data.terminal;
   const session = data.session;
   const { onBoundsChange, onRestart, onMarkRead, onTerminalChange, onRemove } =
     data;
-  const canAttachTerminal = mode === 'focus' && selected && data.isInteractive;
-  const canMountLivePreview =
-    data.mountLivePreview && session !== null && mode !== 'overview';
+  const canMountLivePreview = data.mountLivePreview && session !== null;
+  const canRenderFocusPreview = mode === 'focus' && session !== null;
   const previewLines = session?.previewLines ?? [];
   const status = getTerminalDisplayStatus(terminal, session);
   const unreadCount = session?.unreadCount ?? 0;
@@ -38,13 +42,43 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
     session?.summary ?? terminal.taskLabel ?? 'Waiting for session launch';
   const repoLabel = terminal.repoLabel ?? 'No repo label yet';
   const hasAttention = hasAttentionState(status);
+  const integrationBadgeLabel = getTerminalIntegrationBadgeLabel(
+    terminal,
+    session,
+  );
+  const integrationMessage = getTerminalIntegrationMessage(terminal, session);
+  const liveCwd = getTerminalRuntimePath(terminal, session, 'cwd');
+  const projectRoot = getTerminalRuntimePath(terminal, session, 'root');
+  const integrationStatus = getTerminalIntegrationDisplayStatus(
+    terminal,
+    session,
+  );
   const hideRedundantMetadata = selected && mode !== 'overview';
   const hideCardTitleBar = selected && mode === 'focus';
-  const hideReadOnlyStatusRows = canMountLivePreview && !canAttachTerminal;
-  const previewScrollResetKey = `${mode}:${selected}:${canAttachTerminal}`;
+  const hideReadOnlyStatusRows = canMountLivePreview || canRenderFocusPreview;
+  const previewScrollResetKey = `${mode}:${selected}`;
+  const lastAutoMarkedUnreadCountRef = useRef<number>(0);
+  const markdownLink = data.activeMarkdownLink;
+  const markdownLinkLabel = markdownLink
+    ? markdownLink.phase === 'active'
+      ? 'Markdown linked'
+      : 'Markdown queued'
+    : null;
 
   useEffect(() => {
-    if (selected && mode !== 'overview' && session?.unreadCount) {
+    const unreadCount = session?.unreadCount ?? 0;
+
+    if (!selected || mode === 'overview' || unreadCount <= 0) {
+      lastAutoMarkedUnreadCountRef.current = 0;
+      return;
+    }
+
+    if (lastAutoMarkedUnreadCountRef.current === unreadCount) {
+      return;
+    }
+
+    lastAutoMarkedUnreadCountRef.current = unreadCount;
+    if (shouldAutoMarkRead(selected, mode, unreadCount)) {
       onMarkRead(terminal.id);
     }
   }, [mode, onMarkRead, selected, session?.unreadCount, terminal.id]);
@@ -56,6 +90,21 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
           ? 'canvas-node terminal-node is-selected'
           : 'canvas-node terminal-node'
       }
+      onDragOver={(event) => {
+        if (readMarkdownDragNodeId(event)) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        const markdownNodeId = readMarkdownDragNodeId(event);
+
+        if (!markdownNodeId) {
+          return;
+        }
+
+        event.preventDefault();
+        data.onMarkdownDrop(markdownNodeId, terminal.id);
+      }}
     >
       <span
         className={`terminal-node-stripe is-${status}`}
@@ -98,6 +147,9 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   {unreadCount} unread
                 </span>
               ) : null}
+              {markdownLinkLabel ? (
+                <span className="terminal-pill is-linked">{markdownLinkLabel}</span>
+              ) : null}
               <span>
                 {session?.connected
                   ? 'live'
@@ -109,6 +161,26 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
               <span title={lastMeaningfulLine}>{lastMeaningfulLine}</span>
               <span>{lastEventTime}</span>
               <span>{unreadLabel}</span>
+            </div>
+
+            <div className="terminal-runtime-context">
+              <div className="terminal-runtime-topline">
+                <span
+                  className={`terminal-pill terminal-pill-integration is-${integrationStatus}`}
+                >
+                  {integrationBadgeLabel}
+                </span>
+                {session?.integration.updatedAt ? (
+                  <span>
+                    {formatTerminalEventTime(session.integration.updatedAt)}
+                  </span>
+                ) : null}
+              </div>
+              <strong title={integrationMessage}>{integrationMessage}</strong>
+              <div className="terminal-runtime-paths">
+                <span title={liveCwd}>cwd {liveCwd}</span>
+                <span title={projectRoot}>root {projectRoot}</span>
+              </div>
             </div>
           </>
         ) : null}
@@ -129,13 +201,28 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                     Action needed
                   </span>
                 ) : null}
+                {markdownLinkLabel ? (
+                  <span className="terminal-pill is-linked">{markdownLinkLabel}</span>
+                ) : null}
                 <span className="terminal-pill">{unreadLabel}</span>
               </div>
             </div>
             <span className="terminal-overview-line">{activitySummary}</span>
+            <div className="terminal-runtime-context is-compact">
+              <div className="terminal-runtime-topline">
+                <span
+                  className={`terminal-pill terminal-pill-integration is-${integrationStatus}`}
+                >
+                  {integrationBadgeLabel}
+                </span>
+              </div>
+              <strong title={integrationMessage}>{integrationMessage}</strong>
+            </div>
             <div className="terminal-overview-footer">
               <span>{repoLabel}</span>
               <span>{terminal.taskLabel ?? 'No task label yet'}</span>
+              <span title={liveCwd}>cwd {liveCwd}</span>
+              <span title={projectRoot}>root {projectRoot}</span>
               <span>{lastEventTime}</span>
             </div>
           </div>
@@ -177,9 +264,11 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                   </button>
                 </div>
               ) : null}
-              <TerminalScrollPreview
-                className="terminal-preview-surface"
+              <ReadOnlyTerminalSurface
+                className="terminal-context-surface"
+                sessionId={terminal.id}
                 scrollback={session.scrollback}
+                ptyCols={session.cols}
                 scrollResetKey={previewScrollResetKey}
               />
             </div>
@@ -199,8 +288,8 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                 </div>
               ) : (
                 <span>
-                  No terminal output yet. Zoom in further to attach the live
-                  terminal.
+                  No terminal output yet. The live preview will appear here as
+                  soon as the backend publishes session output.
                 </span>
               )}
             </div>
@@ -208,7 +297,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         ) : null}
 
         {mode === 'focus' ? (
-          canAttachTerminal ? (
+          canRenderFocusPreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
               {!hideRedundantMetadata ? (
                 <div className="terminal-focus-toolbar">
@@ -249,45 +338,6 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
                 scrollResetKey={previewScrollResetKey}
               />
             </div>
-          ) : canMountLivePreview ? (
-            <div className="canvas-node-summary terminal-live-preview-card">
-              {!hideRedundantMetadata ? (
-                <div className="terminal-focus-toolbar">
-                  <div className="terminal-focus-title">
-                    <span className="terminal-focus-label">Context shell</span>
-                    <strong title={session.summary}>{session.summary}</strong>
-                  </div>
-                  {!session.connected ? (
-                    <button
-                      className="nodrag nopan"
-                      type="button"
-                      onClick={() => {
-                        onRestart(terminal.id);
-                      }}
-                    >
-                      Restart
-                    </button>
-                  ) : null}
-                </div>
-              ) : !session.connected ? (
-                <div className="terminal-preview-actions">
-                  <button
-                    className="nodrag nopan"
-                    type="button"
-                    onClick={() => {
-                      onRestart(terminal.id);
-                    }}
-                  >
-                    Restart
-                  </button>
-                </div>
-              ) : null}
-              <TerminalScrollPreview
-                className="terminal-preview-surface"
-                scrollback={session.scrollback}
-                scrollResetKey={previewScrollResetKey}
-              />
-            </div>
           ) : (
             <div className="canvas-node-summary">
               {!hideRedundantMetadata && session ? (
@@ -300,12 +350,13 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
               ) : null}
               <strong>
                 {selected
-                  ? 'Waiting for PTY session snapshot.'
+                  ? 'Launching terminal session.'
                   : 'Select this node to focus it.'}
               </strong>
               <span>
-                Terminals outside the live preview budget fall back to summaries
-                until they are selected or moved closer to the focused context.
+                {selected
+                  ? 'The live terminal surface will attach here as soon as the backend publishes the first session snapshot.'
+                  : 'This terminal will return to inspect mode when it becomes one of the most recently interacted-with terminals.'}
               </span>
             </div>
           )
@@ -313,4 +364,10 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
       </div>
     </div>
   );
+}
+
+function readMarkdownDragNodeId(event: Pick<DragEvent, 'dataTransfer'>): string | null {
+  const payload = event.dataTransfer?.getData('application/x-terminal-canvas-markdown');
+
+  return payload?.trim() || null;
 }

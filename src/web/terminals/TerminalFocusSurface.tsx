@@ -13,6 +13,14 @@ interface TerminalSurfaceProps {
   scrollback: string;
   className?: string;
   readOnly?: boolean;
+  visualScale?: number;
+  // For read-only surfaces: the col count the PTY was sized to when it
+  // generated the scrollback content. Using the PTY's own col count ensures
+  // in-place \r rewrites land at the correct cursor column regardless of the
+  // container's CSS pixel width. If omitted, the terminal measures from the
+  // container as usual (same behaviour as the focused terminal).
+  ptyCols?: number;
+  scrollResetKey?: string | number | boolean;
   autoFocusAtMs?: number | null;
   onInput?: (sessionId: string, data: string) => void;
   onResize?: (sessionId: string, cols: number, rows: number) => void;
@@ -21,14 +29,41 @@ interface TerminalSurfaceProps {
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
 const TERMINAL_FONT_SIZE = 10.5;
 const TERMINAL_LINE_HEIGHT = 1.1;
+const TERMINAL_SCROLLBACK_LINES = 20_000;
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
+const SLIDING_SCROLLBACK_PROBE_CHARS = 1_024;
+const TERMINAL_THEME = {
+  background: '#07111a',
+  foreground: '#d7e4ee',
+  cursor: '#8ab4d8',
+  selectionBackground: 'rgba(138, 180, 216, 0.25)',
+  black: '#0b1722',
+  red: '#ff7b72',
+  green: '#5ec48b',
+  yellow: '#f2cc60',
+  blue: '#8ab4d8',
+  magenta: '#d6a5ff',
+  cyan: '#56d4dd',
+  white: '#d7e4ee',
+  brightBlack: '#395161',
+  brightRed: '#ff938f',
+  brightGreen: '#7ad7a2',
+  brightYellow: '#f6d77d',
+  brightBlue: '#9dc7f5',
+  brightMagenta: '#e2bbff',
+  brightCyan: '#7ce7ef',
+  brightWhite: '#f4fbff',
+} as const;
 
 export function TerminalSurface({
   sessionId,
   scrollback,
   className,
   readOnly = false,
+  visualScale = 1,
+  ptyCols,
+  scrollResetKey,
   autoFocusAtMs,
   onInput,
   onResize,
@@ -40,6 +75,14 @@ export function TerminalSurface({
   const focusTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
+  const shouldStickToBottomRef = useRef(true);
+  // Mutable ref so fitTerminal always sees the latest ptyCols without being
+  // recreated.  Updated synchronously on every render (not via an effect).
+  const ptyColsRef = useRef<number | undefined>(ptyCols);
+  ptyColsRef.current = ptyCols;
+  // Stable ref to scheduleFit so the ptyCols-change effect below can request
+  // a re-fit without needing access to the mount-effect's closure.
+  const scheduleFitRef = useRef<(() => void) | null>(null);
   const forwardInput = useEffectEvent((data: string) => {
     if (!readOnly) {
       onInput?.(sessionId, data);
@@ -58,23 +101,7 @@ export function TerminalSurface({
       return;
     }
 
-    const terminal = new Terminal({
-      convertEol: true,
-      cursorBlink: !readOnly,
-      disableStdin: readOnly,
-      fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: TERMINAL_FONT_SIZE,
-      lineHeight: TERMINAL_LINE_HEIGHT,
-      scrollback: 5_000,
-      theme: {
-        background: '#07111a',
-        foreground: '#d7e4ee',
-        cursor: readOnly ? 'transparent' : '#8ab4d8',
-        selectionBackground: 'rgba(138, 180, 216, 0.25)',
-        black: '#0b1722',
-        brightBlack: '#395161',
-      },
-    });
+    const terminal = new Terminal(createTerminalOptions(readOnly, visualScale));
 
     terminal.open(container);
     markTerminalDomAsCanvasSafe(terminal);
@@ -85,6 +112,7 @@ export function TerminalSurface({
     }
 
     lastRenderedScrollbackRef.current = '';
+    shouldStickToBottomRef.current = true;
     terminalRef.current = terminal;
 
     const dataDisposable = readOnly
@@ -92,6 +120,28 @@ export function TerminalSurface({
       : terminal.onData((data) => {
           forwardInput(data);
         });
+
+    // Track whether user has scrolled away from the bottom.
+    // wheel listener rather than terminal.onScroll() because onScroll fires
+    // on internal buffer growth (new lines added during writes), not just on
+    // user-initiated scrolling. Using onScroll caused shouldStickToBottomRef
+    // to be prematurely set to false during rapid output, breaking auto-scroll.
+    let userScrollCleanup: (() => void) | null = null;
+
+    if (readOnly) {
+      const handleUserScroll = () => {
+        window.requestAnimationFrame(() => {
+          if (terminalRef.current === terminal) {
+            shouldStickToBottomRef.current = isReadOnlyViewportNearBottom(terminal);
+          }
+        });
+      };
+
+      container.addEventListener('wheel', handleUserScroll, { passive: true });
+      userScrollCleanup = () => {
+        container.removeEventListener('wheel', handleUserScroll);
+      };
+    }
 
     let disposed = false;
     const fitTerminal = () => {
@@ -101,21 +151,33 @@ export function TerminalSurface({
         cellSizeRef.current,
       );
       const size = measureTerminal(container, cellSizeRef.current);
-      const sizeKey = `${size.cols}x${size.rows}`;
+      // For read-only terminals, use the PTY's authoritative col count so that
+      // \r-based in-place rewrites land at the same cursor column as they did
+      // when the PTY generated the output.  The focused terminal sends its own
+      // col count to the PTY via onResize; the PTY stores it in session.cols,
+      // which callers pass as ptyCols here.  When ptyCols is absent (focused
+      // terminal path), fall back to the measured col count as before.
+      const effectiveCols = readOnly && ptyColsRef.current
+        ? ptyColsRef.current
+        : size.cols;
+      const sizeKey = `${effectiveCols}x${size.rows}`;
 
       if (sizeKey === lastSizeRef.current) {
         return;
       }
 
       lastSizeRef.current = sizeKey;
-      terminal.resize(size.cols, size.rows);
+      terminal.resize(effectiveCols, size.rows);
 
       if (readOnly) {
-        syncReadOnlyViewport(terminal);
+        syncReadOnlyViewport(
+          terminal,
+          terminalRef.current === terminal && shouldStickToBottomRef.current,
+        );
       }
 
       if (!readOnly) {
-        syncBackendSize(size.cols, size.rows);
+        syncBackendSize(effectiveCols, size.rows);
       }
     };
     const scheduleFit = () => {
@@ -128,6 +190,8 @@ export function TerminalSurface({
         fitTerminal();
       });
     };
+
+    scheduleFitRef.current = scheduleFit;
 
     const resizeObserver = new ResizeObserver(() => {
       scheduleFit();
@@ -157,6 +221,7 @@ export function TerminalSurface({
 
     return () => {
       disposed = true;
+      scheduleFitRef.current = null;
       resizeObserver.disconnect();
       if (typeof fontSet?.removeEventListener === 'function') {
         fontSet.removeEventListener('loadingdone', handleFontMetricsChange);
@@ -166,12 +231,24 @@ export function TerminalSurface({
         resizeFrameRef.current = null;
       }
       dataDisposable?.dispose();
+      userScrollCleanup?.();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
       lastSizeRef.current = '';
     };
-  }, [readOnly, sessionId]);
+  }, [readOnly, sessionId, visualScale]);
+
+  // When the PTY's col count changes (e.g. the focused overlay was resized),
+  // invalidate the cached size so the next fit uses the new ptyCols value.
+  useEffect(() => {
+    if (!readOnly || !ptyCols) {
+      return;
+    }
+
+    lastSizeRef.current = '';
+    scheduleFitRef.current?.();
+  }, [readOnly, ptyCols]);
 
   useEffect(() => {
     if (readOnly) {
@@ -204,42 +281,63 @@ export function TerminalSurface({
 
   useEffect(() => {
     const terminal = terminalRef.current;
+    const previousScrollback = lastRenderedScrollbackRef.current;
 
-    if (!terminal || scrollback === lastRenderedScrollbackRef.current) {
+    if (!terminal || scrollback === previousScrollback) {
       return;
     }
 
-    if (scrollback.startsWith(lastRenderedScrollbackRef.current)) {
-      terminal.write(scrollback.slice(lastRenderedScrollbackRef.current.length), () => {
-        if (readOnly) {
-          syncReadOnlyViewport(terminal);
-        }
-      });
+    const incrementalWrite = getIncrementalWrite(previousScrollback, scrollback);
+
+    if (incrementalWrite !== null) {
+      // No scrollToBottom() call here. xterm's buffer service auto-scrolls
+      // when the viewport was already at the bottom (ydisp === ybase), so
+      // both new-line output and in-place \r updates render correctly without
+      // any manual intervention. Calling scrollToBottom() from a write
+      // callback fires xterm's internal scroll event mid-render, disrupting
+      // dirty-row tracking and causing visual corruption.
+      terminal.write(incrementalWrite);
     } else {
-      terminal.reset();
-      terminal.write(scrollback, () => {
-        if (readOnly) {
-          syncReadOnlyViewport(terminal);
-        }
-      });
+      // Write the VT full-reset sequence (RIS) in-band rather than calling
+      // terminal.reset() synchronously. terminal.reset() clears terminal state
+      // immediately but does NOT flush xterm's internal write queue, so any
+      // writes queued before the reset still execute afterwards, re-introducing
+      // stale content. Serialising the reset through the write queue ensures
+      // the slate is wiped only after all previously queued data has processed.
+      terminal.write('\x1bc' + scrollback);
     }
 
     lastRenderedScrollbackRef.current = scrollback;
   }, [readOnly, scrollback]);
+
+  useEffect(() => {
+    if (!readOnly) {
+      return;
+    }
+
+    shouldStickToBottomRef.current = true;
+    syncReadOnlyViewport(terminalRef.current, true);
+  }, [readOnly, scrollResetKey]);
 
   return (
     <div
       ref={containerRef}
       className={buildSurfaceClassName(className, readOnly)}
       aria-hidden={readOnly}
-      onClick={readOnly ? undefined : focusTerminalSurface}
+      onClick={focusTerminalSurface}
       onWheel={stopCanvasInteractionPropagation}
     />
   );
 
   function focusTerminalSurface(event: React.MouseEvent<HTMLDivElement>): void {
     focusTerminalInput(terminalRef.current);
-    event.stopPropagation();
+    // For the focused overlay (not read-only) stop propagation so the click
+    // doesn't reach the canvas panning/selection layer beneath the overlay.
+    // For the read-only card on the canvas we let the click bubble so the
+    // canvas node still gets selected normally.
+    if (!readOnly) {
+      event.stopPropagation();
+    }
   }
 }
 
@@ -247,10 +345,21 @@ export function TerminalFocusSurface(props: {
   autoFocusAtMs?: number | null;
   sessionId: string;
   scrollback: string;
+  visualScale?: number;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
 }) {
   return <TerminalSurface {...props} className="terminal-focus-surface" />;
+}
+
+export function ReadOnlyTerminalSurface(props: {
+  sessionId: string;
+  scrollback: string;
+  className?: string;
+  ptyCols?: number;
+  scrollResetKey?: string | number | boolean;
+}) {
+  return <TerminalSurface {...props} readOnly />;
 }
 
 function measureTerminal(
@@ -386,7 +495,100 @@ function stopCanvasInteractionPropagation(
   event.stopPropagation();
 }
 
-function syncReadOnlyViewport(terminal: Terminal): void {
-  terminal.scrollToBottom();
-  terminal.refresh(0, Math.max(terminal.rows - 1, 0));
+function syncReadOnlyViewport(
+  terminal: Terminal | null,
+  isActive = true,
+): void {
+  if (!terminal || !isActive) {
+    return;
+  }
+
+  try {
+    terminal.scrollToBottom();
+    // Do not call terminal.refresh() here. xterm schedules its own render
+    // after scrollToBottom(); explicitly calling refresh() inside a write
+    // callback forces renders at intermediate buffer states during rapid
+    // output, causing visual corruption (missing chars, duplicated rows).
+  } catch {
+    // Ignore viewport-sync races during terminal disposal/remount.
+  }
+}
+
+function isReadOnlyViewportNearBottom(terminal: Terminal): boolean {
+  const activeBuffer = terminal.buffer.active;
+
+  return activeBuffer.baseY - activeBuffer.viewportY <= 1;
+}
+
+function createTerminalOptions(
+  readOnly: boolean,
+  visualScale: number,
+): NonNullable<ConstructorParameters<typeof Terminal>[0]> {
+  const fontScale = clamp(visualScale, 0.5, 2);
+
+  return {
+    allowTransparency: true,
+    convertEol: true,
+    cursorBlink: !readOnly,
+    disableStdin: readOnly,
+    fontFamily: TERMINAL_FONT_FAMILY,
+    fontSize: TERMINAL_FONT_SIZE * fontScale,
+    lineHeight: TERMINAL_LINE_HEIGHT,
+    scrollback: TERMINAL_SCROLLBACK_LINES,
+    theme: {
+      ...TERMINAL_THEME,
+      cursor: readOnly ? 'transparent' : TERMINAL_THEME.cursor,
+    },
+  };
+}
+
+export function getIncrementalWrite(
+  previousScrollback: string,
+  nextScrollback: string,
+): string | null {
+  if (nextScrollback.startsWith(previousScrollback)) {
+    return nextScrollback.slice(previousScrollback.length);
+  }
+
+  const overlap = getSlidingScrollbackOverlap(previousScrollback, nextScrollback);
+
+  if (overlap === 0) {
+    return null;
+  }
+
+  return nextScrollback.slice(overlap);
+}
+
+function getSlidingScrollbackOverlap(
+  previousScrollback: string,
+  nextScrollback: string,
+): number {
+  const maxOverlap = Math.min(previousScrollback.length, nextScrollback.length);
+
+  if (maxOverlap === 0) {
+    return 0;
+  }
+
+  const probeLength = Math.min(SLIDING_SCROLLBACK_PROBE_CHARS, maxOverlap);
+  const probe = nextScrollback.slice(0, probeLength);
+  let candidateStart = previousScrollback.lastIndexOf(probe);
+
+  while (candidateStart !== -1) {
+    const overlap = previousScrollback.length - candidateStart;
+
+    if (
+      overlap <= nextScrollback.length &&
+      nextScrollback.startsWith(previousScrollback.slice(candidateStart))
+    ) {
+      return overlap;
+    }
+
+    if (candidateStart === 0) {
+      break;
+    }
+
+    candidateStart = previousScrollback.lastIndexOf(probe, candidateStart - 1);
+  }
+
+  return 0;
 }
