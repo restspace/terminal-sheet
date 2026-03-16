@@ -37,6 +37,12 @@ export function getSelectedNodeIdFromChanges(
 interface BuildCanvasNodesOptions {
   workspace: Workspace;
   selectedNodeId: string | null;
+  renderedBoundsByNodeId: ReadonlyMap<
+    string,
+    Workspace['terminals'][number]['bounds']
+  >;
+  nodesDraggable: boolean;
+  nodesResizable: boolean;
   livePreviewTerminalIds: ReadonlySet<string>;
   focusTerminalId: string | null;
   terminalPresentationById: ReadonlyMap<string, TerminalPresentationMode>;
@@ -73,6 +79,9 @@ interface BuildCanvasNodesOptions {
 export function buildCanvasNodes({
   workspace,
   selectedNodeId,
+  renderedBoundsByNodeId,
+  nodesDraggable,
+  nodesResizable,
   livePreviewTerminalIds,
   focusTerminalId,
   terminalPresentationById,
@@ -98,16 +107,17 @@ export function buildCanvasNodes({
 }: BuildCanvasNodesOptions): CanvasNode[] {
   const terminals = workspace.terminals.map((terminal) => {
     const isFocusTarget = focusTerminalId === terminal.id;
+    const renderedBounds = renderedBoundsByNodeId.get(terminal.id) ?? terminal.bounds;
 
     return {
       id: terminal.id,
       type: 'terminal' as const,
       position: {
-        x: terminal.bounds.x,
-        y: terminal.bounds.y,
+        x: renderedBounds.x,
+        y: renderedBounds.y,
       },
-      width: terminal.bounds.width,
-      height: terminal.bounds.height,
+      width: renderedBounds.width,
+      height: renderedBounds.height,
       data: {
         terminal,
         session: sessions[terminal.id] ?? null,
@@ -126,27 +136,31 @@ export function buildCanvasNodes({
         onMarkdownDrop,
         activeMarkdownLink:
           markdownLinks.find((link) => link.terminalId === terminal.id) ?? null,
+        allowResize: nodesResizable,
       },
       style: {
-        width: terminal.bounds.width,
-        height: terminal.bounds.height,
+        width: renderedBounds.width,
+        height: renderedBounds.height,
       },
       className: isFocusTarget ? 'is-focus-target' : undefined,
       selected: selectedNodeId === terminal.id,
       selectable: true as const,
+      draggable: nodesDraggable,
     };
   });
 
   const markdown = workspace.markdown.map((node) => {
+    const renderedBounds = renderedBoundsByNodeId.get(node.id) ?? node.bounds;
+
     return {
       id: node.id,
       type: 'markdown' as const,
       position: {
-        x: node.bounds.x,
-        y: node.bounds.y,
+        x: renderedBounds.x,
+        y: renderedBounds.y,
       },
-      width: node.bounds.width,
-      height: node.bounds.height,
+      width: renderedBounds.width,
+      height: renderedBounds.height,
       data: {
         markdown: node,
         document: markdownDocuments[node.id] ?? null,
@@ -161,13 +175,15 @@ export function buildCanvasNodes({
         onDocumentChange,
         onDocumentSave,
         onResolveConflict,
+        allowResize: nodesResizable,
       },
       style: {
-        width: node.bounds.width,
-        height: node.bounds.height,
+        width: renderedBounds.width,
+        height: renderedBounds.height,
       },
       selected: selectedNodeId === node.id,
       selectable: true as const,
+      draggable: nodesDraggable,
     };
   });
 

@@ -113,7 +113,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
 
       <CanvasResizeHandles
         bounds={terminal.bounds}
-        isVisible={selected}
+        isVisible={selected && data.allowResize}
         minWidth={260}
         minHeight={180}
         zoom={zoom}
@@ -231,27 +231,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         {mode === 'inspect' ? (
           canMountLivePreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
-              {!hideRedundantMetadata ? (
-                <div className="terminal-focus-toolbar">
-                  <div className="terminal-focus-title">
-                    <span className="terminal-focus-label">
-                      Inspect preview
-                    </span>
-                    <strong title={session.summary}>{session.summary}</strong>
-                  </div>
-                  {!session.connected ? (
-                    <button
-                      className="nodrag nopan"
-                      type="button"
-                      onClick={() => {
-                        onRestart(terminal.id);
-                      }}
-                    >
-                      Restart
-                    </button>
-                  ) : null}
-                </div>
-              ) : !session.connected ? (
+              {!session.connected ? (
                 <div className="terminal-preview-actions">
                   <button
                     className="nodrag nopan"
@@ -274,7 +254,6 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
             </div>
           ) : (
             <div className="canvas-node-summary">
-              <p>Inspect preview</p>
               <strong>
                 {session?.summary ??
                   terminal.taskLabel ??

@@ -8,6 +8,7 @@ import {
   type TerminalNode,
   type TerminalNodePatch,
   type Workspace,
+  type WorkspaceLayoutMode,
   updateTerminalNode,
 } from '../../shared/workspace';
 
@@ -169,6 +170,20 @@ export function saveWorkspaceViewportToPreset(
   return {
     ...workspace,
     cameraPresets,
+  };
+}
+
+export function setWorkspaceLayoutMode(
+  workspace: Workspace,
+  layoutMode: WorkspaceLayoutMode,
+): Workspace {
+  if (workspace.layoutMode === layoutMode) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    layoutMode,
   };
 }
 

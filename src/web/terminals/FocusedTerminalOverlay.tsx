@@ -3,12 +3,7 @@ import { useEffect, useEffectEvent, useRef, type CSSProperties } from 'react';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { CameraViewport, TerminalNode } from '../../shared/workspace';
 import {
-  formatTerminalEventTime,
   getTerminalDisplayStatus,
-  getTerminalIntegrationBadgeLabel,
-  getTerminalIntegrationDisplayStatus,
-  getTerminalIntegrationMessage,
-  getTerminalRuntimePath,
 } from './presentation';
 import { TerminalFocusSurface } from './TerminalFocusSurface';
 import { TerminalTitleBar } from './TerminalTitleBar';
@@ -18,6 +13,8 @@ interface FocusedTerminalOverlayProps {
   session: TerminalSessionSnapshot | null;
   viewport: CameraViewport;
   autoFocusAtMs: number | null;
+  visualVariant?: 'normal' | 'swap-in' | 'swap-out';
+  interactive?: boolean;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
   onBoundsChange: (
@@ -37,6 +34,8 @@ export function FocusedTerminalOverlay({
   session,
   viewport,
   autoFocusAtMs,
+  visualVariant = 'normal',
+  interactive = true,
   onInput,
   onResize,
   onBoundsChange,
@@ -46,17 +45,6 @@ export function FocusedTerminalOverlay({
 }: FocusedTerminalOverlayProps) {
   const overlayStyle = createOverlayStyle(terminal, viewport);
   const status = getTerminalDisplayStatus(terminal, session);
-  const integrationBadgeLabel = getTerminalIntegrationBadgeLabel(
-    terminal,
-    session,
-  );
-  const integrationMessage = getTerminalIntegrationMessage(terminal, session);
-  const integrationStatus = getTerminalIntegrationDisplayStatus(
-    terminal,
-    session,
-  );
-  const liveCwd = getTerminalRuntimePath(terminal, session, 'cwd');
-  const projectRoot = getTerminalRuntimePath(terminal, session, 'root');
   const dragStateRef = useRef<{
     originX: number;
     originY: number;
@@ -110,12 +98,21 @@ export function FocusedTerminalOverlay({
 
   return (
     <div
-      className="focus-terminal-overlay nodrag nopan nowheel"
+      className={buildOverlayClassName(visualVariant, interactive)}
       style={overlayStyle}
     >
+      <span
+        className={`focus-terminal-overlay-stripe terminal-node-stripe is-${status}`}
+        aria-hidden="true"
+      />
+
       <div
         className="focus-terminal-overlay-toolbar"
         onPointerDown={(event) => {
+          if (!interactive) {
+            return;
+          }
+
           if (event.button !== 0) {
             return;
           }
@@ -139,7 +136,7 @@ export function FocusedTerminalOverlay({
           onTerminalChange={onTerminalChange}
           onClose={onRemove}
           sidecar={
-            !session?.connected ? (
+            interactive && !session?.connected ? (
               <button
                 className="nodrag nopan"
                 type="button"
@@ -157,53 +154,39 @@ export function FocusedTerminalOverlay({
         />
       </div>
 
-      <div className="focus-terminal-overlay-meta">
-        <div className="focus-terminal-overlay-meta-topline">
-          <span
-            className={`terminal-pill terminal-pill-integration is-${integrationStatus}`}
-          >
-            {integrationBadgeLabel}
-          </span>
-          {session?.integration.updatedAt ? (
-            <span>{formatTerminalEventTime(session.integration.updatedAt)}</span>
-          ) : null}
-        </div>
-        <strong title={integrationMessage}>{integrationMessage}</strong>
-        <div className="focus-terminal-overlay-paths">
-          <span title={liveCwd}>cwd {liveCwd}</span>
-          <span title={projectRoot}>root {projectRoot}</span>
-        </div>
+      <div className="focus-terminal-overlay-body">
+        {session ? (
+          <div className="canvas-node-summary terminal-live-preview-card focus-terminal-overlay-summary">
+            <TerminalFocusSurface
+              autoFocusAtMs={interactive ? autoFocusAtMs : null}
+              sessionId={terminal.id}
+              scrollback={session.scrollback}
+              visualScale={viewport.zoom}
+              onInput={onInput}
+              onResize={onResize}
+            />
+          </div>
+        ) : (
+          <div className="canvas-node-summary focus-terminal-overlay-summary focus-terminal-overlay-empty">
+            <strong>Launching terminal session.</strong>
+            <span>
+              The live terminal will attach here as soon as the backend publishes
+              the first session snapshot.
+            </span>
+          </div>
+        )}
       </div>
-
-      {session ? (
-        <TerminalFocusSurface
-          autoFocusAtMs={autoFocusAtMs}
-          sessionId={terminal.id}
-          scrollback={session.scrollback}
-          visualScale={viewport.zoom}
-          onInput={onInput}
-          onResize={onResize}
-        />
-      ) : (
-        <div className="focus-terminal-overlay-empty">
-          <strong>Launching terminal session.</strong>
-          <span>
-            The live terminal will attach here as soon as the backend publishes
-            the first session snapshot.
-          </span>
-        </div>
-      )}
     </div>
   );
 }
 
-const OVERLAY_INSET = {
-  left: 18,
-  right: 18,
-  top: 54,
-  bottom: 18,
-};
 const OVERLAY_TOOLBAR_HEIGHT = 42;
+const OVERLAY_INSET = {
+  left: 0,
+  right: 0,
+  top: OVERLAY_TOOLBAR_HEIGHT,
+  bottom: 0,
+};
 
 function createOverlayStyle(
   terminal: TerminalNode,
@@ -232,4 +215,23 @@ function createOverlayStyle(
     width: `${width}px`,
     height: `${height}px`,
   };
+}
+
+function buildOverlayClassName(
+  visualVariant: 'normal' | 'swap-in' | 'swap-out',
+  interactive: boolean,
+): string {
+  const classes = ['focus-terminal-overlay', 'nodrag', 'nopan', 'nowheel'];
+
+  if (visualVariant === 'swap-in') {
+    classes.push('is-swap-in');
+  } else if (visualVariant === 'swap-out') {
+    classes.push('is-swap-out');
+  }
+
+  if (!interactive) {
+    classes.push('is-non-interactive');
+  }
+
+  return classes.join(' ');
 }

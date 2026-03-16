@@ -7,6 +7,7 @@ import {
   touchWorkspace,
   type CameraViewport,
   type Workspace,
+  type WorkspaceLayoutMode,
 } from '../../shared/workspace';
 import { fetchWorkspace, persistWorkspace } from './workspaceClient';
 import {
@@ -16,6 +17,7 @@ import {
   removeMarkdownFromWorkspace,
   removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
+  setWorkspaceLayoutMode,
   setWorkspaceViewport,
   updateWorkspaceTerminal,
 } from './workspaceActions';
@@ -321,6 +323,10 @@ export function useWorkspace() {
     updateWorkspace((current) => saveWorkspaceViewportToPreset(current, presetId));
   }, [updateWorkspace]);
 
+  const setLayoutMode = useCallback((layoutMode: WorkspaceLayoutMode) => {
+    updateWorkspace((current) => setWorkspaceLayoutMode(current, layoutMode));
+  }, [updateWorkspace]);
+
   return {
     workspace,
     persistence,
@@ -335,6 +341,7 @@ export function useWorkspace() {
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
+    setLayoutMode,
   };
 }
 

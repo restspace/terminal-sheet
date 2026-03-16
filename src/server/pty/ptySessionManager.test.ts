@@ -277,6 +277,7 @@ function createWorkspace(terminal: {
     name: 'Terminal Canvas',
     createdAt: '2026-03-11T10:00:00.000Z',
     updatedAt: '2026-03-11T10:00:00.000Z',
+    layoutMode: 'free',
     currentViewport: { x: 0, y: 0, zoom: 1 },
     terminals: [
       {

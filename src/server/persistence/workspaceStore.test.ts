@@ -25,6 +25,7 @@ describe('workspace store', () => {
 
     expect(workspace.name).toBe('Terminal Canvas');
     expect(workspace.version).toBe(2);
+    expect(workspace.layoutMode).toBe('free');
     expect(workspace.cameraPresets).toHaveLength(3);
     expect(workspace.currentViewport.zoom).toBeGreaterThan(0);
   });

@@ -66,12 +66,15 @@ export const workspaceFiltersSchema = z.object({
   activeMarkdownId: z.string().nullable(),
 });
 
+export const workspaceLayoutModeSchema = z.enum(['free', 'focus-tiles']);
+
 export const workspaceSchema = z.object({
   version: z.literal(2),
   id: z.string(),
   name: z.string(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  layoutMode: workspaceLayoutModeSchema.default('free'),
   currentViewport: cameraViewportSchema,
   terminals: z.array(terminalNodeSchema),
   markdown: z.array(markdownNodeSchema),
@@ -90,6 +93,7 @@ export type TerminalNode = z.infer<typeof terminalNodeSchema>;
 export type MarkdownNode = z.infer<typeof markdownNodeSchema>;
 export type WorkspaceBackend = z.infer<typeof backendConnectionSchema>;
 export type WorkspaceFilters = z.infer<typeof workspaceFiltersSchema>;
+export type WorkspaceLayoutMode = z.infer<typeof workspaceLayoutModeSchema>;
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type SemanticZoomMode = z.infer<typeof semanticZoomModeSchema>;
 export type TerminalNodePatch = Partial<
@@ -213,6 +217,7 @@ export function createDefaultWorkspace(): Workspace {
     name: 'Terminal Canvas',
     createdAt: timestamp,
     updatedAt: timestamp,
+    layoutMode: 'free',
     currentViewport: { x: 0, y: 0, zoom: 0.72 },
     terminals: [],
     markdown: [],

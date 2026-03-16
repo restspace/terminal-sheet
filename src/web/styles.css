@@ -175,6 +175,54 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.workspace-footer-repo-root {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+}
+
+.workspace-footer-attention {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 20rem;
+  max-width: min(40rem, 70vw);
+  padding: 0.28rem 0.6rem;
+  border-radius: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.workspace-footer-attention:hover:not(:disabled) {
+  transform: none;
+}
+
+.workspace-footer-attention-arrow {
+  display: inline-block;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+  transition: transform 120ms ease;
+}
+
+.workspace-footer-attention.is-expanded .workspace-footer-attention-arrow {
+  transform: rotate(90deg);
+}
+
+.workspace-footer-attention-label {
+  text-transform: uppercase;
+  color: #aac8e0;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+}
+
+.workspace-footer-attention-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace-modal-backdrop {
   position: absolute;
   inset: 0;
@@ -488,9 +536,23 @@ button:disabled {
   overflow: hidden;
   border-radius: 0;
   border: 0;
+  --layout-node-motion-ms: 220ms;
+  --layout-node-motion-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --layout-overlay-motion-ms: 220ms;
+  --layout-overlay-motion-easing: cubic-bezier(0.22, 1, 0.36, 1);
   background:
     linear-gradient(180deg, rgba(11, 21, 33, 0.35), rgba(11, 21, 33, 0.78)),
     #0b1320;
+}
+
+.canvas-frame.is-layout-animating-enter {
+  --layout-node-motion-ms: 1500ms;
+  --layout-overlay-motion-ms: 1500ms;
+}
+
+.canvas-frame.is-layout-animating-swap {
+  --layout-node-motion-ms: 750ms;
+  --layout-overlay-motion-ms: 750ms;
 }
 
 .canvas-frame .react-flow__renderer,
@@ -540,13 +602,21 @@ button:disabled {
 
 .canvas-frame .react-flow__node {
   transition:
+    transform var(--layout-node-motion-ms) var(--layout-node-motion-easing),
+    width var(--layout-node-motion-ms) var(--layout-node-motion-easing),
+    height var(--layout-node-motion-ms) var(--layout-node-motion-easing),
     opacity 180ms ease,
     filter 180ms ease,
     box-shadow 180ms ease;
+  will-change: transform, width, height;
 }
 
 .canvas-frame .react-flow__node.is-focus-target {
   z-index: 6;
+}
+
+.canvas-frame .react-flow__node.is-focus-target .canvas-node {
+  opacity: 0;
 }
 
 .focus-terminal-overlay {
@@ -554,7 +624,7 @@ button:disabled {
   z-index: 7;
   display: flex;
   flex-direction: column;
-  border-radius: 0.8rem;
+  border-radius: 1rem;
   border: 1px solid rgba(138, 180, 216, 0.22);
   background:
     linear-gradient(180deg, rgba(19, 41, 65, 0.92), rgba(12, 23, 37, 0.96)),
@@ -562,6 +632,55 @@ button:disabled {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.36);
   pointer-events: auto;
   overflow: hidden;
+  opacity: 1;
+  transition:
+    left var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing),
+    top var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing),
+    width var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing),
+    height var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing);
+  will-change: left, top, width, height;
+}
+
+.focus-terminal-overlay-stripe {
+  border-radius: 1rem 0 0 1rem;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.focus-terminal-overlay.is-non-interactive {
+  pointer-events: none;
+}
+
+.focus-terminal-overlay.is-swap-out {
+  z-index: 6;
+  animation: focus-overlay-swap-out var(--layout-overlay-motion-ms)
+    var(--layout-overlay-motion-easing) both;
+}
+
+.focus-terminal-overlay.is-swap-in {
+  z-index: 8;
+  animation: focus-overlay-swap-in var(--layout-overlay-motion-ms)
+    var(--layout-overlay-motion-easing) both;
+}
+
+@keyframes focus-overlay-swap-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.24;
+  }
+}
+
+@keyframes focus-overlay-swap-in {
+  from {
+    opacity: 0.18;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .focus-terminal-overlay-toolbar {
@@ -570,27 +689,40 @@ button:disabled {
   justify-content: space-between;
   gap: 0.5rem;
   min-height: 2.4rem;
-  padding: 0.55rem 0.7rem;
+  padding: 0.55rem 0.75rem;
   border-bottom: 1px solid rgba(138, 180, 216, 0.14);
   background: rgba(5, 12, 19, 0.2);
   cursor: grab;
   user-select: none;
+  position: relative;
+  z-index: 1;
 }
 
 .focus-terminal-overlay-toolbar:active {
   cursor: grabbing;
 }
 
-.focus-terminal-overlay-empty {
+.focus-terminal-overlay-body {
   display: flex;
   flex: 1;
-  height: 100%;
   min-height: 0;
-  flex-direction: column;
+  padding: 0.75rem;
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.focus-terminal-overlay-summary {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.focus-terminal-overlay-empty {
+  flex: 1;
+  height: 100%;
   gap: 0.35rem;
-  padding: 0.8rem;
-  border-radius: 0.85rem;
-  background: rgba(255, 255, 255, 0.04);
 }
 
 .focus-terminal-overlay-meta {
@@ -706,6 +838,11 @@ button:disabled {
   border-radius: 1rem 0 0 1rem;
   opacity: 0.92;
   z-index: 1;
+}
+
+.focus-terminal-overlay .focus-terminal-overlay-stripe {
+  inset: 0 auto 0 0;
+  z-index: 0;
 }
 
 .canvas-node-header {
@@ -1469,5 +1606,10 @@ body.is-dragging-terminal-overlay {
   .workspace-footer {
     gap: 0.7rem;
     padding-inline: 0.7rem;
+  }
+
+  .workspace-footer-attention {
+    min-width: 16rem;
+    max-width: min(32rem, calc(100vw - 4rem));
   }
 }

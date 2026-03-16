@@ -95,6 +95,7 @@ describe('TerminalPlaceholderNode', () => {
     expect(preview?.getAttribute('data-session-id')).toBe(terminal.id);
     expect(preview?.getAttribute('data-scrollback')).toBe('line 1\r\nline 2');
     expect(container.querySelector('[data-testid="text-scroll-preview"]')).toBeNull();
+    expect(container.textContent).not.toContain('Inspect preview');
   });
 
   it('falls back to the static inspect summary when no live preview is mounted', () => {
@@ -120,6 +121,7 @@ describe('TerminalPlaceholderNode', () => {
 
     expect(container.querySelector('[data-testid="readonly-live-preview"]')).toBeNull();
     expect(container.textContent).toContain('build finished');
+    expect(container.textContent).not.toContain('Inspect preview');
     expect(container.querySelector('code')?.textContent).toBe('build started');
   });
 });
@@ -148,6 +150,7 @@ function createNodeProps(options: {
       onMarkRead: vi.fn(),
       onMarkdownDrop: vi.fn(),
       activeMarkdownLink: null,
+      allowResize: true,
     } satisfies TerminalFlowNode['data'],
     width: options.terminal.bounds.width,
     height: options.terminal.bounds.height,

@@ -8,6 +8,7 @@ import {
   removeMarkdownFromWorkspace,
   removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
+  setWorkspaceLayoutMode,
   setWorkspaceViewport,
 } from './workspaceActions';
 
@@ -105,5 +106,12 @@ describe('workspace actions', () => {
       y: -20,
       zoom: 1.2,
     });
+  });
+
+  it('updates layout mode', () => {
+    const workspace = createDefaultWorkspace();
+    const nextWorkspace = setWorkspaceLayoutMode(workspace, 'focus-tiles');
+
+    expect(nextWorkspace.layoutMode).toBe('focus-tiles');
   });
 });

@@ -11,14 +11,18 @@ import { getDefaultShell } from '../../shared/platform';
 import type {
   AgentType,
   CreateTerminalNodeInput,
+  TerminalNode,
+  WorkspaceLayoutMode,
 } from '../../shared/workspace';
 import { getSemanticZoomMode } from '../../shared/workspace';
+import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import {
   cancelViewportAnimation,
   focusMarkdownWithTransition,
   focusTerminalWithTransition,
 } from '../canvas/focus';
 import { WorkspaceCanvas } from '../canvas/WorkspaceCanvas';
+import { buildAttentionFooterSummary } from './attentionSummary';
 import { fetchAttentionSetup } from '../state/attentionClient';
 import { useMarkdownDocuments } from '../state/useMarkdownDocuments';
 import { useTerminalSessions } from '../state/useTerminalSessions';
@@ -26,6 +30,7 @@ import { useWorkspace } from '../state/useWorkspace';
 import {
   formatTerminalEventTime,
   getTerminalDisplayStatus,
+  getTerminalRuntimePath,
 } from '../terminals/presentation';
 
 export function App() {
@@ -42,6 +47,7 @@ export function App() {
     setViewport,
     applyCameraPreset,
     saveViewportToPreset,
+    setLayoutMode,
   } = useWorkspace();
   const {
     sessions,
@@ -83,7 +89,7 @@ export function App() {
   const [focusAutoFocusAtMs, setFocusAutoFocusAtMs] = useState<number | null>(
     null,
   );
-  const [terminalInteractionAtMs, setTerminalInteractionAtMs] = useState<
+  const [nodeInteractionAtMs, setNodeInteractionAtMs] = useState<
     Record<string, number>
   >({});
   const [isCreateMarkdownDialogOpen, setIsCreateMarkdownDialogOpen] =
@@ -92,6 +98,7 @@ export function App() {
   const [createMarkdownError, setCreateMarkdownError] = useState<string | null>(
     null,
   );
+  const [isAttentionFeedExpanded, setIsAttentionFeedExpanded] = useState(false);
   const {
     documents: markdownDocuments,
     links: activeMarkdownLinks,
@@ -201,7 +208,14 @@ export function App() {
     }
 
     didAutoFocusSingleTerminalRef.current = true;
-    bumpTerminalInteraction(terminal.id);
+    bumpNodeInteraction(terminal.id);
+
+    if (workspace.layoutMode === 'focus-tiles') {
+      setSelectedNodeId(terminal.id);
+      setFocusAutoFocusAtMs(null);
+      return;
+    }
+
     focusTerminalWithTransition({
       terminal,
       startViewport: workspace.currentViewport,
@@ -310,6 +324,7 @@ export function App() {
   }
 
   const terminals = workspace.terminals;
+  const layoutMode = workspace.layoutMode;
   const currentViewport = workspace.currentViewport;
   const semanticMode = getSemanticZoomMode(currentViewport.zoom);
   const attentionTerminalIds = terminals
@@ -319,6 +334,25 @@ export function App() {
       ),
     )
     .map((terminal) => terminal.id);
+  const selectedTerminal =
+    selectedNodeId === null
+      ? null
+      : terminals.find((terminal) => terminal.id === selectedNodeId) ?? null;
+  const selectedTerminalSession = selectedTerminal
+    ? (sessions[selectedTerminal.id] ?? null)
+    : null;
+  const configuredAgentLabel = getConfiguredFooterAgent(
+    selectedTerminal,
+    selectedTerminalSession,
+  );
+  const footerRepoRoot = selectedTerminal
+    ? getTerminalRuntimePath(selectedTerminal, selectedTerminalSession, 'root')
+    : 'No terminal selected';
+  const attentionFooterSummary = buildAttentionFooterSummary({
+    attentionEvents,
+    attentionTerminalCount: attentionTerminalIds.length,
+    terminals,
+  });
 
   function focusTerminal(terminalId: string) {
     const terminal = terminals.find((candidate) => candidate.id === terminalId);
@@ -327,7 +361,14 @@ export function App() {
       return;
     }
 
-    bumpTerminalInteraction(terminalId);
+    bumpNodeInteraction(terminalId);
+
+    if (layoutMode === 'focus-tiles') {
+      setSelectedNodeId(terminalId);
+      setFocusAutoFocusAtMs(null);
+      return;
+    }
+
     focusTerminalWithTransition({
       terminal,
       startViewport: currentViewport,
@@ -367,6 +408,14 @@ export function App() {
     );
 
     if (!markdownNode) {
+      return;
+    }
+
+    bumpNodeInteraction(markdownId);
+
+    if (layoutMode === 'focus-tiles') {
+      setSelectedNodeId(markdownId);
+      setFocusAutoFocusAtMs(null);
       return;
     }
 
@@ -424,22 +473,29 @@ export function App() {
       return;
     }
 
-    bumpTerminalInteraction(createdTerminal.id);
-    focusTerminalWithTransition({
-      terminal: createdTerminal,
-      startViewport: currentViewport,
-      updateWorkspace,
-      onSelectTerminal: setSelectedNodeId,
-      onAutoFocusAtChange: setFocusAutoFocusAtMs,
-      onViewportChange: setViewport,
-      animationFrameRef: viewportAnimationFrameRef,
-    });
+    bumpNodeInteraction(createdTerminal.id);
+
+    if (layoutMode === 'focus-tiles') {
+      setSelectedNodeId(createdTerminal.id);
+      setFocusAutoFocusAtMs(null);
+    } else {
+      focusTerminalWithTransition({
+        terminal: createdTerminal,
+        startViewport: currentViewport,
+        updateWorkspace,
+        onSelectTerminal: setSelectedNodeId,
+        onAutoFocusAtChange: setFocusAutoFocusAtMs,
+        onViewportChange: setViewport,
+        animationFrameRef: viewportAnimationFrameRef,
+      });
+    }
+
     awaitSession(createdTerminal.id);
   }
 
   function handleSelectedNodeChange(nodeId: string | null) {
-    if (nodeId && terminals.some((terminal) => terminal.id === nodeId)) {
-      bumpTerminalInteraction(nodeId);
+    if (nodeId) {
+      bumpNodeInteraction(nodeId);
     }
 
     setSelectedNodeId(nodeId);
@@ -448,7 +504,7 @@ export function App() {
   function handleTerminalRemove(terminalId: string) {
     setFocusAutoFocusAtMs(null);
     setSelectedNodeId((current) => (current === terminalId ? null : current));
-    setTerminalInteractionAtMs((current) => {
+    setNodeInteractionAtMs((current) => {
       if (!(terminalId in current)) {
         return current;
       }
@@ -462,32 +518,41 @@ export function App() {
 
   function handleMarkdownRemove(markdownId: string) {
     setSelectedNodeId((current) => (current === markdownId ? null : current));
+    setNodeInteractionAtMs((current) => {
+      if (!(markdownId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[markdownId];
+      return next;
+    });
     removeMarkdown(markdownId, { persistImmediately: true });
   }
 
   function handleTerminalInput(sessionId: string, data: string) {
-    bumpTerminalInteraction(sessionId, 1_000);
+    bumpNodeInteraction(sessionId, 1_000);
     sendInput(sessionId, data);
   }
 
   function handleTerminalRestart(sessionId: string) {
-    bumpTerminalInteraction(sessionId);
+    bumpNodeInteraction(sessionId);
     restartSession(sessionId);
   }
 
   function handleMarkTerminalRead(sessionId: string) {
-    bumpTerminalInteraction(sessionId);
+    bumpNodeInteraction(sessionId);
     markSessionRead(sessionId);
   }
 
-  function bumpTerminalInteraction(
-    terminalId: string,
+  function bumpNodeInteraction(
+    nodeId: string,
     throttleMs = 0,
   ) {
     const now = Date.now();
 
-    setTerminalInteractionAtMs((current) => {
-      const previous = current[terminalId] ?? Number.NEGATIVE_INFINITY;
+    setNodeInteractionAtMs((current) => {
+      const previous = current[nodeId] ?? Number.NEGATIVE_INFINITY;
 
       if (now - previous < throttleMs) {
         return current;
@@ -495,9 +560,14 @@ export function App() {
 
       return {
         ...current,
-        [terminalId]: now,
+        [nodeId]: now,
       };
     });
+  }
+
+  function handleLayoutModeChange(nextLayoutMode: WorkspaceLayoutMode): void {
+    setFocusAutoFocusAtMs(null);
+    setLayoutMode(nextLayoutMode);
   }
 
   async function handleBrowserNotificationsToggle() {
@@ -523,7 +593,7 @@ export function App() {
       <WorkspaceCanvas
         workspace={workspace}
         selectedNodeId={selectedNodeId}
-        terminalInteractionAtMs={terminalInteractionAtMs}
+        nodeInteractionAtMs={nodeInteractionAtMs}
         sessions={sessions}
         markdownDocuments={markdownDocuments}
         markdownLinks={activeMarkdownLinks}
@@ -607,6 +677,21 @@ export function App() {
                 <option value="codex">Codex</option>
               </select>
             </label>
+            <label className="toolbar-select-field">
+              <span className="meta-label">Layout</span>
+              <select
+                className="toolbar-select"
+                value={layoutMode}
+                onChange={(event) => {
+                  handleLayoutModeChange(
+                    event.target.value as WorkspaceLayoutMode,
+                  );
+                }}
+              >
+                <option value="free">Free</option>
+                <option value="focus-tiles">Focus Tiles</option>
+              </select>
+            </label>
             <button
               type="button"
               onClick={() => {
@@ -679,34 +764,63 @@ export function App() {
         </div>
       </header>
 
-      <AttentionFeed
-        attentionEvents={attentionEvents}
-        attentionSetup={attentionSetup}
-        attentionSetupError={attentionSetupError}
-        attentionTerminalIds={attentionTerminalIds}
-        browserNotificationsEnabled={browserNotificationsEnabled}
-        soundEnabled={soundEnabled}
-        notificationPermission={notificationPermission}
-        terminals={terminals}
-        onBrowserNotificationsToggle={() => {
-          void handleBrowserNotificationsToggle();
-        }}
-        onSoundToggle={() => {
-          setSoundEnabled((current) => !current);
-        }}
-        onEventSelect={(sessionId) => {
-          focusTerminal(sessionId);
-        }}
-      />
+      {isAttentionFeedExpanded ? (
+        <AttentionFeed
+          asideId="attention-feed-panel"
+          attentionEvents={attentionEvents}
+          attentionSetup={attentionSetup}
+          attentionSetupError={attentionSetupError}
+          attentionTerminalIds={attentionTerminalIds}
+          browserNotificationsEnabled={browserNotificationsEnabled}
+          soundEnabled={soundEnabled}
+          notificationPermission={notificationPermission}
+          terminals={terminals}
+          onBrowserNotificationsToggle={() => {
+            void handleBrowserNotificationsToggle();
+          }}
+          onSoundToggle={() => {
+            setSoundEnabled((current) => !current);
+          }}
+          onEventSelect={(sessionId) => {
+            focusTerminal(sessionId);
+          }}
+        />
+      ) : null}
 
       <footer className="workspace-footer">
         <span>WORKSPACE {workspace.name}</span>
+        {configuredAgentLabel ? <span>{configuredAgentLabel}</span> : null}
+        <span className="workspace-footer-repo-root" title={footerRepoRoot}>
+          REPO ROOT {footerRepoRoot}
+        </span>
         <span>ZOOM MODE {currentViewport.zoom.toFixed(2)}x</span>
         <span>PERSISTENCE {persistence.phase}</span>
         <span>SEMANTIC ZOOM {semanticMode}</span>
         <span>
           TERMINAL SOCKET {healthError ? 'backend degraded' : socketState}
         </span>
+        <button
+          type="button"
+          className={
+            isAttentionFeedExpanded
+              ? 'workspace-footer-attention is-expanded'
+              : 'workspace-footer-attention'
+          }
+          aria-controls="attention-feed-panel"
+          aria-expanded={isAttentionFeedExpanded}
+          onClick={() => {
+            setIsAttentionFeedExpanded((current) => !current);
+          }}
+          title={attentionFooterSummary}
+        >
+          <span className="workspace-footer-attention-arrow" aria-hidden="true">
+            {'>'}
+          </span>
+          <span className="workspace-footer-attention-label">Attention</span>
+          <span className="workspace-footer-attention-summary">
+            {attentionFooterSummary}
+          </span>
+        </button>
       </footer>
 
       {isCreateMarkdownDialogOpen ? (
@@ -785,6 +899,7 @@ export function App() {
 }
 
 interface AttentionFeedProps {
+  asideId: string;
   attentionEvents: ReturnType<typeof useTerminalSessions>['attentionEvents'];
   attentionSetup: AttentionIntegrationSetup | null;
   attentionSetupError: string | null;
@@ -799,6 +914,7 @@ interface AttentionFeedProps {
 }
 
 function AttentionFeed({
+  asideId,
   attentionEvents,
   attentionSetup,
   attentionSetupError,
@@ -812,7 +928,7 @@ function AttentionFeed({
   onEventSelect,
 }: AttentionFeedProps) {
   return (
-    <aside className="attention-feed">
+    <aside id={asideId} className="attention-feed">
       <div className="attention-feed-header">
         <div>
           <p className="eyebrow">Attention Feed</p>
@@ -1032,4 +1148,25 @@ function getWorkspaceDirectory(workspacePath: string | null): string {
   }
 
   return workspacePath.replace(/[\\/][^\\/]+$/, '');
+}
+
+function getConfiguredFooterAgent(
+  terminal: TerminalNode | null,
+  session: TerminalSessionSnapshot | null,
+): 'CODEX' | 'CLAUDE' | null {
+  if (!terminal || !session || session.integration.status !== 'configured') {
+    return null;
+  }
+
+  const owner = session.integration.owner ?? terminal.agentType;
+
+  if (owner === 'codex') {
+    return 'CODEX';
+  }
+
+  if (owner === 'claude') {
+    return 'CLAUDE';
+  }
+
+  return null;
 }

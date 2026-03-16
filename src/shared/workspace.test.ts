@@ -20,8 +20,19 @@ describe('workspace schema', () => {
     expect(() => workspaceSchema.parse(workspace)).not.toThrow();
     expect(workspace.name).toBe('Terminal Canvas');
     expect(workspace.version).toBe(2);
+    expect(workspace.layoutMode).toBe('free');
     expect(workspace.cameraPresets).toHaveLength(3);
     expect(workspace.currentViewport.zoom).toBeGreaterThan(0);
+  });
+
+  it('defaults layoutMode to free for legacy workspaces', () => {
+    const parsed = workspaceSchema.parse({
+      ...createDefaultWorkspace(),
+      // Simulate persisted workspaces from before layoutMode existed.
+      layoutMode: undefined,
+    });
+
+    expect(parsed.layoutMode).toBe('free');
   });
 
   it('creates valid placeholder nodes', () => {

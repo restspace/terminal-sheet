@@ -45,7 +45,7 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
     >
       <CanvasResizeHandles
         bounds={markdown.bounds}
-        isVisible={selected}
+        isVisible={selected && data.allowResize}
         minWidth={260}
         minHeight={200}
         zoom={zoom}

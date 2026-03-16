@@ -30,6 +30,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
   onMarkRead: (sessionId: string) => void;
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
   activeMarkdownLink: MarkdownLinkState | null;
+  allowResize: boolean;
 }
 
 export interface MarkdownNodeData extends Record<string, unknown> {
@@ -50,6 +51,7 @@ export interface MarkdownNodeData extends Record<string, unknown> {
     nodeId: string,
     choice: 'reload-disk' | 'overwrite-disk' | 'keep-buffer',
   ) => void;
+  allowResize: boolean;
 }
 
 export type TerminalFlowNode = Node<TerminalNodeData, 'terminal'>;

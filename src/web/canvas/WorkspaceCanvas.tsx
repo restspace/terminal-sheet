@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   Background,
@@ -11,6 +11,7 @@ import {
 
 import {
   type CameraViewport,
+  type WorkspaceLayoutMode,
   type TerminalNode,
   type Workspace,
 } from '../../shared/workspace';
@@ -25,6 +26,8 @@ import { FocusedTerminalOverlay } from '../terminals/FocusedTerminalOverlay';
 import { deriveTerminalPresentationState } from '../terminals/presentationMode';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
 import { getTerminalDisplayStatus } from '../terminals/presentation';
+import { getLayoutStrategy } from './layout/strategyRegistry';
+import type { NodeBounds } from './layout/types';
 import {
   applyNodeChangesToWorkspace,
   buildCanvasEdges,
@@ -36,7 +39,7 @@ import {
 interface WorkspaceCanvasProps {
   workspace: Workspace;
   selectedNodeId: string | null;
-  terminalInteractionAtMs: Readonly<Record<string, number>>;
+  nodeInteractionAtMs: Readonly<Record<string, number>>;
   sessions: Record<string, TerminalSessionSnapshot>;
   markdownDocuments: Record<string, MarkdownDocumentState>;
   markdownLinks: MarkdownLinkState[];
@@ -72,10 +75,17 @@ const nodeTypes = {
   markdown: MarkdownPlaceholderNode,
 };
 
+interface OverlaySwapState {
+  key: string;
+  fromTerminalId: string;
+  toTerminalId: string;
+  durationMs: number;
+}
+
 export function WorkspaceCanvas({
   workspace,
   selectedNodeId,
-  terminalInteractionAtMs,
+  nodeInteractionAtMs,
   sessions,
   markdownDocuments,
   markdownLinks,
@@ -99,15 +109,225 @@ export function WorkspaceCanvas({
   onDocumentSave,
   onResolveConflict,
 }: WorkspaceCanvasProps) {
+  const canvasFrameRef = useRef<HTMLDivElement | null>(null);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const layoutStateByModeRef = useRef<
+    Partial<Record<WorkspaceLayoutMode, unknown>>
+  >({});
+  const previousLayoutModeRef = useRef<WorkspaceLayoutMode | null>(null);
+  const previousRenderedLayoutModeRef = useRef<WorkspaceLayoutMode>(
+    workspace.layoutMode,
+  );
+  const [layoutAnimationClassName, setLayoutAnimationClassName] = useState('');
+  const layoutAnimationTimerRef = useRef<number | null>(null);
+  const lastLayoutAnimationKeyRef = useRef<string | null>(null);
+  const overlaySwapTimerRef = useRef<number | null>(null);
+  const lastOverlaySwapKeyRef = useRef<string | null>(null);
+  const lastFocusTilesBoundsRef = useRef<Map<string, NodeBounds>>(new Map());
+  const [renderedBoundsByNodeId, setRenderedBoundsByNodeId] = useState<
+    Map<string, NodeBounds>
+  >(() => createInitialRenderedBoundsByNodeId(workspace));
+  const [interactionPolicy, setInteractionPolicy] = useState({
+    nodesDraggable: true,
+    nodesResizable: true,
+  });
+  const [overlaySwapState, setOverlaySwapState] = useState<OverlaySwapState | null>(
+    null,
+  );
+  const focusedTerminalId = useMemo(
+    () =>
+      selectedNodeId && workspace.terminals.some((terminal) => terminal.id === selectedNodeId)
+        ? selectedNodeId
+        : null,
+    [selectedNodeId, workspace.terminals],
+  );
+  const previousFocusedTerminalIdRef = useRef<string | null>(focusedTerminalId);
+
+  useEffect(() => {
+    const container = canvasFrameRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    if (typeof ResizeObserver === 'undefined') {
+      setViewportSize({
+        width: Math.round(container.clientWidth),
+        height: Math.round(container.clientHeight),
+      });
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+
+      if (!entry) {
+        return;
+      }
+
+      setViewportSize({
+        width: Math.round(entry.contentRect.width),
+        height: Math.round(entry.contentRect.height),
+      });
+    });
+
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    const layoutStrategy = getLayoutStrategy(workspace.layoutMode);
+    const layoutResult = layoutStrategy.compute({
+      mode: workspace.layoutMode,
+      nodes: [
+        ...workspace.terminals.map((terminal, index) => ({
+          id: terminal.id,
+          bounds: terminal.bounds,
+          order: index,
+        })),
+        ...workspace.markdown.map((node, index) => ({
+          id: node.id,
+          bounds: node.bounds,
+          order: workspace.terminals.length + index,
+        })),
+      ],
+      selectedNodeId,
+      interactionAtByNodeId: nodeInteractionAtMs,
+      viewport: workspace.currentViewport,
+      viewportSize,
+      safeAreaInsets: getLayoutSafeAreaInsets(viewportSize),
+      previousState: layoutStateByModeRef.current[workspace.layoutMode] ?? null,
+      previousMode: previousLayoutModeRef.current,
+    });
+
+    layoutStateByModeRef.current[workspace.layoutMode] = layoutResult.nextState;
+    previousLayoutModeRef.current = workspace.layoutMode;
+
+    if (workspace.layoutMode === 'focus-tiles') {
+      lastFocusTilesBoundsRef.current = new Map(layoutResult.boundsByNodeId);
+    }
+
+    let nextBoundsByNodeId = new Map(layoutResult.boundsByNodeId);
+
+    if (
+      workspace.layoutMode === 'free' &&
+      previousRenderedLayoutModeRef.current === 'focus-tiles' &&
+      lastFocusTilesBoundsRef.current.size > 0
+    ) {
+      nextBoundsByNodeId = new Map(lastFocusTilesBoundsRef.current);
+      onWorkspaceChange((current) =>
+        applyRenderedBoundsToWorkspace(current, nextBoundsByNodeId),
+      );
+    }
+
+    previousRenderedLayoutModeRef.current = workspace.layoutMode;
+
+    setRenderedBoundsByNodeId((current) =>
+      sameBoundsByNodeId(current, nextBoundsByNodeId) ? current : nextBoundsByNodeId,
+    );
+    setInteractionPolicy((current) =>
+      current.nodesDraggable === layoutResult.interactionPolicy.nodesDraggable &&
+      current.nodesResizable === layoutResult.interactionPolicy.nodesResizable
+        ? current
+        : layoutResult.interactionPolicy,
+    );
+
+    if (
+      shouldStartOverlaySwapTransition({
+        layoutMode: workspace.layoutMode,
+        animationKey: layoutResult.animation?.key ?? null,
+        previousFocusedTerminalId: previousFocusedTerminalIdRef.current,
+        nextFocusedTerminalId: focusedTerminalId,
+      }) &&
+      layoutResult.animation &&
+      layoutResult.animation.key !== lastOverlaySwapKeyRef.current
+    ) {
+      const nextOverlaySwapState: OverlaySwapState = {
+        key: layoutResult.animation.key,
+        fromTerminalId: previousFocusedTerminalIdRef.current as string,
+        toTerminalId: focusedTerminalId as string,
+        durationMs: layoutResult.animation.durationMs,
+      };
+
+      lastOverlaySwapKeyRef.current = nextOverlaySwapState.key;
+      setOverlaySwapState(nextOverlaySwapState);
+
+      if (overlaySwapTimerRef.current !== null) {
+        window.clearTimeout(overlaySwapTimerRef.current);
+      }
+
+      overlaySwapTimerRef.current = window.setTimeout(() => {
+        overlaySwapTimerRef.current = null;
+        setOverlaySwapState((current) =>
+          current?.key === nextOverlaySwapState.key ? null : current,
+        );
+      }, nextOverlaySwapState.durationMs);
+    } else if (workspace.layoutMode !== 'focus-tiles') {
+      setOverlaySwapState(null);
+      lastOverlaySwapKeyRef.current = null;
+    }
+
+    previousFocusedTerminalIdRef.current = focusedTerminalId;
+
+    if (!layoutResult.animation) {
+      return;
+    }
+
+    if (layoutResult.animation.key === lastLayoutAnimationKeyRef.current) {
+      return;
+    }
+
+    lastLayoutAnimationKeyRef.current = layoutResult.animation.key;
+    setLayoutAnimationClassName(
+      layoutResult.animation.durationMs >= 1_000
+        ? 'is-layout-animating-enter'
+        : 'is-layout-animating-swap',
+    );
+
+    if (layoutAnimationTimerRef.current !== null) {
+      window.clearTimeout(layoutAnimationTimerRef.current);
+    }
+
+    layoutAnimationTimerRef.current = window.setTimeout(() => {
+      layoutAnimationTimerRef.current = null;
+      setLayoutAnimationClassName('');
+    }, layoutResult.animation.durationMs);
+  }, [
+    focusedTerminalId,
+    nodeInteractionAtMs,
+    onWorkspaceChange,
+    selectedNodeId,
+    viewportSize,
+    workspace.currentViewport,
+    workspace.layoutMode,
+    workspace.markdown,
+    workspace.terminals,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (layoutAnimationTimerRef.current !== null) {
+        window.clearTimeout(layoutAnimationTimerRef.current);
+      }
+
+      if (overlaySwapTimerRef.current !== null) {
+        window.clearTimeout(overlaySwapTimerRef.current);
+      }
+    };
+  }, []);
+
   const terminalPresentationState = useMemo(
     () =>
       deriveTerminalPresentationState({
         terminals: workspace.terminals,
         selectedNodeId,
         sessions,
-        interactionAtByTerminalId: terminalInteractionAtMs,
+        interactionAtByTerminalId: nodeInteractionAtMs,
       }),
-    [selectedNodeId, sessions, terminalInteractionAtMs, workspace.terminals],
+    [selectedNodeId, sessions, nodeInteractionAtMs, workspace.terminals],
   );
   const livePreviewTerminalIds = useMemo(
     () => new Set(terminalPresentationState.inspectTerminalIds),
@@ -126,6 +346,27 @@ export function WorkspaceCanvas({
   const selectedSession = selectedTerminal
     ? (sessions[selectedTerminal.id] ?? null)
     : null;
+  const terminalById = useMemo(
+    () => new Map(workspace.terminals.map((terminal) => [terminal.id, terminal])),
+    [workspace.terminals],
+  );
+  const outgoingSwapTerminal = overlaySwapState
+    ? (terminalById.get(overlaySwapState.fromTerminalId) ?? null)
+    : null;
+  const incomingSwapTerminal = overlaySwapState
+    ? (terminalById.get(overlaySwapState.toTerminalId) ?? null)
+    : null;
+  const outgoingSwapSession = outgoingSwapTerminal
+    ? (sessions[outgoingSwapTerminal.id] ?? null)
+    : null;
+  const incomingSwapSession = incomingSwapTerminal
+    ? (sessions[incomingSwapTerminal.id] ?? null)
+    : null;
+  const shouldRenderDualSwapOverlay =
+    workspace.layoutMode === 'focus-tiles' &&
+    overlaySwapState !== null &&
+    incomingSwapTerminal !== null &&
+    overlaySwapState.toTerminalId === focusedTerminalId;
   const terminalStatusById = useMemo(
     () =>
       new Map(
@@ -141,6 +382,9 @@ export function WorkspaceCanvas({
       buildCanvasNodes({
         workspace,
         selectedNodeId,
+        renderedBoundsByNodeId,
+        nodesDraggable: interactionPolicy.nodesDraggable,
+        nodesResizable: interactionPolicy.nodesResizable,
         livePreviewTerminalIds,
         focusTerminalId: selectedTerminal?.id ?? null,
         terminalPresentationById: terminalPresentationState.presentationById,
@@ -184,6 +428,9 @@ export function WorkspaceCanvas({
       onWorkspaceChange,
       selectedNodeId,
       selectedTerminal?.id,
+      renderedBoundsByNodeId,
+      interactionPolicy.nodesDraggable,
+      interactionPolicy.nodesResizable,
       sessions,
       markdownDocuments,
       markdownLinks,
@@ -199,7 +446,14 @@ export function WorkspaceCanvas({
   );
 
   return (
-    <div className="canvas-frame">
+    <div
+      ref={canvasFrameRef}
+      className={
+        layoutAnimationClassName
+          ? `canvas-frame ${layoutAnimationClassName}`
+          : 'canvas-frame'
+      }
+    >
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -234,6 +488,11 @@ export function WorkspaceCanvas({
             onSelectedNodeChange(node.id);
           }}
           onNodeDoubleClick={(_event, node) => {
+            if (workspace.layoutMode === 'focus-tiles') {
+              onSelectedNodeChange(node.id);
+              return;
+            }
+
             if (node.type === 'terminal') {
               onTerminalFocusRequest(node.id);
               return;
@@ -247,6 +506,7 @@ export function WorkspaceCanvas({
           minZoom={0.3}
           maxZoom={1.8}
           fitView={false}
+          nodesDraggable={interactionPolicy.nodesDraggable}
           snapToGrid
           snapGrid={[20, 20]}
           selectionOnDrag={false}
@@ -299,9 +559,61 @@ export function WorkspaceCanvas({
         </ReactFlow>
       </ReactFlowProvider>
 
-      {selectedTerminal ? (
+      {shouldRenderDualSwapOverlay ? (
+        <>
+          {outgoingSwapTerminal ? (
+            <FocusedTerminalOverlay
+              key={`swap-out-${overlaySwapState.key}`}
+              terminal={applyRenderedBoundsToTerminal(
+                outgoingSwapTerminal,
+                renderedBoundsByNodeId,
+              )}
+              session={outgoingSwapSession}
+              viewport={workspace.currentViewport}
+              autoFocusAtMs={null}
+              visualVariant="swap-out"
+              interactive={false}
+              onInput={onTerminalInput}
+              onResize={onTerminalResize}
+              onBoundsChange={(nodeId, bounds) => {
+                onWorkspaceChange((current) =>
+                  updateNodeBounds(current, nodeId, bounds),
+                );
+              }}
+              onTerminalChange={onTerminalChange}
+              onRemove={onTerminalRemove}
+              onRestart={onTerminalRestart}
+            />
+          ) : null}
+          <FocusedTerminalOverlay
+            key={`swap-in-${overlaySwapState.key}`}
+            terminal={applyRenderedBoundsToTerminal(
+              incomingSwapTerminal,
+              renderedBoundsByNodeId,
+            )}
+            session={incomingSwapSession}
+            viewport={workspace.currentViewport}
+            autoFocusAtMs={focusAutoFocusAtMs}
+            visualVariant="swap-in"
+            interactive
+            onInput={onTerminalInput}
+            onResize={onTerminalResize}
+            onBoundsChange={(nodeId, bounds) => {
+              onWorkspaceChange((current) =>
+                updateNodeBounds(current, nodeId, bounds),
+              );
+            }}
+            onTerminalChange={onTerminalChange}
+            onRemove={onTerminalRemove}
+            onRestart={onTerminalRestart}
+          />
+        </>
+      ) : selectedTerminal ? (
         <FocusedTerminalOverlay
-          terminal={selectedTerminal}
+          terminal={applyRenderedBoundsToTerminal(
+            selectedTerminal,
+            renderedBoundsByNodeId,
+          )}
           session={selectedSession}
           viewport={workspace.currentViewport}
           autoFocusAtMs={focusAutoFocusAtMs}
@@ -330,5 +642,157 @@ export function WorkspaceCanvas({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function getLayoutSafeAreaInsets(viewportSize: {
+  width: number;
+  height: number;
+}): {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+} {
+  if (viewportSize.width <= 980) {
+    return {
+      top: 190,
+      right: 0,
+      bottom: 118,
+      left: 0,
+    };
+  }
+
+  return {
+    top: 96,
+    right: 0,
+    bottom: 84,
+    left: 0,
+  };
+}
+
+function createInitialRenderedBoundsByNodeId(
+  workspace: Workspace,
+): Map<string, NodeBounds> {
+  return new Map(
+    [...workspace.terminals, ...workspace.markdown].map((node) => [
+      node.id,
+      node.bounds,
+    ]),
+  );
+}
+
+function applyRenderedBoundsToTerminal(
+  terminal: TerminalNode,
+  renderedBoundsByNodeId: ReadonlyMap<string, NodeBounds>,
+): TerminalNode {
+  const renderedBounds = renderedBoundsByNodeId.get(terminal.id);
+
+  if (!renderedBounds || sameBounds(renderedBounds, terminal.bounds)) {
+    return terminal;
+  }
+
+  return {
+    ...terminal,
+    bounds: renderedBounds,
+  };
+}
+
+function applyRenderedBoundsToWorkspace(
+  workspace: Workspace,
+  renderedBoundsByNodeId: ReadonlyMap<string, NodeBounds>,
+): Workspace {
+  let changed = false;
+  const terminals = workspace.terminals.map((terminal) => {
+    const renderedBounds = renderedBoundsByNodeId.get(terminal.id);
+
+    if (!renderedBounds || sameBounds(renderedBounds, terminal.bounds)) {
+      return terminal;
+    }
+
+    changed = true;
+    return {
+      ...terminal,
+      bounds: renderedBounds,
+    };
+  });
+  const markdown = workspace.markdown.map((node) => {
+    const renderedBounds = renderedBoundsByNodeId.get(node.id);
+
+    if (!renderedBounds || sameBounds(renderedBounds, node.bounds)) {
+      return node;
+    }
+
+    changed = true;
+    return {
+      ...node,
+      bounds: renderedBounds,
+    };
+  });
+
+  if (!changed) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    terminals,
+    markdown,
+  };
+}
+
+function sameBounds(left: NodeBounds, right: NodeBounds): boolean {
+  return (
+    Math.abs(left.x - right.x) < 0.5 &&
+    Math.abs(left.y - right.y) < 0.5 &&
+    Math.abs(left.width - right.width) < 0.5 &&
+    Math.abs(left.height - right.height) < 0.5
+  );
+}
+
+function sameBoundsByNodeId(
+  left: ReadonlyMap<string, NodeBounds>,
+  right: ReadonlyMap<string, NodeBounds>,
+): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const [nodeId, leftBounds] of left) {
+    const rightBounds = right.get(nodeId);
+
+    if (!rightBounds || !sameBounds(leftBounds, rightBounds)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function shouldStartOverlaySwapTransition(options: {
+  layoutMode: WorkspaceLayoutMode;
+  animationKey: string | null;
+  previousFocusedTerminalId: string | null;
+  nextFocusedTerminalId: string | null;
+}): boolean {
+  const {
+    layoutMode,
+    animationKey,
+    previousFocusedTerminalId,
+    nextFocusedTerminalId,
+  } = options;
+
+  if (layoutMode !== 'focus-tiles') {
+    return false;
+  }
+
+  if (!animationKey?.startsWith('swap:')) {
+    return false;
+  }
+
+  return (
+    Boolean(previousFocusedTerminalId) &&
+    Boolean(nextFocusedTerminalId) &&
+    previousFocusedTerminalId !== nextFocusedTerminalId
   );
 }
