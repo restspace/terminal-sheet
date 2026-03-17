@@ -7,6 +7,7 @@ import {
   applyAttentionMessage,
   applyServerMessage,
   applyWorkspaceMessage,
+  shouldPollSnapshots,
 } from './useTerminalSessions';
 
 describe('useTerminalSessions helpers', () => {
@@ -69,5 +70,12 @@ describe('useTerminalSessions helpers', () => {
 
     expect(applyServerMessage({}, message)).toEqual({});
     expect(applyWorkspaceMessage(null, message)).toEqual(nextWorkspace);
+  });
+
+  it('polls snapshots only while websocket is not open', () => {
+    expect(shouldPollSnapshots('connecting')).toBe(true);
+    expect(shouldPollSnapshots('closed')).toBe(true);
+    expect(shouldPollSnapshots('error')).toBe(true);
+    expect(shouldPollSnapshots('open')).toBe(false);
   });
 });

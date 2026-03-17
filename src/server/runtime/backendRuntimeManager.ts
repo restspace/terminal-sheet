@@ -23,6 +23,8 @@ export class BackendRuntimeManager {
 
   private readonly remoteClients = new Map<string, RemoteBackendClient>();
 
+  private readonly sessionBackendIndex = new Map<string, string>();
+
   private workspace: Workspace | null = null;
 
   constructor(
@@ -36,6 +38,7 @@ export class BackendRuntimeManager {
     },
   ) {
     options.localPtySessionManager.subscribe((message) => {
+      this.indexSessionMessage(message);
       this.broadcastSession(message);
     });
     options.localAttentionService.subscribe((event) => {
@@ -45,6 +48,13 @@ export class BackendRuntimeManager {
 
   async syncWithWorkspace(workspace: Workspace): Promise<void> {
     this.workspace = workspace;
+    this.sessionBackendIndex.clear();
+    for (const [sessionId, backendId] of buildSessionBackendIndex(
+      workspace,
+      this.options.localBackendId,
+    )) {
+      this.sessionBackendIndex.set(sessionId, backendId);
+    }
     await this.options.localPtySessionManager.syncWithWorkspace(workspace);
 
     if (this.options.role !== 'home') {
@@ -78,6 +88,7 @@ export class BackendRuntimeManager {
         backend,
         {
           onSessionMessage: (message) => {
+            this.indexSessionMessage(message);
             this.broadcastSession(message);
           },
           onAttentionEvent: (event) => {
@@ -187,19 +198,32 @@ export class BackendRuntimeManager {
   }
 
   private findBackendIdForSession(sessionId: string): string | null {
-    const workspaceTerminal = this.workspace?.terminals.find(
-      (terminal) => terminal.id === sessionId,
-    );
+    return this.sessionBackendIndex.get(sessionId) ?? null;
+  }
 
-    if (workspaceTerminal) {
-      return workspaceTerminal.backendId;
+  private indexSessionMessage(message: TerminalServerSocketMessage): void {
+    switch (message.type) {
+      case 'session.snapshot':
+        this.sessionBackendIndex.set(
+          message.session.sessionId,
+          message.session.backendId,
+        );
+        return;
+      case 'session.removed':
+        this.sessionBackendIndex.delete(message.sessionId);
+        return;
+      case 'ready':
+      case 'session.init':
+      case 'session.output':
+      case 'workspace.updated':
+      case 'attention.init':
+      case 'attention.event':
+      case 'markdown.init':
+      case 'markdown.document':
+      case 'markdown.link.init':
+      case 'markdown.link':
+        return;
     }
-
-    const remoteSnapshot = [...this.remoteClients.values()]
-      .flatMap((client) => client.getSnapshots())
-      .find((snapshot) => snapshot.sessionId === sessionId);
-
-    return remoteSnapshot?.backendId ?? null;
   }
 
   private broadcastSession(message: TerminalServerSocketMessage): void {
@@ -587,4 +611,16 @@ function toWebSocketUrl(baseUrl: string, path: string, token: string): string {
 
 function appendTrailingSlash(baseUrl: string): string {
   return baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+}
+
+export function buildSessionBackendIndex(
+  workspace: Workspace,
+  localBackendId: string,
+): Map<string, string> {
+  return new Map(
+    workspace.terminals.map((terminal) => [
+      terminal.id,
+      terminal.backendId ?? localBackendId,
+    ]),
+  );
 }

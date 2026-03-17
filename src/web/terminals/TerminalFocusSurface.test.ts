@@ -143,20 +143,24 @@ vi.mock('@xterm/addon-webgl', () => ({
 
     disposed = false;
 
+    private readonly instanceRecord: {
+      disposed: boolean;
+      preserveDrawingBuffer: boolean | undefined;
+      emitContextLoss: () => void;
+    };
+
     private readonly contextLossHandlers = new Set<() => void>();
 
     constructor(preserveDrawingBuffer?: boolean) {
       this.preserveDrawingBuffer = preserveDrawingBuffer;
-      mockAddonState.webglInstances.push({
-        get disposed() {
-          return instance.disposed;
-        },
+      this.instanceRecord = {
+        disposed: false,
         preserveDrawingBuffer,
         emitContextLoss: () => {
-          instance.emitContextLoss();
+          this.emitContextLoss();
         },
-      });
-      const instance = this;
+      };
+      mockAddonState.webglInstances.push(this.instanceRecord);
     }
 
     readonly onContextLoss = (handler: () => void) => {
@@ -177,6 +181,7 @@ vi.mock('@xterm/addon-webgl', () => ({
 
     dispose(): void {
       this.disposed = true;
+      this.instanceRecord.disposed = true;
     }
 
     emitContextLoss(): void {
@@ -191,13 +196,15 @@ vi.mock('@xterm/addon-canvas', () => ({
   CanvasAddon: class MockCanvasAddon {
     disposed = false;
 
+    private readonly instanceRecord: {
+      disposed: boolean;
+    };
+
     constructor() {
-      mockAddonState.canvasInstances.push({
-        get disposed() {
-          return instance.disposed;
-        },
-      });
-      const instance = this;
+      this.instanceRecord = {
+        disposed: false,
+      };
+      mockAddonState.canvasInstances.push(this.instanceRecord);
     }
 
     activate(): void {
@@ -208,6 +215,7 @@ vi.mock('@xterm/addon-canvas', () => ({
 
     dispose(): void {
       this.disposed = true;
+      this.instanceRecord.disposed = true;
     }
   },
 }));
@@ -215,8 +223,8 @@ vi.mock('@xterm/addon-canvas', () => ({
 import {
   TerminalFocusSurface,
   ReadOnlyTerminalSurface,
-  getIncrementalWrite,
 } from './TerminalFocusSurface';
+import { getIncrementalWrite } from './incrementalWrite';
 import { measureCellSize } from './terminalSizing';
 
 const reactActEnvironment = globalThis as typeof globalThis & {

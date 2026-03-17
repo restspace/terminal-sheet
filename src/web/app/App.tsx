@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 
 import type {
   AttentionIntegrationSetup,
@@ -11,6 +18,7 @@ import {
 import { getDefaultShell } from '../../shared/platform';
 import type {
   AgentType,
+  CameraViewport,
   CreateTerminalNodeInput,
   TerminalNode,
   WorkspaceLayoutMode,
@@ -29,11 +37,16 @@ import { fetchAttentionSetup } from '../state/attentionClient';
 import { useMarkdownDocuments } from '../state/useMarkdownDocuments';
 import { useTerminalSessions } from '../state/useTerminalSessions';
 import { useWorkspace } from '../state/useWorkspace';
+import { waitForRetry } from '../utils/retry';
 import {
   formatTerminalEventTime,
   getTerminalDisplayStatus,
   getTerminalRuntimePath,
 } from '../terminals/presentation';
+
+const MAX_NOTIFIED_EVENT_IDS = 256;
+const EMPTY_TERMINALS: TerminalNode[] = [];
+const DEFAULT_VIEWPORT: CameraViewport = { x: 0, y: 0, zoom: 1 };
 
 export function App() {
   const {
@@ -123,6 +136,22 @@ export function App() {
   const didAutoFocusSingleTerminalRef = useRef(false);
   const notifiedEventIdsRef = useRef(new Set<string>());
   const audioContextRef = useRef<AudioContext | null>(null);
+  const bumpNodeInteraction = useCallback((nodeId: string, throttleMs = 0) => {
+    const now = Date.now();
+
+    setNodeInteractionAtMs((current) => {
+      const previous = current[nodeId] ?? Number.NEGATIVE_INFINITY;
+
+      if (now - previous < throttleMs) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [nodeId]: now,
+      };
+    });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -229,7 +258,7 @@ export function App() {
       onViewportChange: setViewport,
       animationFrameRef: viewportAnimationFrameRef,
     });
-  }, [selectedNodeId, setViewport, updateWorkspace, workspace]);
+  }, [bumpNodeInteraction, selectedNodeId, setViewport, updateWorkspace, workspace]);
 
   useEffect(() => {
     if (!workspaceSnapshot || !workspace) {
@@ -244,6 +273,16 @@ export function App() {
   }, [refreshWorkspaceFromServer, workspace, workspaceSnapshot]);
 
   useEffect(() => {
+    if (notifiedEventIdsRef.current.size > MAX_NOTIFIED_EVENT_IDS) {
+      const retainedEventIds = new Set(attentionEvents.map((event) => event.id));
+
+      for (const eventId of notifiedEventIdsRef.current) {
+        if (!retainedEventIds.has(eventId)) {
+          notifiedEventIdsRef.current.delete(eventId);
+        }
+      }
+    }
+
     for (const event of attentionEvents) {
       if (notifiedEventIdsRef.current.has(event.id)) {
         continue;
@@ -275,6 +314,95 @@ export function App() {
     notificationPermission,
     soundEnabled,
   ]);
+
+  const terminals = workspace?.terminals ?? EMPTY_TERMINALS;
+  const layoutMode = workspace?.layoutMode ?? 'free';
+  const currentViewport = workspace?.currentViewport ?? DEFAULT_VIEWPORT;
+  const semanticMode = getSemanticZoomMode(currentViewport.zoom);
+  const attentionTerminalIds = useMemo(
+    () =>
+      terminals
+        .filter((terminal) =>
+          isAttentionRequiredStatus(
+            getTerminalDisplayStatus(terminal, sessions[terminal.id] ?? null),
+          ),
+        )
+        .map((terminal) => terminal.id),
+    [sessions, terminals],
+  );
+  const selectedTerminal = useMemo(
+    () =>
+      selectedNodeId === null
+        ? null
+        : terminals.find((terminal) => terminal.id === selectedNodeId) ?? null,
+    [selectedNodeId, terminals],
+  );
+  const selectedTerminalSession = selectedTerminal
+    ? (sessions[selectedTerminal.id] ?? null)
+    : null;
+  const configuredAgentLabel = getConfiguredFooterAgent(
+    selectedTerminal,
+    selectedTerminalSession,
+  );
+  const footerRepoRoot = selectedTerminal
+    ? getTerminalRuntimePath(selectedTerminal, selectedTerminalSession, 'root')
+    : 'No terminal selected';
+  const attentionFooterSummary = buildAttentionFooterSummary({
+    attentionEvents,
+    attentionTerminalCount: attentionTerminalIds.length,
+    terminals,
+  });
+
+  const focusTerminal = useCallback((terminalId: string) => {
+    const terminal = terminals.find((candidate) => candidate.id === terminalId);
+
+    if (!terminal) {
+      return;
+    }
+
+    bumpNodeInteraction(terminalId);
+
+    if (layoutMode === 'focus-tiles') {
+      setSelectedNodeId(terminalId);
+      setFocusAutoFocusAtMs(null);
+      return;
+    }
+
+    focusTerminalWithTransition({
+      terminal,
+      startViewport: currentViewport,
+      updateWorkspace,
+      onSelectTerminal: setSelectedNodeId,
+      onAutoFocusAtChange: setFocusAutoFocusAtMs,
+      onViewportChange: setViewport,
+      animationFrameRef: viewportAnimationFrameRef,
+    });
+  }, [
+    bumpNodeInteraction,
+    currentViewport,
+    layoutMode,
+    setViewport,
+    terminals,
+    updateWorkspace,
+  ]);
+
+  const jumpToNextAttention = useCallback(() => {
+    if (!attentionTerminalIds.length) {
+      return;
+    }
+
+    const currentIndex = selectedNodeId
+      ? attentionTerminalIds.indexOf(selectedNodeId)
+      : -1;
+    const nextIndex =
+      (currentIndex + 1 + attentionTerminalIds.length) %
+      attentionTerminalIds.length;
+    const nextTerminalId = attentionTerminalIds[nextIndex];
+
+    if (nextTerminalId) {
+      focusTerminal(nextTerminalId);
+    }
+  }, [attentionTerminalIds, focusTerminal, selectedNodeId]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -310,99 +438,9 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  });
+  }, [jumpToNextAttention]);
 
-  if (!workspace) {
-    return (
-      <div className="app-shell app-shell-loading">
-        <section className="workspace-panel-loading">
-          <p className="eyebrow">Workspace</p>
-          <h2>Loading persisted workspace...</h2>
-          <p>
-            {persistence.error ??
-              'Fetching the saved layout from the local server.'}
-          </p>
-        </section>
-      </div>
-    );
-  }
-
-  const terminals = workspace.terminals;
-  const layoutMode = workspace.layoutMode;
-  const currentViewport = workspace.currentViewport;
-  const semanticMode = getSemanticZoomMode(currentViewport.zoom);
-  const attentionTerminalIds = terminals
-    .filter((terminal) =>
-      isAttentionRequiredStatus(
-        getTerminalDisplayStatus(terminal, sessions[terminal.id] ?? null),
-      ),
-    )
-    .map((terminal) => terminal.id);
-  const selectedTerminal =
-    selectedNodeId === null
-      ? null
-      : terminals.find((terminal) => terminal.id === selectedNodeId) ?? null;
-  const selectedTerminalSession = selectedTerminal
-    ? (sessions[selectedTerminal.id] ?? null)
-    : null;
-  const configuredAgentLabel = getConfiguredFooterAgent(
-    selectedTerminal,
-    selectedTerminalSession,
-  );
-  const footerRepoRoot = selectedTerminal
-    ? getTerminalRuntimePath(selectedTerminal, selectedTerminalSession, 'root')
-    : 'No terminal selected';
-  const attentionFooterSummary = buildAttentionFooterSummary({
-    attentionEvents,
-    attentionTerminalCount: attentionTerminalIds.length,
-    terminals,
-  });
-
-  function focusTerminal(terminalId: string) {
-    const terminal = terminals.find((candidate) => candidate.id === terminalId);
-
-    if (!terminal) {
-      return;
-    }
-
-    bumpNodeInteraction(terminalId);
-
-    if (layoutMode === 'focus-tiles') {
-      setSelectedNodeId(terminalId);
-      setFocusAutoFocusAtMs(null);
-      return;
-    }
-
-    focusTerminalWithTransition({
-      terminal,
-      startViewport: currentViewport,
-      updateWorkspace,
-      onSelectTerminal: setSelectedNodeId,
-      onAutoFocusAtChange: setFocusAutoFocusAtMs,
-      onViewportChange: setViewport,
-      animationFrameRef: viewportAnimationFrameRef,
-    });
-  }
-
-  function jumpToNextAttention() {
-    if (!attentionTerminalIds.length) {
-      return;
-    }
-
-    const currentIndex = selectedNodeId
-      ? attentionTerminalIds.indexOf(selectedNodeId)
-      : -1;
-    const nextIndex =
-      (currentIndex + 1 + attentionTerminalIds.length) %
-      attentionTerminalIds.length;
-    const nextTerminalId = attentionTerminalIds[nextIndex];
-
-    if (nextTerminalId) {
-      focusTerminal(nextTerminalId);
-    }
-  }
-
-  function focusMarkdown(markdownId: string) {
+  const focusMarkdown = useCallback((markdownId: string) => {
     if (!workspace) {
       return;
     }
@@ -432,7 +470,14 @@ export function App() {
       onViewportChange: setViewport,
       animationFrameRef: viewportAnimationFrameRef,
     });
-  }
+  }, [
+    bumpNodeInteraction,
+    currentViewport,
+    layoutMode,
+    setViewport,
+    updateWorkspace,
+    workspace,
+  ]);
 
   function openCreateMarkdownDialog() {
     if (!workspace) {
@@ -444,7 +489,7 @@ export function App() {
     setIsCreateMarkdownDialogOpen(true);
   }
 
-  function openTerminalDirectoryPicker(terminalId: string) {
+  const openTerminalDirectoryPicker = useCallback((terminalId: string) => {
     const terminal = terminals.find((candidate) => candidate.id === terminalId);
 
     if (!terminal) {
@@ -467,7 +512,7 @@ export function App() {
       confirmLabel: 'Select folder',
       terminalId,
     });
-  }
+  }, [sessions, terminals]);
 
   function openMarkdownPicker() {
     setFileSystemPicker({
@@ -481,7 +526,9 @@ export function App() {
     });
   }
 
-  async function confirmFileSystemPicker(selectedPath: string): Promise<void> {
+  const confirmFileSystemPicker = useCallback(async (
+    selectedPath: string,
+  ): Promise<void> => {
     if (!fileSystemPicker) {
       return;
     }
@@ -511,14 +558,22 @@ export function App() {
 
     const response = await openDocument(selectedPath);
     focusMarkdown(response.node.id);
-  }
+  }, [
+    fileSystemPicker,
+    focusMarkdown,
+    openDocument,
+    sendInput,
+    sessions,
+    terminals,
+    updateTerminal,
+  ]);
 
-  function closeCreateMarkdownDialog() {
+  const closeCreateMarkdownDialog = useCallback(() => {
     setIsCreateMarkdownDialogOpen(false);
     setCreateMarkdownError(null);
-  }
+  }, []);
 
-  async function submitCreateMarkdownDialog() {
+  const submitCreateMarkdownDialog = useCallback(async () => {
     const filePath = createMarkdownPath.trim();
 
     if (!filePath) {
@@ -537,7 +592,7 @@ export function App() {
         error instanceof Error ? error.message : 'Markdown creation failed.',
       );
     }
-  }
+  }, [closeCreateMarkdownDialog, createDocument, createMarkdownPath, focusMarkdown]);
 
   function launchTerminal(input: CreateTerminalNodeInput) {
     const createdTerminal = addTerminal(input, { persistImmediately: true });
@@ -566,15 +621,15 @@ export function App() {
     awaitSession(createdTerminal.id);
   }
 
-  function handleSelectedNodeChange(nodeId: string | null) {
+  const handleSelectedNodeChange = useCallback((nodeId: string | null) => {
     if (nodeId) {
       bumpNodeInteraction(nodeId);
     }
 
     setSelectedNodeId(nodeId);
-  }
+  }, [bumpNodeInteraction]);
 
-  function handleTerminalRemove(terminalId: string) {
+  const handleTerminalRemove = useCallback((terminalId: string) => {
     setFocusAutoFocusAtMs(null);
     setSelectedNodeId((current) => (current === terminalId ? null : current));
     setNodeInteractionAtMs((current) => {
@@ -587,9 +642,9 @@ export function App() {
       return next;
     });
     removeTerminal(terminalId, { persistImmediately: true });
-  }
+  }, [removeTerminal]);
 
-  function handleMarkdownRemove(markdownId: string) {
+  const handleMarkdownRemove = useCallback((markdownId: string) => {
     setSelectedNodeId((current) => (current === markdownId ? null : current));
     setNodeInteractionAtMs((current) => {
       if (!(markdownId in current)) {
@@ -601,49 +656,29 @@ export function App() {
       return next;
     });
     removeMarkdown(markdownId, { persistImmediately: true });
-  }
+  }, [removeMarkdown]);
 
-  function handleTerminalInput(sessionId: string, data: string) {
+  const handleTerminalInput = useCallback((sessionId: string, data: string) => {
     bumpNodeInteraction(sessionId, 1_000);
     sendInput(sessionId, data);
-  }
+  }, [bumpNodeInteraction, sendInput]);
 
-  function handleTerminalRestart(sessionId: string) {
+  const handleTerminalRestart = useCallback((sessionId: string) => {
     bumpNodeInteraction(sessionId);
     restartSession(sessionId);
-  }
+  }, [bumpNodeInteraction, restartSession]);
 
-  function handleMarkTerminalRead(sessionId: string) {
+  const handleMarkTerminalRead = useCallback((sessionId: string) => {
     bumpNodeInteraction(sessionId);
     markSessionRead(sessionId);
-  }
+  }, [bumpNodeInteraction, markSessionRead]);
 
-  function bumpNodeInteraction(
-    nodeId: string,
-    throttleMs = 0,
-  ) {
-    const now = Date.now();
-
-    setNodeInteractionAtMs((current) => {
-      const previous = current[nodeId] ?? Number.NEGATIVE_INFINITY;
-
-      if (now - previous < throttleMs) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [nodeId]: now,
-      };
-    });
-  }
-
-  function handleLayoutModeChange(nextLayoutMode: WorkspaceLayoutMode): void {
+  const handleLayoutModeChange = useCallback((nextLayoutMode: WorkspaceLayoutMode): void => {
     setFocusAutoFocusAtMs(null);
     setLayoutMode(nextLayoutMode);
-  }
+  }, [setLayoutMode]);
 
-  async function handleBrowserNotificationsToggle() {
+  const handleBrowserNotificationsToggle = useCallback(async () => {
     if (notificationPermission === 'unsupported' || !('Notification' in window)) {
       return;
     }
@@ -659,6 +694,45 @@ export function App() {
     }
 
     setBrowserNotificationsEnabled((current) => !current);
+  }, [browserNotificationsEnabled, notificationPermission]);
+  const handleMarkdownDrop = useCallback((markdownNodeId: string, terminalId: string) => {
+    void queueLinkToTerminal(markdownNodeId, terminalId);
+  }, [queueLinkToTerminal]);
+  const handleDocumentLoad = useCallback((nodeId: string) => {
+    void ensureDocumentLoaded(nodeId);
+  }, [ensureDocumentLoaded]);
+  const handleDocumentChange = useCallback((nodeId: string, content: string) => {
+    editDocument(nodeId, content);
+  }, [editDocument]);
+  const handleDocumentSave = useCallback((nodeId: string) => {
+    void saveDocument(nodeId);
+  }, [saveDocument]);
+  const handleResolveConflict = useCallback((
+    nodeId: string,
+    choice: 'reload-disk' | 'overwrite-disk' | 'keep-buffer',
+  ) => {
+    void resolveConflict(nodeId, choice);
+  }, [resolveConflict]);
+  const handleBrowserNotificationsToggleClick = useCallback(() => {
+    void handleBrowserNotificationsToggle();
+  }, [handleBrowserNotificationsToggle]);
+  const handleSoundToggle = useCallback(() => {
+    setSoundEnabled((current) => !current);
+  }, []);
+
+  if (!workspace) {
+    return (
+      <div className="app-shell app-shell-loading">
+        <section className="workspace-panel-loading">
+          <p className="eyebrow">Workspace</p>
+          <h2>Loading persisted workspace...</h2>
+          <p>
+            {persistence.error ??
+              'Fetching the saved layout from the local server.'}
+          </p>
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -678,9 +752,7 @@ export function App() {
         onPathSelectRequest={openTerminalDirectoryPicker}
         onTerminalRemove={handleTerminalRemove}
         onMarkTerminalRead={handleMarkTerminalRead}
-        onMarkdownDrop={(markdownNodeId, terminalId) => {
-          void queueLinkToTerminal(markdownNodeId, terminalId);
-        }}
+        onMarkdownDrop={handleMarkdownDrop}
         onMarkdownFocusRequest={focusMarkdown}
         onMarkdownRemove={handleMarkdownRemove}
         onSelectedNodeChange={handleSelectedNodeChange}
@@ -688,18 +760,10 @@ export function App() {
         onWorkspaceChange={updateWorkspace}
         onViewportChange={setViewport}
         focusAutoFocusAtMs={focusAutoFocusAtMs}
-        onDocumentLoad={(nodeId) => {
-          void ensureDocumentLoaded(nodeId);
-        }}
-        onDocumentChange={(nodeId, content) => {
-          editDocument(nodeId, content);
-        }}
-        onDocumentSave={(nodeId) => {
-          void saveDocument(nodeId);
-        }}
-        onResolveConflict={(nodeId, choice) => {
-          void resolveConflict(nodeId, choice);
-        }}
+        onDocumentLoad={handleDocumentLoad}
+        onDocumentChange={handleDocumentChange}
+        onDocumentSave={handleDocumentSave}
+        onResolveConflict={handleResolveConflict}
       />
 
       <header className="workspace-toolbar">
@@ -841,12 +905,8 @@ export function App() {
           soundEnabled={soundEnabled}
           notificationPermission={notificationPermission}
           terminals={terminals}
-          onBrowserNotificationsToggle={() => {
-            void handleBrowserNotificationsToggle();
-          }}
-          onSoundToggle={() => {
-            setSoundEnabled((current) => !current);
-          }}
+          onBrowserNotificationsToggle={handleBrowserNotificationsToggleClick}
+          onSoundToggle={handleSoundToggle}
           onEventSelect={(sessionId) => {
             focusTerminal(sessionId);
           }}
@@ -1179,12 +1239,6 @@ function writeStoredBoolean(key: string, value: boolean): void {
   }
 
   window.localStorage.setItem(key, String(value));
-}
-
-function waitForRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, delayMs);
-  });
 }
 
 async function playNotificationTone(

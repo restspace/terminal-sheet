@@ -21,6 +21,7 @@ import {
   setWorkspaceViewport,
   updateWorkspaceTerminal,
 } from './workspaceActions';
+import { waitForRetry } from '../utils/retry';
 
 export interface WorkspacePersistenceState {
   phase: 'loading' | 'saving' | 'saved' | 'error';
@@ -365,10 +366,4 @@ function schedulePersist(
     timerRef.current = null;
     void persist();
   }, delayMs);
-}
-
-function waitForRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, delayMs);
-  });
 }

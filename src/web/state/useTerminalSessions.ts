@@ -122,24 +122,33 @@ export function useTerminalSessions() {
   }, []);
 
   useEffect(() => {
-    const pendingSessionTimers = pendingSessionTimersRef.current;
     const initialRefreshTimerId = window.setTimeout(() => {
       void refreshSnapshots();
     }, 0);
-    const intervalId = window.setInterval(() => {
-      void refreshSnapshots();
-    }, 2_000);
+    const intervalId = shouldPollSnapshots(socketState)
+      ? window.setInterval(() => {
+          void refreshSnapshots();
+        }, 2_000)
+      : null;
 
     return () => {
       window.clearTimeout(initialRefreshTimerId);
-      window.clearInterval(intervalId);
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [refreshSnapshots, socketState]);
 
+  useEffect(() => {
+    const pendingSessionTimers = pendingSessionTimersRef.current;
+
+    return () => {
       for (const timerId of pendingSessionTimers.values()) {
         window.clearTimeout(timerId);
       }
       pendingSessionTimers.clear();
     };
-  }, [refreshSnapshots]);
+  }, []);
 
   const send = useCallback((message: TerminalClientSocketMessage) => {
     const socket = socketRef.current;
@@ -225,6 +234,10 @@ export function useTerminalSessions() {
 
 function parseServerMessage(payload: unknown): TerminalServerSocketMessage | null {
   return parseJsonMessage(payload, terminalServerSocketMessageSchema);
+}
+
+export function shouldPollSnapshots(socketState: TerminalSocketState): boolean {
+  return socketState !== 'open';
 }
 
 export function applyServerMessage(

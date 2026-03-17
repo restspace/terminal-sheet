@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 
-import { serializeJsonMessage } from '../../shared/jsonTransport';
 import type { AttentionService } from '../integrations/attentionService';
 import type { PtySessionManager } from '../pty/ptySessionManager';
 import { readMachineToken } from '../routes/machineAuth';
+import { sendJson } from './sendJson';
 
 interface BackendSocketOptions {
   machineToken: string;
@@ -51,22 +51,4 @@ export async function registerBackendSocket(
       unsubscribeAttention();
     });
   });
-}
-
-function sendJson(
-  socket: {
-    readyState: number;
-    send: (payload: string) => void;
-  },
-  payload: object,
-): void {
-  if (socket.readyState !== 1) {
-    return;
-  }
-
-  try {
-    socket.send(serializeJsonMessage(payload));
-  } catch {
-    // Ignore shutdown races.
-  }
 }

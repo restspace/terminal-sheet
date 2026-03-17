@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
-import { parseJsonMessage, serializeJsonMessage } from '../../shared/jsonTransport';
+import { parseJsonMessage } from '../../shared/jsonTransport';
 import {
   terminalClientSocketMessageSchema,
   type TerminalClientSocketMessage,
@@ -8,6 +8,7 @@ import {
 import type { MarkdownService } from '../markdown/markdownService';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
+import { sendJson } from './sendJson';
 
 interface WorkspaceSocketOptions {
   runtimeManager: BackendRuntimeManager;
@@ -120,23 +121,5 @@ function handleClientMessage(
     case 'terminal.mark-read':
       runtimeManager.markRead(message.sessionId);
       return;
-  }
-}
-
-function sendJson(
-  socket: {
-    readyState: number;
-    send: (payload: string) => void;
-  },
-  payload: object,
-): void {
-  if (socket.readyState !== 1) {
-    return;
-  }
-
-  try {
-    socket.send(serializeJsonMessage(payload));
-  } catch {
-    // Ignore send races against socket shutdown; reconnect logic handles recovery.
   }
 }
