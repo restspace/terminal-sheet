@@ -178,16 +178,23 @@ export function TerminalSurface({
       }
 
       lastSizeRef.current = sizeKey;
-      terminal.resize(effectiveCols, size.rows);
 
       if (readOnly) {
-        syncReadOnlyViewport(
-          terminal,
-          terminalRef.current === terminal && shouldStickToBottomRef.current,
-        );
-      }
-
-      if (!readOnly) {
+        // Queue the resize through xterm's write pipeline so it executes
+        // AFTER any pending terminal.write() calls. A synchronous resize
+        // between queued writes can reflow the buffer and displace the
+        // cursor, causing \r-based ticker updates to land on the wrong
+        // line (the "frozen ticker" artifact).
+        const cols = effectiveCols;
+        const rows = size.rows;
+        const stickToBottom =
+          terminalRef.current === terminal && shouldStickToBottomRef.current;
+        terminal.write('', () => {
+          terminal.resize(cols, rows);
+          syncReadOnlyViewport(terminal, stickToBottom);
+        });
+      } else {
+        terminal.resize(effectiveCols, size.rows);
         syncBackendSize(effectiveCols, size.rows);
       }
     };

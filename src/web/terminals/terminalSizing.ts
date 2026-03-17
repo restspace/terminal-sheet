@@ -15,6 +15,17 @@ export const DEFAULT_TERMINAL_CELL_SIZE: TerminalCellSize = {
   height: DEFAULT_CELL_HEIGHT,
 };
 
+function getCssTransformScale(element: HTMLElement): number {
+  const rect = element.getBoundingClientRect();
+  const layoutWidth = element.offsetWidth;
+
+  if (layoutWidth > 0 && rect.width > 0) {
+    return rect.width / layoutWidth;
+  }
+
+  return 1;
+}
+
 export function measureCellSize(
   container: HTMLDivElement,
   fallback: TerminalCellSize = DEFAULT_TERMINAL_CELL_SIZE,
@@ -31,9 +42,10 @@ export function measureCellSize(
 
   container.appendChild(probe);
 
+  const scale = getCssTransformScale(container);
   const probeRect = probe.getBoundingClientRect();
-  const width = probeRect.width / PROBE_TEXT.length;
-  const height = probeRect.height * TERMINAL_LINE_HEIGHT;
+  const width = probeRect.width / scale / PROBE_TEXT.length;
+  const height = (probeRect.height / scale) * TERMINAL_LINE_HEIGHT;
 
   probe.remove();
 
