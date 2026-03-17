@@ -4,6 +4,7 @@ import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { CameraViewport, TerminalNode } from '../../shared/workspace';
 import {
   getTerminalDisplayStatus,
+  getTerminalRuntimePath,
 } from './presentation';
 import { TerminalFocusSurface } from './TerminalFocusSurface';
 import { TerminalTitleBar } from './TerminalTitleBar';
@@ -25,6 +26,7 @@ interface FocusedTerminalOverlayProps {
     nodeId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onPathSelectRequest: (terminalId: string) => void;
   onRemove: (terminalId: string) => void;
   onRestart: (sessionId: string) => void;
 }
@@ -40,11 +42,13 @@ export function FocusedTerminalOverlay({
   onResize,
   onBoundsChange,
   onTerminalChange,
+  onPathSelectRequest,
   onRemove,
   onRestart,
 }: FocusedTerminalOverlayProps) {
   const overlayStyle = createOverlayStyle(terminal, viewport);
   const status = getTerminalDisplayStatus(terminal, session);
+  const liveCwd = getTerminalRuntimePath(terminal, session, 'cwd');
   const dragStateRef = useRef<{
     originX: number;
     originY: number;
@@ -133,6 +137,8 @@ export function FocusedTerminalOverlay({
           className="terminal-window-header"
           terminal={terminal}
           status={status}
+          currentPath={liveCwd}
+          onPathSelectRequest={onPathSelectRequest}
           onTerminalChange={onTerminalChange}
           onClose={onRemove}
           sidecar={

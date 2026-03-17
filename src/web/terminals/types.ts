@@ -23,6 +23,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
     nodeId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onPathSelectRequest: (terminalId: string) => void;
   onRemove: (terminalId: string) => void;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;

@@ -234,6 +234,140 @@ describe('createServer web entrypoint', () => {
       await app.close();
     }
   });
+
+  it('lists directories and filtered files from the filesystem API', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const contentRoot = join(tempDirectory, 'project');
+    const workspaceDirectory = join(tempDirectory, '.terminal-canvas');
+    await mkdir(contentRoot, { recursive: true });
+    await mkdir(workspaceDirectory, { recursive: true });
+    await mkdir(join(contentRoot, 'docs'), { recursive: true });
+    await writeFile(join(contentRoot, 'README.md'), '# Readme\n', 'utf8');
+    await writeFile(join(contentRoot, 'Guide.MARKDOWN'), '# Guide\n', 'utf8');
+    await writeFile(join(contentRoot, 'notes.txt'), 'notes\n', 'utf8');
+
+    const app = await createServer({
+      port: 4312,
+      workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
+      contentRoot,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/list',
+        payload: {
+          server: 'local',
+          directoryPath: '.',
+          includeFiles: true,
+          extensions: ['.md', '.markdown'],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const payload = response.json() as {
+        directoryPath: string;
+        parentDirectoryPath: string | null;
+        entries: Array<{
+          name: string;
+          path: string;
+          kind: 'directory' | 'file';
+        }>;
+      };
+
+      expect(payload.directoryPath).toBe(contentRoot);
+      expect(payload.parentDirectoryPath).toBe(tempDirectory);
+      expect(payload.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'docs',
+            kind: 'directory',
+          }),
+          expect.objectContaining({
+            name: 'README.md',
+            kind: 'file',
+          }),
+          expect.objectContaining({
+            name: 'Guide.MARKDOWN',
+            kind: 'file',
+          }),
+        ]),
+      );
+      expect(payload.entries).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'notes.txt',
+          }),
+        ]),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns directories only when includeFiles is false', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const contentRoot = join(tempDirectory, 'project');
+    const workspaceDirectory = join(tempDirectory, '.terminal-canvas');
+    await mkdir(contentRoot, { recursive: true });
+    await mkdir(workspaceDirectory, { recursive: true });
+    await mkdir(join(contentRoot, 'src'), { recursive: true });
+    await writeFile(join(contentRoot, 'README.md'), '# Readme\n', 'utf8');
+
+    const app = await createServer({
+      port: 4312,
+      workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
+      contentRoot,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/list',
+        payload: {
+          server: 'local',
+          directoryPath: '.',
+          includeFiles: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(
+        response
+          .json()
+          .entries.every((entry: { kind: string }) => entry.kind === 'directory'),
+      ).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unsupported filesystem servers', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 4312,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/list',
+        payload: {
+          server: 'remote-server-1',
+        },
+      });
+
+      expect(response.statusCode).toBe(501);
+      expect(response.json()).toMatchObject({
+        message:
+          "Filesystem server 'remote-server-1' is not supported yet.",
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 async function createWebRoot(tempDirectory: string): Promise<string> {

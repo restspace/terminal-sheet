@@ -1,12 +1,14 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 
 import type { TerminalNode, TerminalStatus } from '../../shared/workspace';
 
 interface TerminalTitleBarProps {
   terminal: TerminalNode;
   status: TerminalStatus;
+  currentPath?: string;
   className?: string;
   sidecar?: ReactNode;
+  onPathSelectRequest?: (terminalId: string) => void;
   onTerminalChange?: (
     terminalId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
@@ -17,14 +19,18 @@ interface TerminalTitleBarProps {
 export function TerminalTitleBar({
   terminal,
   status,
+  currentPath,
   className,
   sidecar,
+  onPathSelectRequest,
   onTerminalChange,
   onClose,
 }: TerminalTitleBarProps) {
   const labelInputRef = useRef<HTMLInputElement | null>(null);
-  const pathLabel =
-    terminal.repoLabel ?? terminal.taskLabel ?? 'local workspace';
+  const pathValue = (currentPath?.trim() || terminal.cwd || '.').trim();
+  const pathBubbleStyle = getPathBubbleStyle(pathValue);
+  const pathLabel = formatPathBubbleLabel(pathValue);
+  const statusLabel = formatStatusLabel(status);
 
   useEffect(() => {
     if (
@@ -60,9 +66,29 @@ export function TerminalTitleBar({
         <span className="terminal-header-token" title={terminal.shell}>
           {terminal.shell}
         </span>
-        <span className="terminal-header-token" title={pathLabel}>
-          {pathLabel}
-        </span>
+        {onPathSelectRequest ? (
+          <button
+            type="button"
+            className="terminal-header-token terminal-header-token-path terminal-header-token-button nodrag nopan"
+            title={pathValue}
+            style={pathBubbleStyle}
+            onPointerDown={stopPointerEventPropagation}
+            onClick={(event) => {
+              stopEventPropagation(event);
+              onPathSelectRequest(terminal.id);
+            }}
+          >
+            {pathLabel}
+          </button>
+        ) : (
+          <span
+            className="terminal-header-token terminal-header-token-path"
+            title={pathValue}
+            style={pathBubbleStyle}
+          >
+            {pathLabel}
+          </span>
+        )}
       </div>
       <div className="terminal-header-sidecar">
         {sidecar}
@@ -80,7 +106,7 @@ export function TerminalTitleBar({
             Close
           </button>
         ) : null}
-        <span className={`canvas-node-status is-${status}`}>{status}</span>
+        <span className={`canvas-node-status is-${status}`}>{statusLabel}</span>
       </div>
     </div>
   );
@@ -96,4 +122,61 @@ function stopPointerEventPropagation(event: {
 }): void {
   event.preventDefault();
   event.stopPropagation();
+}
+
+const DIRECTORY_BUBBLE_COLORS = [
+  'rgba(66, 104, 141, 0.52)',
+  'rgba(58, 122, 122, 0.5)',
+  'rgba(82, 111, 84, 0.52)',
+  'rgba(118, 92, 58, 0.5)',
+  'rgba(97, 84, 130, 0.52)',
+  'rgba(104, 70, 95, 0.52)',
+  'rgba(57, 114, 150, 0.52)',
+  'rgba(92, 117, 62, 0.5)',
+  'rgba(121, 89, 61, 0.52)',
+  'rgba(71, 92, 121, 0.52)',
+] as const;
+
+const directoryPathColorByPath = new Map<string, string>();
+let nextDirectoryColorIndex = 0;
+
+function getPathBubbleStyle(pathValue: string): CSSProperties {
+  return {
+    background: getDirectoryBubbleColor(pathValue),
+    borderColor: 'rgba(154, 202, 245, 0.28)',
+  };
+}
+
+function getDirectoryBubbleColor(pathValue: string): string {
+  const normalizedPath = pathValue.trim() || '.';
+  const existingColor = directoryPathColorByPath.get(normalizedPath);
+
+  if (existingColor) {
+    return existingColor;
+  }
+
+  const color = DIRECTORY_BUBBLE_COLORS[
+    nextDirectoryColorIndex % DIRECTORY_BUBBLE_COLORS.length
+  ] as string;
+  nextDirectoryColorIndex += 1;
+  directoryPathColorByPath.set(normalizedPath, color);
+  return color;
+}
+
+function formatPathBubbleLabel(pathValue: string, maxLength = 34): string {
+  const normalizedPath = pathValue.trim() || '.';
+
+  if (normalizedPath.length <= maxLength) {
+    return normalizedPath;
+  }
+
+  return `...${normalizedPath.slice(-(maxLength - 3))}`;
+}
+
+function formatStatusLabel(status: TerminalStatus): string {
+  if (status === 'active-output') {
+    return 'running';
+  }
+
+  return status;
 }

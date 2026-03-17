@@ -1,0 +1,149 @@
+/** @vitest-environment jsdom */
+
+import { createElement } from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+let mockZoom = 1;
+
+vi.mock('@xyflow/react', () => ({
+  useViewport: () => ({ zoom: mockZoom }),
+}));
+
+vi.mock('../canvas/CanvasResizeHandles', () => ({
+  CanvasResizeHandles: () => null,
+}));
+
+import type { MarkdownDocumentState } from '../../shared/markdown';
+import { createPlaceholderMarkdown } from '../../shared/workspace';
+import { MarkdownPlaceholderNode } from './MarkdownPlaceholderNode';
+
+const reactActEnvironment = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+};
+
+describe('MarkdownPlaceholderNode', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    mockZoom = 1;
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    document.body.innerHTML = '';
+    reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    vi.clearAllMocks();
+  });
+
+  it('marks inspect-mode markdown preview bodies as nowheel regions', () => {
+    const markdown = createPlaceholderMarkdown(0);
+
+    act(() => {
+      root.render(
+        createElement(
+          MarkdownPlaceholderNode,
+          createNodeProps({
+            markdown,
+            document: createDocumentState(markdown.id, markdown.filePath),
+          }),
+        ),
+      );
+    });
+
+    const previewBody = container.querySelector(
+      '.markdown-preview-card .markdown-panel-body',
+    );
+
+    expect(previewBody).not.toBeNull();
+    expect(previewBody?.className).toContain('nowheel');
+    expect(previewBody?.className).toContain('nopan');
+    expect(previewBody?.className).toContain('nodrag');
+  });
+
+  it('marks focus-mode markdown editor and preview bodies as nowheel regions', () => {
+    const markdown = createPlaceholderMarkdown(0);
+    mockZoom = 1.2;
+
+    act(() => {
+      root.render(
+        createElement(
+          MarkdownPlaceholderNode,
+          createNodeProps({
+            markdown,
+            document: createDocumentState(markdown.id, markdown.filePath),
+          }),
+        ),
+      );
+    });
+
+    const focusBodies = [
+      ...container.querySelectorAll<HTMLDivElement>(
+        '.markdown-focus-card .markdown-panel-body',
+      ),
+    ];
+
+    expect(focusBodies).toHaveLength(2);
+    for (const panelBody of focusBodies) {
+      expect(panelBody.className).toContain('nowheel');
+      expect(panelBody.className).toContain('nopan');
+      expect(panelBody.className).toContain('nodrag');
+    }
+  });
+});
+
+function createNodeProps(options: {
+  markdown: ReturnType<typeof createPlaceholderMarkdown>;
+  document: MarkdownDocumentState;
+}): Parameters<typeof MarkdownPlaceholderNode>[0] {
+  return {
+    id: options.markdown.id,
+    data: {
+      markdown: options.markdown,
+      document: options.document,
+      activeLinks: [],
+      onSelect: vi.fn(),
+      onFocusRequest: vi.fn(),
+      onRemove: vi.fn(),
+      onBoundsChange: vi.fn(),
+      onDocumentLoad: vi.fn(),
+      onDocumentChange: vi.fn(),
+      onDocumentSave: vi.fn(),
+      onResolveConflict: vi.fn(),
+      allowResize: true,
+    },
+    width: options.markdown.bounds.width,
+    height: options.markdown.bounds.height,
+    selected: false,
+    dragging: false,
+    zIndex: 1,
+    isConnectable: false,
+    type: 'markdown',
+  } as unknown as Parameters<typeof MarkdownPlaceholderNode>[0];
+}
+
+function createDocumentState(
+  nodeId: string,
+  filePath: string,
+): MarkdownDocumentState {
+  return {
+    nodeId,
+    filePath,
+    content: '# Title\n\nParagraph',
+    savedContent: '# Title\n\nParagraph',
+    status: 'ready',
+    readOnly: false,
+    externalVersion: 'v1',
+    dirty: false,
+    error: null,
+    conflict: null,
+  };
+}

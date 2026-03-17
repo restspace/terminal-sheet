@@ -246,6 +246,10 @@ button:disabled {
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
 }
 
+.workspace-modal.workspace-modal-file-picker {
+  width: min(72rem, calc(100vw - 2rem));
+}
+
 .workspace-modal-header,
 .workspace-modal-actions {
   display: flex;
@@ -284,6 +288,147 @@ button:disabled {
 
 .workspace-modal-error {
   color: #ffb2aa;
+}
+
+.file-picker-meta {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.file-picker-meta span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.68rem;
+  line-height: 1.15;
+}
+
+.file-picker-columns {
+  display: flex;
+  gap: 0.75rem;
+  min-height: 16rem;
+  max-height: min(56vh, 33rem);
+  overflow: auto;
+  padding-bottom: 0.25rem;
+}
+
+.file-picker-column {
+  width: min(18rem, calc(100vw - 4rem));
+  min-width: 15rem;
+  border: 1px solid rgba(138, 180, 216, 0.14);
+  border-radius: 0.85rem;
+  background: rgba(7, 16, 26, 0.74);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.file-picker-column.is-active {
+  border-color: rgba(154, 202, 245, 0.55);
+}
+
+.file-picker-column-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid rgba(138, 180, 216, 0.12);
+}
+
+.file-picker-column-header span {
+  min-width: 0;
+  font-size: 0.69rem;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-picker-up-button {
+  flex-shrink: 0;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 0.55rem;
+  padding: 0;
+}
+
+.file-picker-entry-list {
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.file-picker-entry {
+  width: 100%;
+  border-radius: 0.55rem;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.3rem 0.35rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  text-align: left;
+}
+
+.file-picker-entry:hover:not(:disabled) {
+  transform: none;
+}
+
+.file-picker-entry.is-directory {
+  color: #dce8f5;
+}
+
+.file-picker-entry.is-file {
+  color: #c7d7e8;
+}
+
+.file-picker-entry.is-selected {
+  border-color: rgba(154, 202, 245, 0.35);
+  background: rgba(71, 111, 145, 0.26);
+}
+
+.file-picker-entry-kind {
+  flex-shrink: 0;
+  padding: 0.12rem 0.34rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.file-picker-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-picker-empty {
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.75rem;
+  color: rgba(220, 232, 244, 0.72);
+}
+
+.file-picker-selection {
+  margin: 0;
+  max-width: min(45rem, 70vw);
+  min-width: 0;
+  padding: 0.24rem 0.5rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(138, 180, 216, 0.14);
+  background: rgba(6, 13, 20, 0.72);
+  font-size: 0.72rem;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attention-feed {
@@ -889,6 +1034,23 @@ button:disabled {
   color: #c6d8e7;
 }
 
+.terminal-header-token-path {
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+  max-width: 14.5rem;
+}
+
+.terminal-header-token-button {
+  cursor: pointer;
+  width: auto;
+  max-width: 16rem;
+  text-transform: none;
+}
+
+.terminal-header-token-button:hover:not(:disabled) {
+  transform: none;
+  border-color: rgba(154, 202, 245, 0.45);
+}
+
 .terminal-inline-input {
   width: auto;
   color: inherit;
@@ -1248,11 +1410,13 @@ button:disabled {
 
 .canvas-node-status {
   flex-shrink: 0;
+  min-width: 9ch;
   padding: 0.22rem 0.44rem;
   border-radius: 999px;
   font-size: 0.68rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  text-align: center;
 }
 
 .canvas-node-status.is-idle {

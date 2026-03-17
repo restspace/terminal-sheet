@@ -128,6 +128,8 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
             className="node-drag-handle canvas-node-header terminal-window-header"
             terminal={terminal}
             status={status}
+            currentPath={liveCwd}
+            onPathSelectRequest={data.onPathSelectRequest}
             onTerminalChange={onTerminalChange}
             onClose={onRemove}
           />

@@ -130,7 +130,10 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
                 </button>
               </div>
             </div>
-            <div className="markdown-panel-body">
+            <div
+              className="markdown-panel-body nodrag nopan nowheel"
+              onWheel={stopEventPropagation}
+            >
               <MarkdownRenderer content={document?.content ?? ''} />
             </div>
           </div>
@@ -215,7 +218,10 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
               }
             >
               {focusPanel !== 'preview' ? (
-                <div className="markdown-panel-body is-editor">
+                <div
+                  className="markdown-panel-body is-editor nodrag nopan nowheel"
+                  onWheel={stopEventPropagation}
+                >
                   {document ? (
                     <CodeMirrorMarkdownEditor
                       value={document.content}
@@ -237,7 +243,10 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
               ) : null}
 
               {focusPanel !== 'edit' ? (
-                <div className="markdown-panel-body">
+                <div
+                  className="markdown-panel-body nodrag nopan nowheel"
+                  onWheel={stopEventPropagation}
+                >
                   <MarkdownRenderer content={document?.content ?? ''} />
                 </div>
               ) : null}

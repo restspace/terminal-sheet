@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type {
   AttentionIntegrationSetup,
 } from '../../shared/events';
+import { LOCAL_BACKEND_ID } from '../../shared/backends';
 import {
   isAttentionRequiredStatus,
   shouldNotifyForAttentionEvent,
@@ -23,6 +24,7 @@ import {
 } from '../canvas/focus';
 import { WorkspaceCanvas } from '../canvas/WorkspaceCanvas';
 import { buildAttentionFooterSummary } from './attentionSummary';
+import { FileSystemPickerModal } from './FileSystemPickerModal';
 import { fetchAttentionSetup } from '../state/attentionClient';
 import { useMarkdownDocuments } from '../state/useMarkdownDocuments';
 import { useTerminalSessions } from '../state/useTerminalSessions';
@@ -98,6 +100,8 @@ export function App() {
   const [createMarkdownError, setCreateMarkdownError] = useState<string | null>(
     null,
   );
+  const [fileSystemPicker, setFileSystemPicker] =
+    useState<FileSystemPickerState | null>(null);
   const [isAttentionFeedExpanded, setIsAttentionFeedExpanded] = useState(false);
   const {
     documents: markdownDocuments,
@@ -440,6 +444,75 @@ export function App() {
     setIsCreateMarkdownDialogOpen(true);
   }
 
+  function openTerminalDirectoryPicker(terminalId: string) {
+    const terminal = terminals.find((candidate) => candidate.id === terminalId);
+
+    if (!terminal) {
+      return;
+    }
+
+    const session = sessions[terminalId] ?? null;
+    const initialDirectoryPath = getTerminalRuntimePath(
+      terminal,
+      session,
+      'cwd',
+    );
+
+    setFileSystemPicker({
+      mode: 'directory',
+      server: terminal.backendId ?? LOCAL_BACKEND_ID,
+      initialDirectoryPath,
+      title: 'Select working directory',
+      subtitle: terminal.label,
+      confirmLabel: 'Select folder',
+      terminalId,
+    });
+  }
+
+  function openMarkdownPicker() {
+    setFileSystemPicker({
+      mode: 'file',
+      server: LOCAL_BACKEND_ID,
+      initialDirectoryPath: '.',
+      title: 'Open Markdown',
+      subtitle: 'Browse project files',
+      confirmLabel: 'Open',
+      extensions: ['.md', '.markdown'],
+    });
+  }
+
+  async function confirmFileSystemPicker(selectedPath: string): Promise<void> {
+    if (!fileSystemPicker) {
+      return;
+    }
+
+    if (fileSystemPicker.mode === 'directory') {
+      if (!fileSystemPicker.terminalId) {
+        throw new Error('Terminal selection is missing.');
+      }
+
+      const terminal = terminals.find(
+        (candidate) => candidate.id === fileSystemPicker.terminalId,
+      );
+      const session = sessions[fileSystemPicker.terminalId] ?? null;
+
+      updateTerminal(fileSystemPicker.terminalId, {
+        cwd: selectedPath,
+      });
+
+      if (terminal && session?.connected) {
+        sendInput(
+          terminal.id,
+          buildCwdSwitchCommand(terminal.shell, selectedPath),
+        );
+      }
+      return;
+    }
+
+    const response = await openDocument(selectedPath);
+    focusMarkdown(response.node.id);
+  }
+
   function closeCreateMarkdownDialog() {
     setIsCreateMarkdownDialogOpen(false);
     setCreateMarkdownError(null);
@@ -602,6 +675,7 @@ export function App() {
         onTerminalResize={resizeSession}
         onTerminalRestart={handleTerminalRestart}
         onTerminalChange={updateTerminal}
+        onPathSelectRequest={openTerminalDirectoryPicker}
         onTerminalRemove={handleTerminalRemove}
         onMarkTerminalRead={handleMarkTerminalRead}
         onMarkdownDrop={(markdownNodeId, terminalId) => {
@@ -703,15 +777,7 @@ export function App() {
             <button
               type="button"
               onClick={() => {
-                const filePath = window.prompt('Open Markdown path');
-
-                if (!filePath?.trim()) {
-                  return;
-                }
-
-                void openDocument(filePath.trim()).then((response) => {
-                  focusMarkdown(response.node.id);
-                });
+                openMarkdownPicker();
               }}
             >
               Open Markdown
@@ -894,8 +960,35 @@ export function App() {
           </section>
         </div>
       ) : null}
+
+      {fileSystemPicker ? (
+        <FileSystemPickerModal
+          title={fileSystemPicker.title}
+          subtitle={fileSystemPicker.subtitle}
+          server={fileSystemPicker.server}
+          mode={fileSystemPicker.mode}
+          initialDirectoryPath={fileSystemPicker.initialDirectoryPath}
+          extensions={fileSystemPicker.extensions}
+          confirmLabel={fileSystemPicker.confirmLabel}
+          onConfirm={confirmFileSystemPicker}
+          onClose={() => {
+            setFileSystemPicker(null);
+          }}
+        />
+      ) : null}
     </div>
   );
+}
+
+interface FileSystemPickerState {
+  mode: 'directory' | 'file';
+  server: string;
+  initialDirectoryPath?: string;
+  title: string;
+  subtitle?: string;
+  confirmLabel: string;
+  terminalId?: string;
+  extensions?: string[];
 }
 
 interface AttentionFeedProps {
@@ -1169,4 +1262,30 @@ function getConfiguredFooterAgent(
   }
 
   return null;
+}
+
+function buildCwdSwitchCommand(shell: string, directoryPath: string): string {
+  const lowerShell = shell.toLowerCase();
+
+  if (lowerShell.includes('powershell')) {
+    return `Set-Location -LiteralPath '${escapePowerShellLiteral(directoryPath)}'\r`;
+  }
+
+  if (lowerShell.includes('cmd')) {
+    return `cd /d "${escapeCmdQuoted(directoryPath)}"\r`;
+  }
+
+  return `cd -- '${escapePosixSingleQuoted(directoryPath)}'\n`;
+}
+
+function escapePowerShellLiteral(input: string): string {
+  return input.replaceAll("'", "''");
+}
+
+function escapeCmdQuoted(input: string): string {
+  return input.replaceAll('"', '""');
+}
+
+function escapePosixSingleQuoted(input: string): string {
+  return input.replaceAll("'", "'\"'\"'");
 }

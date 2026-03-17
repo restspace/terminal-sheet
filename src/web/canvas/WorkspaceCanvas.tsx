@@ -51,6 +51,7 @@ interface WorkspaceCanvasProps {
     nodeId: string,
     patch: Partial<Pick<TerminalNode, 'label' | 'cwd'>>,
   ) => void;
+  onPathSelectRequest: (terminalId: string) => void;
   onTerminalRemove: (terminalId: string) => void;
   onMarkTerminalRead: (sessionId: string) => void;
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
@@ -94,6 +95,7 @@ export function WorkspaceCanvas({
   onTerminalResize,
   onTerminalRestart,
   onTerminalChange,
+  onPathSelectRequest,
   onTerminalRemove,
   onMarkTerminalRead,
   onMarkdownDrop,
@@ -397,6 +399,7 @@ export function WorkspaceCanvas({
           onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
         },
         onTerminalChange,
+        onPathSelectRequest,
         onRemove: onTerminalRemove,
         onInput: onTerminalInput,
         onResize: onTerminalResize,
@@ -421,6 +424,7 @@ export function WorkspaceCanvas({
       onDocumentSave,
       onSelectedNodeChange,
       onTerminalChange,
+      onPathSelectRequest,
       onTerminalInput,
       onTerminalRemove,
       onTerminalResize,
@@ -581,6 +585,7 @@ export function WorkspaceCanvas({
                 );
               }}
               onTerminalChange={onTerminalChange}
+              onPathSelectRequest={onPathSelectRequest}
               onRemove={onTerminalRemove}
               onRestart={onTerminalRestart}
             />
@@ -604,6 +609,7 @@ export function WorkspaceCanvas({
               );
             }}
             onTerminalChange={onTerminalChange}
+            onPathSelectRequest={onPathSelectRequest}
             onRemove={onTerminalRemove}
             onRestart={onTerminalRestart}
           />
@@ -625,6 +631,7 @@ export function WorkspaceCanvas({
             );
           }}
           onTerminalChange={onTerminalChange}
+          onPathSelectRequest={onPathSelectRequest}
           onRemove={onTerminalRemove}
           onRestart={onTerminalRestart}
         />

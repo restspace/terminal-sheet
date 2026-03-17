@@ -11,9 +11,11 @@ import { registerSessionRoutes } from './routes/sessions';
 import { registerAttentionRoutes } from './routes/attention';
 import { registerBackendRoutes } from './routes/backends';
 import { registerBackendMachineRoutes } from './routes/backendMachine';
+import { registerFileSystemRoutes } from './routes/filesystem';
 import { registerMarkdownRoutes } from './routes/markdown';
 import { registerWorkspaceRoutes } from './routes/workspace';
 import { AttentionService } from './integrations/attentionService';
+import { LocalFileSystemService } from './filesystem/localFileSystemService';
 import { MarkdownService } from './markdown/markdownService';
 import { WorkspaceService } from './persistence/workspaceService';
 import { PtySessionManager } from './pty/ptySessionManager';
@@ -47,6 +49,7 @@ export async function createServer(
     contentRoot,
     dirname(options.workspaceFilePath),
   );
+  const localFileSystemService = new LocalFileSystemService(contentRoot);
   const attentionService = new AttentionService({
     backendId: localBackendId,
     receiverUrl: `http://127.0.0.1:${options.port}/api/attention`,
@@ -130,6 +133,9 @@ export async function createServer(
   await registerMarkdownRoutes(app, {
     markdownService,
     workspaceService,
+  });
+  await registerFileSystemRoutes(app, {
+    localFileSystemService,
   });
   await registerWorkspaceRoutes(app, {
     workspaceService,

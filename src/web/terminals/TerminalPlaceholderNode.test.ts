@@ -143,6 +143,7 @@ function createNodeProps(options: {
       onSelect: vi.fn(),
       onBoundsChange: vi.fn(),
       onTerminalChange: vi.fn(),
+      onPathSelectRequest: vi.fn(),
       onRemove: vi.fn(),
       onInput: vi.fn(),
       onResize: vi.fn(),
