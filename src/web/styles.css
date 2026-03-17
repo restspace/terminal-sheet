@@ -1037,6 +1037,9 @@ button:disabled {
 .terminal-header-token-path {
   font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
   max-width: 14.5rem;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
 }
 
 .terminal-header-token-button {

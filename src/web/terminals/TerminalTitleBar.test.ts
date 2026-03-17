@@ -32,7 +32,7 @@ describe('TerminalTitleBar path bubble', () => {
     vi.clearAllMocks();
   });
 
-  it('shows the right end of long cwd values and keeps full path in title', () => {
+  it('renders long cwd values without JS truncation and keeps full path in title', () => {
     const terminal = createPlaceholderTerminal(0);
     const longPath = '/workspace/services/terminal-sheet/src/web/components/finder/modal';
 
@@ -53,8 +53,7 @@ describe('TerminalTitleBar path bubble', () => {
 
     expect(pathBubble).not.toBeNull();
     expect(pathBubble?.getAttribute('title')).toBe(longPath);
-    expect(pathBubble?.textContent?.startsWith('...')).toBe(true);
-    expect(pathBubble?.textContent?.endsWith('/finder/modal')).toBe(true);
+    expect(pathBubble?.textContent).toBe(longPath);
   });
 
   it('assigns consistent colors for the same directory and different colors for different directories', () => {

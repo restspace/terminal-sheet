@@ -29,7 +29,7 @@ export function TerminalTitleBar({
   const labelInputRef = useRef<HTMLInputElement | null>(null);
   const pathValue = (currentPath?.trim() || terminal.cwd || '.').trim();
   const pathBubbleStyle = getPathBubbleStyle(pathValue);
-  const pathLabel = formatPathBubbleLabel(pathValue);
+  const pathLabel = pathValue;
   const statusLabel = formatStatusLabel(status);
 
   useEffect(() => {
@@ -161,16 +161,6 @@ function getDirectoryBubbleColor(pathValue: string): string {
   nextDirectoryColorIndex += 1;
   directoryPathColorByPath.set(normalizedPath, color);
   return color;
-}
-
-function formatPathBubbleLabel(pathValue: string, maxLength = 34): string {
-  const normalizedPath = pathValue.trim() || '.';
-
-  if (normalizedPath.length <= maxLength) {
-    return normalizedPath;
-  }
-
-  return `...${normalizedPath.slice(-(maxLength - 3))}`;
 }
 
 function formatStatusLabel(status: TerminalStatus): string {
