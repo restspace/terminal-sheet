@@ -1,11 +1,11 @@
 {
-  "name": "terminal-canvas",
+  "name": "tsheet",
   "version": "0.1.0",
   "description": "Local-first browser canvas for supervising multiple AI terminal sessions.",
   "type": "module",
   "bin": {
-    "tsheet": "./dist/server/index.js",
-    "terminal-canvas": "./dist/server/index.js"
+    "tsheet": "dist/server/index.js",
+    "terminal-canvas": "dist/server/index.js"
   },
   "files": [
     "dist"

@@ -151,6 +151,15 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.workspace-toolbar-error {
+  max-width: 16rem;
+  font-size: 0.66rem;
+  color: rgba(255, 140, 130, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toolbar-center-strip {
   flex: 1 1 auto;
   min-width: 0;
@@ -224,7 +233,7 @@ button:disabled {
 }
 
 .workspace-modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 20;
   display: grid;
@@ -1862,6 +1871,22 @@ body.is-dragging-terminal-overlay {
   border-radius: 0.6rem;
 }
 
+.backend-row.is-newly-added {
+  border-color: rgba(138, 198, 255, 0.75);
+  box-shadow: 0 0 0 1px rgba(138, 198, 255, 0.25);
+  animation: backend-row-highlight 3s ease-out;
+}
+
+@keyframes backend-row-highlight {
+  0% {
+    background: rgba(95, 166, 231, 0.34);
+  }
+
+  100% {
+    background: rgba(138, 180, 216, 0.05);
+  }
+}
+
 .backend-row-info {
   display: flex;
   flex-direction: column;
@@ -1888,6 +1913,19 @@ body.is-dragging-terminal-overlay {
 
 .backend-row-error {
   color: rgba(255, 140, 130, 0.85);
+}
+
+.backend-row-new-badge {
+  align-self: flex-start;
+  padding: 0.08rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(85, 164, 237, 0.2);
+  border: 1px solid rgba(120, 186, 246, 0.55);
+  color: #d6ecff;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .backend-row-actions {
@@ -2010,6 +2048,18 @@ body.is-dragging-terminal-overlay {
   gap: 0.45rem;
 }
 
+.backend-inline-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.backend-inline-button {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  padding: 0.3rem 0.6rem;
+}
+
 .backend-form-field {
   display: flex;
   flex-direction: column;
@@ -2025,6 +2075,19 @@ body.is-dragging-terminal-overlay {
   border: 1px solid rgba(138, 180, 216, 0.18);
   border-radius: 0.4rem;
   color: #d7eaf8;
+}
+
+.backend-checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.74rem;
+  color: #b7ccde;
+}
+
+.backend-checkbox-field input[type='checkbox'] {
+  width: auto;
+  margin: 0;
 }
 
 .backend-form-error {

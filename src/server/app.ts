@@ -22,6 +22,7 @@ import { MarkdownService } from './markdown/markdownService';
 import { WorkspaceService } from './persistence/workspaceService';
 import { PtySessionManager } from './pty/ptySessionManager';
 import { BackendRuntimeManager } from './runtime/backendRuntimeManager';
+import { SshTunnelManager } from './runtime/sshTunnelManager';
 import { registerBackendSocket } from './ws/registerBackendSocket';
 import { registerWorkspaceSocket } from './ws/registerWorkspaceSocket';
 
@@ -80,9 +81,13 @@ export async function createServer(
       workspaceService,
     },
   );
+  const tunnelManager = new SshTunnelManager(
+    app.log.child({ component: 'ssh-tunnels' }),
+  );
 
   await app.register(websocket);
   await markdownService.syncWithWorkspace(workspaceService.getWorkspace());
+  await tunnelManager.syncWithWorkspace(workspaceService.getWorkspace());
   await runtimeManager.syncWithWorkspace(workspaceService.getWorkspace());
   workspaceService.subscribe((workspace) => {
     void markdownService.syncWithWorkspace(workspace).catch((error) => {
@@ -91,6 +96,14 @@ export async function createServer(
           error: error instanceof Error ? error.message : String(error),
         },
         'Failed to sync markdown documents with workspace update',
+      );
+    });
+    void tunnelManager.syncWithWorkspace(workspace).catch((error) => {
+      app.log.error(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Failed to sync SSH tunnels with workspace update',
       );
     });
     void runtimeManager.syncWithWorkspace(workspace).catch((error) => {
@@ -124,6 +137,8 @@ export async function createServer(
     role,
     workspaceService,
     runtimeManager,
+    tunnelManager,
+    contentRoot,
   });
   await registerBackendMachineRoutes(app, {
     role,
@@ -163,6 +178,7 @@ export async function createServer(
 
   app.addHook('onClose', async () => {
     markdownService.close();
+    await tunnelManager.close();
     await runtimeManager.close();
     ptySessionManager.close();
   });

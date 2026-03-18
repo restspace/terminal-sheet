@@ -62,7 +62,6 @@ export function App() {
     removeTerminal,
     removeMarkdown,
     setViewport,
-    applyCameraPreset,
     saveViewportToPreset,
     setLayoutMode,
   } = useWorkspace();
@@ -105,6 +104,11 @@ export function App() {
   const [terminalShell, setTerminalShell] = useState(getDefaultShell());
   const [terminalAgentType, setTerminalAgentType] =
     useState<AgentType>('shell');
+  const [terminalBackendId, setTerminalBackendId] =
+    useState<string>(LOCAL_BACKEND_ID);
+  const [terminalCreateError, setTerminalCreateError] = useState<string | null>(
+    null,
+  );
   const [focusAutoFocusAtMs, setFocusAutoFocusAtMs] = useState<number | null>(
     null,
   );
@@ -358,6 +362,24 @@ export function App() {
     attentionTerminalCount: attentionTerminalIds.length,
     terminals,
   });
+  const availableTerminalBackends = useMemo(
+    () => [
+      { id: LOCAL_BACKEND_ID, label: 'Local backend' },
+      ...(workspace?.backends.map((backend) => ({
+        id: backend.id,
+        label: backend.label,
+      })) ?? []),
+    ],
+    [workspace],
+  );
+
+  useEffect(() => {
+    if (availableTerminalBackends.some((backend) => backend.id === terminalBackendId)) {
+      return;
+    }
+
+    setTerminalBackendId(LOCAL_BACKEND_ID);
+  }, [availableTerminalBackends, terminalBackendId]);
 
   const focusTerminal = useCallback((terminalId: string) => {
     const terminal = terminals.find((candidate) => candidate.id === terminalId);
@@ -600,10 +622,63 @@ export function App() {
     }
   }, [closeCreateMarkdownDialog, createDocument, createMarkdownPath, focusMarkdown]);
 
-  function launchTerminal(input: CreateTerminalNodeInput) {
-    const createdTerminal = addTerminal(input, { persistImmediately: true });
+  const createRemoteTerminal = useCallback(async (
+    backendId: string,
+    input: CreateTerminalNodeInput,
+  ): Promise<TerminalNode> => {
+    const response = await fetch(
+      `/api/backends/${encodeURIComponent(backendId)}/terminals`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: input.label,
+          shell: input.shell,
+          cwd: input.cwd,
+          agentType: input.agentType,
+          repoLabel: input.repoLabel,
+          taskLabel: input.taskLabel,
+          tags: input.tags ?? [],
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const payload = (await response.json()) as { message?: string };
+      throw new Error(payload.message ?? `Server error ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { terminal?: TerminalNode };
+
+    if (!payload.terminal) {
+      throw new Error('Remote backend did not return a created terminal.');
+    }
+
+    return payload.terminal;
+  }, []);
+
+  async function launchTerminal(input: CreateTerminalNodeInput) {
+    setTerminalCreateError(null);
+
+    let createdTerminal: TerminalNode | null = null;
+    const selectedBackendId = input.backendId ?? LOCAL_BACKEND_ID;
+
+    if (selectedBackendId === LOCAL_BACKEND_ID) {
+      createdTerminal = addTerminal(input, { persistImmediately: true });
+    } else {
+      try {
+        createdTerminal = await createRemoteTerminal(selectedBackendId, input);
+        void refreshWorkspaceFromServer();
+      } catch (error) {
+        setTerminalCreateError(
+          error instanceof Error ? error.message : 'Failed to create remote terminal.',
+        );
+        return;
+      }
+    }
 
     if (!createdTerminal) {
+      setTerminalCreateError('Failed to create terminal.');
       return;
     }
 
@@ -778,7 +853,7 @@ export function App() {
             <button
               type="button"
               onClick={() => {
-                launchTerminal({
+                void launchTerminal({
                   label: getDefaultTerminalLabel(
                     terminalAgentType,
                     workspace.terminals.length + 1,
@@ -786,6 +861,7 @@ export function App() {
                   shell: terminalShell,
                   cwd: '.',
                   agentType: terminalAgentType,
+                  backendId: terminalBackendId,
                 });
               }}
             >
@@ -805,6 +881,23 @@ export function App() {
                     ? 'PowerShell'
                     : getDefaultShell()}
                 </option>
+              </select>
+            </label>
+            <label className="toolbar-select-field">
+              <span className="meta-label">Backend</span>
+              <select
+                className="toolbar-select"
+                value={terminalBackendId}
+                onChange={(event) => {
+                  setTerminalBackendId(event.target.value);
+                  setTerminalCreateError(null);
+                }}
+              >
+                {availableTerminalBackends.map((backend) => (
+                  <option key={backend.id} value={backend.id}>
+                    {backend.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="toolbar-select-field">
@@ -836,6 +929,11 @@ export function App() {
                 <option value="focus-tiles">Focus Tiles</option>
               </select>
             </label>
+            {terminalCreateError ? (
+              <span className="workspace-toolbar-error" title={terminalCreateError}>
+                {terminalCreateError}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={() => {
@@ -852,26 +950,6 @@ export function App() {
             >
               Open Markdown
             </button>
-          </div>
-
-          <div className="preset-strip toolbar-center-strip">
-            {workspace.cameraPresets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className={
-                  preset.id === activePresetId
-                    ? 'preset-button is-active'
-                    : 'preset-button'
-                }
-                onClick={() => {
-                  setActivePresetId(preset.id);
-                  applyCameraPreset(preset.id);
-                }}
-              >
-                {preset.name}
-              </button>
-            ))}
           </div>
 
           <div className="toolbar-cluster toolbar-cluster-actions">
@@ -919,6 +997,7 @@ export function App() {
         <BackendManagerPanel
           asideId="backend-manager-panel"
           serverRole={serverRole}
+          onBackendsChanged={() => refreshWorkspaceFromServer()}
         />
       ) : null}
 

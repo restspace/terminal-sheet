@@ -71,7 +71,7 @@ describe('FileSystemPickerModal', () => {
     });
     await flushPromises();
 
-    const directoryButton = findEntryButtonByName(container, 'apps');
+    const directoryButton = findEntryButtonByName(document, 'apps');
     expect(directoryButton).not.toBeNull();
 
     await act(async () => {
@@ -87,7 +87,7 @@ describe('FileSystemPickerModal', () => {
         includeFiles: false,
       }),
     );
-    expect(container.querySelectorAll('.file-picker-column').length).toBe(2);
+    expect(document.querySelectorAll('.file-picker-column').length).toBe(2);
   });
 
   it('passes markdown extensions and confirms selected file path', async () => {
@@ -126,7 +126,7 @@ describe('FileSystemPickerModal', () => {
       }),
     );
 
-    const fileButton = findEntryButtonByName(container, 'README.md');
+    const fileButton = findEntryButtonByName(document, 'README.md');
     expect(fileButton).not.toBeNull();
 
     await act(async () => {
@@ -134,7 +134,7 @@ describe('FileSystemPickerModal', () => {
     });
     await flushPromises();
 
-    const openButton = findButtonByText(container, 'Open');
+    const openButton = findButtonByText(document, 'Open');
     expect(openButton).not.toBeNull();
 
     await act(async () => {

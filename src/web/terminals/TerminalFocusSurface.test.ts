@@ -358,7 +358,7 @@ describe('ReadOnlyTerminalSurface', () => {
     });
 
     const terminal = getSingleMockTerminal();
-    expect(terminal.writeCalls).toEqual(['hello']);
+    expect(terminal.writeCalls).toEqual(['', 'hello']);
     expect(terminal.onDataHandlerCount).toBe(0);
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(0);
     expect(terminal.options.fontSize).toBe(10.5);
@@ -382,7 +382,7 @@ describe('ReadOnlyTerminalSurface', () => {
       );
     });
 
-    expect(terminal.writeCalls).toEqual(['hello', ' world']);
+    expect(terminal.writeCalls).toEqual(['', 'hello', ' world']);
   });
 
   it('replays the full scrollback after a read-only remount', () => {
@@ -396,7 +396,7 @@ describe('ReadOnlyTerminalSurface', () => {
     });
 
     const firstTerminal = getSingleMockTerminal();
-    expect(firstTerminal.writeCalls).toEqual(['line 1\nline 2']);
+    expect(firstTerminal.writeCalls).toEqual(['', 'line 1\nline 2']);
 
     act(() => {
       root.unmount();
@@ -418,7 +418,7 @@ describe('ReadOnlyTerminalSurface', () => {
     > | undefined;
 
     expect(secondTerminal).toBeDefined();
-    expect(secondTerminal?.writeCalls).toEqual(['line 1\nline 2']);
+    expect(secondTerminal?.writeCalls).toEqual(['', 'line 1\nline 2']);
   });
 
   it('keeps the user scroll position until the reset key changes', () => {

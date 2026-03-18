@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
+import { backendTerminalCreateRequestSchema } from '../../shared/backends';
+import { createTerminalNode } from '../../shared/workspace';
 import type { ServerRole } from '../../shared/backends';
 import type { AttentionService } from '../integrations/attentionService';
 import { rotateServerIdentityToken } from '../persistence/serverIdentityStore';
@@ -57,6 +59,46 @@ export async function registerBackendMachineRoutes(
   app.get('/api/backend/attention/events', async () => ({
     events: options.attentionService.getEvents(),
   }));
+
+  app.post('/api/backend/terminals', async (request, reply) => {
+    const body = backendTerminalCreateRequestSchema.parse(request.body);
+    const workspace = options.workspaceService.getWorkspace();
+
+    if (body.id && workspace.terminals.some((terminal) => terminal.id === body.id)) {
+      return reply.code(409).send({ message: `Terminal ${body.id} already exists.` });
+    }
+
+    const generated = createTerminalNode(
+      {
+        label: body.label,
+        shell: body.shell,
+        cwd: body.cwd,
+        agentType: body.agentType,
+        backendId: options.localBackendId,
+        repoLabel: body.repoLabel,
+        taskLabel: body.taskLabel,
+        tags: body.tags,
+      },
+      workspace.terminals.length,
+      workspace.currentViewport,
+    );
+    const terminal = body.id
+      ? {
+          ...generated,
+          id: body.id,
+        }
+      : generated;
+    const nextWorkspace = {
+      ...workspace,
+      terminals: [...workspace.terminals, terminal],
+    };
+    const savedWorkspace = await options.workspaceService.saveWorkspace(nextWorkspace);
+
+    return {
+      terminal,
+      workspace: savedWorkspace,
+    };
+  });
 
   app.post<{ Params: { sessionId: string } }>(
     '/api/backend/sessions/:sessionId/input',

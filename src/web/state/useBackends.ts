@@ -24,6 +24,17 @@ export interface UseBackendsResult {
   removeBackend: (backendId: string) => Promise<void>;
   rotateBackendToken: (backendId: string) => Promise<void>;
   rotateLocalToken: () => Promise<void>;
+  setupSshBackend: (input: {
+    label: string;
+    sshTarget: string;
+    sshPort?: number;
+    sshIdentityFile?: string;
+    remotePort: number;
+    tokenMode: 'install-output' | 'manual' | 'file';
+    token?: string;
+    tokenPath?: string;
+    runInstall: boolean;
+  }) => Promise<string | null>;
   refresh: () => void;
 }
 
@@ -88,12 +99,18 @@ export function useBackends(isActive: boolean): UseBackendsResult {
       return;
     }
 
-    setIsLoading(true);
-    fetchBackends().finally(() => {
-      if (isMountedRef.current) {
-        setIsLoading(false);
+    const loadInitial = async () => {
+      setIsLoading(true);
+      try {
+        await fetchBackends();
+      } finally {
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
       }
-    });
+    };
+
+    void loadInitial();
 
     const intervalId = setInterval(() => {
       void fetchBackends();
@@ -171,6 +188,45 @@ export function useBackends(isActive: boolean): UseBackendsResult {
     }
   }, []);
 
+  const setupSshBackend = useCallback(
+    async (input: {
+      label: string;
+      sshTarget: string;
+      sshPort?: number;
+      sshIdentityFile?: string;
+      remotePort: number;
+      tokenMode: 'install-output' | 'manual' | 'file';
+      token?: string;
+      tokenPath?: string;
+      runInstall: boolean;
+    }): Promise<string | null> => {
+      const response = await fetch('/api/backends/ssh/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+
+      if (!response.ok) {
+        const data = (await response.json()) as { message?: string };
+        throw new Error(data.message ?? `Server error ${response.status}`);
+      }
+
+      const payload = (await response.json()) as {
+        backend?: {
+          id?: string;
+        };
+      };
+      const backendId =
+        payload.backend && typeof payload.backend.id === 'string'
+          ? payload.backend.id
+          : null;
+
+      await fetchBackends();
+      return backendId;
+    },
+    [fetchBackends],
+  );
+
   return {
     backends,
     tokenInfo,
@@ -180,6 +236,7 @@ export function useBackends(isActive: boolean): UseBackendsResult {
     removeBackend,
     rotateBackendToken,
     rotateLocalToken,
+    setupSshBackend,
     refresh,
   };
 }

@@ -510,10 +510,6 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
 }
 
-function isString(value: string | undefined): value is string {
-  return typeof value === 'string';
-}
-
 function printHelp(): void {
   console.log(`tsheet commands:
   tsheet serve [--port <n>] [--workspace <path>] [--role <standalone|home|remote>] [--no-open]

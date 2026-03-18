@@ -28,6 +28,7 @@ set -euo pipefail
 
 HOME_URL="${homeUrl}"
 TSHEET_PORT=4312
+TSHEET_PACKAGE=tsheet
 
 echo "=== Terminal Sheet Remote Install ==="
 echo "Home server: $HOME_URL"
@@ -66,13 +67,69 @@ ensure_node() {
 ensure_node
 
 echo "Installing Terminal Sheet globally..."
-npm install -g terminal-canvas
+if npm install -g "$TSHEET_PACKAGE"; then
+  echo "Global npm install succeeded."
+else
+  echo "Global npm install failed. Retrying with user prefix at $HOME/.local..."
+  mkdir -p "$HOME/.local"
+  npm install -g --prefix "$HOME/.local" "$TSHEET_PACKAGE"
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+TSHEET_CMD_PATH=""
+if command -v tsheet &>/dev/null; then
+  TSHEET_CMD_PATH="$(command -v tsheet)"
+else
+  NPM_GLOBAL_PREFIX="$(npm config get prefix 2>/dev/null || true)"
+  if [ -n "$NPM_GLOBAL_PREFIX" ] && [ "$NPM_GLOBAL_PREFIX" != "undefined" ]; then
+    if [ -x "$NPM_GLOBAL_PREFIX/bin/tsheet" ]; then
+      TSHEET_CMD_PATH="$NPM_GLOBAL_PREFIX/bin/tsheet"
+    elif [ -x "$NPM_GLOBAL_PREFIX/tsheet" ]; then
+      TSHEET_CMD_PATH="$NPM_GLOBAL_PREFIX/tsheet"
+    fi
+  fi
+  if [ -z "$TSHEET_CMD_PATH" ] && [ -x "$HOME/.local/bin/tsheet" ]; then
+    TSHEET_CMD_PATH="$HOME/.local/bin/tsheet"
+  fi
+fi
+
+if [ -z "$TSHEET_CMD_PATH" ] && ! command -v npx &>/dev/null; then
+  echo "ERROR: tsheet CLI not found and npx is unavailable."
+  exit 1
+fi
+
+run_tsheet() {
+  if [ -n "$TSHEET_CMD_PATH" ]; then
+    "$TSHEET_CMD_PATH" "$@"
+  else
+    npx --yes tsheet "$@"
+  fi
+}
+
+resolve_tsheet_invoke() {
+  if [ -n "$TSHEET_CMD_PATH" ]; then
+    echo "$TSHEET_CMD_PATH"
+  else
+    echo "npx --yes tsheet"
+  fi
+}
+
+TSHEET_INVOKE="$(resolve_tsheet_invoke)"
 
 echo "Starting Terminal Sheet as remote backend..."
-TSHEET_TOKEN=$(tsheet token show --workspace ~/.terminal-canvas/workspace.json | grep machineToken | cut -d= -f2)
+TSHEET_TOKEN="$(run_tsheet token show --workspace ~/.terminal-canvas/workspace.json | grep '^machineToken=' | cut -d= -f2)"
 
-# Create and enable systemd service
-if command -v systemctl &>/dev/null && [ -d /etc/systemd/system ]; then
+if [ -z "$TSHEET_TOKEN" ]; then
+  echo "ERROR: unable to read machineToken from workspace."
+  exit 1
+fi
+
+# Create and enable systemd service (root only)
+if command -v systemctl &>/dev/null && [ -d /etc/systemd/system ] && [ "$(id -u)" -eq 0 ]; then
+  SERVICE_USER="$SUDO_USER"
+  if [ -z "$SERVICE_USER" ]; then
+    SERVICE_USER="$(id -un)"
+  fi
   cat > /etc/systemd/system/terminal-sheet.service <<EOF
 [Unit]
 Description=Terminal Sheet Remote Backend
@@ -80,8 +137,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-ExecStart=$(which tsheet) serve --role remote --no-open
+User=$SERVICE_USER
+ExecStart=$TSHEET_INVOKE serve --role remote --no-open
 Restart=on-failure
 RestartSec=5s
 
@@ -94,10 +151,20 @@ EOF
   systemctl restart terminal-sheet
   echo "Terminal Sheet service started."
 else
-  # Fallback: run in background
-  nohup tsheet serve --role remote --no-open &>/var/log/terminal-sheet.log &
+  # Fallback: run in background for non-root users
+  mkdir -p "$HOME/.terminal-canvas"
+  if [ -n "$TSHEET_CMD_PATH" ]; then
+    nohup "$TSHEET_CMD_PATH" serve --role remote --no-open > "$HOME/.terminal-canvas/terminal-sheet.log" 2>&1 &
+  else
+    nohup npx --yes tsheet serve --role remote --no-open > "$HOME/.terminal-canvas/terminal-sheet.log" 2>&1 &
+  fi
   sleep 2
-  echo "Terminal Sheet started in background."
+  echo "Terminal Sheet started in background (user mode)."
+fi
+
+BACKEND_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ -z "$BACKEND_HOST" ]; then
+  BACKEND_HOST="127.0.0.1"
 fi
 
 echo ""
@@ -105,7 +172,7 @@ echo "=== Installation complete ==="
 echo "TSHEET_TOKEN=$TSHEET_TOKEN"
 echo ""
 echo "Add to your home server with:"
-echo "  tsheet backend add --label 'Remote' --url http://$(hostname -I | awk '{print $1}'):$TSHEET_PORT --token $TSHEET_TOKEN"
+echo "  tsheet backend add --label 'Remote' --url http://$BACKEND_HOST:$TSHEET_PORT --token $TSHEET_TOKEN"
 `;
 }
 
@@ -127,18 +194,32 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";
 
 # Install Terminal Sheet
 Write-Host "Installing Terminal Sheet globally..."
-npm install -g terminal-canvas
+npm install -g tsheet
+
+# Resolve CLI command path
+$TsheetCommand = Get-Command tsheet -ErrorAction SilentlyContinue
+if (-not $TsheetCommand) {
+  $TsheetCommand = Get-Command terminal-canvas -ErrorAction SilentlyContinue
+}
+
+if (-not $TsheetCommand) {
+  throw "tsheet command was not found after npm install -g tsheet."
+}
+
+$TsheetPath = $TsheetCommand.Source
 
 # Get or create server identity
 $WorkspaceDir = "$env:USERPROFILE\\.terminal-canvas"
 $null = New-Item -ItemType Directory -Force -Path $WorkspaceDir
-tsheet token show --workspace "$WorkspaceDir\\workspace.json" 2>$null | Out-Null
-$TokenLine = tsheet token show --workspace "$WorkspaceDir\\workspace.json" | Where-Object { $_ -match "^machineToken=" }
+$TokenLine = (& $TsheetPath token show --workspace "$WorkspaceDir\\workspace.json") | Where-Object { $_ -match "^machineToken=" }
+$TokenLine = $TokenLine | Select-Object -First 1
+if (-not $TokenLine) {
+  throw "machineToken was not found in workspace output."
+}
 $TsheetToken = $TokenLine -replace "^machineToken=", ""
 
 # Register as a Windows service using sc.exe
 Write-Host "Registering Terminal Sheet as a Windows service..."
-$TsheetPath = (Get-Command tsheet).Source
 $ServiceName = "TerminalSheet"
 
 $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue

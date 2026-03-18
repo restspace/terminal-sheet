@@ -595,6 +595,7 @@ function createBackendStatus(
     lastError,
     connectedAt,
     updatedAt: new Date().toISOString(),
+    tunnel: null,
   };
 }
 

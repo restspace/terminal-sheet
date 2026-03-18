@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { FileSystemListResponse } from '../../shared/filesystem';
 import { fetchFileSystemDirectory } from '../state/fileSystemClient';
@@ -247,7 +248,7 @@ export function FileSystemPickerModal({
         ? 'Showing all files'
         : 'Showing directories';
 
-  return (
+  const modal = (
     <div
       className="workspace-modal-backdrop"
       onClick={() => {
@@ -372,6 +373,12 @@ export function FileSystemPickerModal({
       </section>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modal;
+  }
+
+  return createPortal(modal, document.body);
 }
 
 async function loadDirectory(input: {
