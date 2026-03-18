@@ -21,6 +21,11 @@ import type { WorkspaceService } from '../persistence/workspaceService';
 import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
 import { SshSetupService } from '../runtime/sshSetupService';
 import type { SshTunnelManager } from '../runtime/sshTunnelManager';
+import {
+  buildRemoteTerminalCreateError,
+  extractRemoteErrorMessage,
+  shouldRetryTerminalIdCollision,
+} from './remoteTerminalCreateError';
 
 interface BackendRouteOptions {
   role: ServerRole;
@@ -221,85 +226,110 @@ export async function registerBackendRoutes(
       }
 
       const body = backendTerminalCreateRequestSchema.parse(request.body);
-      const provisional = createTerminalNode(
-        {
-          label: body.label,
-          shell: body.shell,
-          cwd: body.cwd,
-          agentType: body.agentType,
-          backendId: backend.id,
-          repoLabel: body.repoLabel,
-          taskLabel: body.taskLabel,
-          tags: body.tags,
-        },
-        workspace.terminals.length,
-        workspace.currentViewport,
-      );
+      const maxRemoteCreateAttempts = 3;
+      let provisional: TerminalNode | null = null;
+      let remoteTerminal: TerminalNode | null = null;
 
       try {
-        const remoteCreate = await fetchRemoteJson(
-          resolveUrl(backend.baseUrl, '/api/backend/terminals'),
-          backend.token,
-          'POST',
-          {
-            id: provisional.id,
-            label: body.label,
-            shell: body.shell,
-            cwd: body.cwd,
-            agentType: body.agentType,
-            repoLabel: body.repoLabel,
-            taskLabel: body.taskLabel,
-            tags: body.tags,
-          },
-        );
+        for (let attempt = 1; attempt <= maxRemoteCreateAttempts; attempt += 1) {
+          provisional = createTerminalNode(
+            {
+              label: body.label,
+              shell: body.shell,
+              cwd: body.cwd,
+              agentType: body.agentType,
+              backendId: backend.id,
+              repoLabel: body.repoLabel,
+              taskLabel: body.taskLabel,
+              tags: body.tags,
+            },
+            workspace.terminals.length,
+            workspace.currentViewport,
+          );
+          const remoteCreate = await fetchRemoteJson(
+            resolveUrl(backend.baseUrl, '/api/backend/terminals'),
+            backend.token,
+            'POST',
+            {
+              id: provisional.id,
+              label: body.label,
+              shell: body.shell,
+              cwd: body.cwd,
+              agentType: body.agentType,
+              repoLabel: body.repoLabel,
+              taskLabel: body.taskLabel,
+              tags: body.tags,
+            },
+          );
 
-        if (!remoteCreate.ok) {
-          if (remoteCreate.status === 401) {
-            throw new BackendRouteError(401, 'Remote backend rejected the token.');
+          if (!remoteCreate.ok) {
+            if (remoteCreate.status === 401) {
+              throw new BackendRouteError(401, 'Remote backend rejected the token.');
+            }
+
+            const remoteMessage = await extractRemoteErrorMessage(
+              remoteCreate.response,
+            );
+
+            if (
+              shouldRetryTerminalIdCollision(remoteCreate.status) &&
+              attempt < maxRemoteCreateAttempts
+            ) {
+              continue;
+            }
+
+            throw new BackendRouteError(
+              remoteCreate.status,
+              buildRemoteTerminalCreateError(remoteCreate.status, remoteMessage),
+            );
           }
 
-          throw new BackendRouteError(
-            remoteCreate.status,
-            'Remote backend refused terminal creation.',
-          );
+          const payload = (await remoteCreate.response.json()) as {
+            terminal?: unknown;
+          };
+
+          if (!payload.terminal) {
+            throw new BackendRouteError(
+              502,
+              'Remote backend did not return a created terminal.',
+            );
+          }
+
+          remoteTerminal = terminalNodeSchema.parse(payload.terminal);
+          break;
         }
 
-        const payload = (await remoteCreate.response.json()) as {
-          terminal?: unknown;
-        };
-
-        if (!payload.terminal) {
+        if (!provisional || !remoteTerminal) {
           throw new BackendRouteError(
             502,
             'Remote backend did not return a created terminal.',
           );
         }
-
-        const remoteTerminal = terminalNodeSchema.parse(payload.terminal);
+        const createdRemoteTerminal = remoteTerminal;
 
         if (
           workspace.terminals.some(
             (terminal) =>
-              terminal.id === remoteTerminal.id &&
+              terminal.id === createdRemoteTerminal.id &&
               terminal.backendId !== backend.id,
           )
         ) {
           throw new BackendRouteError(
             409,
-            `Terminal id collision for ${remoteTerminal.id}.`,
+            `Terminal id collision for ${createdRemoteTerminal.id}.`,
           );
         }
 
         const imported: TerminalNode = {
           ...provisional,
-          id: remoteTerminal.id,
-          label: remoteTerminal.label,
-          shell: remoteTerminal.shell,
-          cwd: remoteTerminal.cwd,
-          agentType: remoteTerminal.agentType,
-          repoLabel: remoteTerminal.repoLabel ?? backend.label,
-          taskLabel: remoteTerminal.taskLabel,
-          tags: remoteTerminal.tags,
+          id: createdRemoteTerminal.id,
+          label: createdRemoteTerminal.label,
+          shell: createdRemoteTerminal.shell,
+          cwd: createdRemoteTerminal.cwd,
+          agentType: createdRemoteTerminal.agentType,
+          repoLabel: createdRemoteTerminal.repoLabel ?? backend.label,
+          taskLabel: createdRemoteTerminal.taskLabel,
+          tags: createdRemoteTerminal.tags,
           backendId: backend.id,
         };
         const mergedTerminals = mergeRemoteTerminals(

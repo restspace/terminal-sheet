@@ -18,6 +18,7 @@ import {
   shouldNotifyForAttentionEvent,
 } from '../../shared/events';
 import { getDefaultShell } from '../../shared/platform';
+import { buildCwdSwitchCommand, getShellPresets } from '../../shared/shells';
 import type {
   AgentType,
   CameraViewport,
@@ -372,6 +373,7 @@ export function App() {
     ],
     [workspace],
   );
+  const terminalShellOptions = useMemo(() => getShellPresets(), []);
 
   useEffect(() => {
     if (availableTerminalBackends.some((backend) => backend.id === terminalBackendId)) {
@@ -876,11 +878,11 @@ export function App() {
                   setTerminalShell(event.target.value);
                 }}
               >
-                <option value={getDefaultShell()}>
-                  {getDefaultShell() === 'powershell.exe'
-                    ? 'PowerShell'
-                    : getDefaultShell()}
-                </option>
+                {terminalShellOptions.map((shellOption) => (
+                  <option key={shellOption.value} value={shellOption.value}>
+                    {shellOption.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="toolbar-select-field">
@@ -1423,30 +1425,4 @@ function getConfiguredFooterAgent(
   }
 
   return null;
-}
-
-function buildCwdSwitchCommand(shell: string, directoryPath: string): string {
-  const lowerShell = shell.toLowerCase();
-
-  if (lowerShell.includes('powershell')) {
-    return `Set-Location -LiteralPath '${escapePowerShellLiteral(directoryPath)}'\r`;
-  }
-
-  if (lowerShell.includes('cmd')) {
-    return `cd /d "${escapeCmdQuoted(directoryPath)}"\r`;
-  }
-
-  return `cd -- '${escapePosixSingleQuoted(directoryPath)}'\n`;
-}
-
-function escapePowerShellLiteral(input: string): string {
-  return input.replaceAll("'", "''");
-}
-
-function escapeCmdQuoted(input: string): string {
-  return input.replaceAll('"', '""');
-}
-
-function escapePosixSingleQuoted(input: string): string {
-  return input.replaceAll("'", "'\"'\"'");
 }

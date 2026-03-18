@@ -1,3 +1,5 @@
+import { isBashShell, isPowerShellShell } from '../../shared/shells';
+
 const POWERSHELL_MARKER_PREFIX = '\u001b]633;TerminalCanvasCwd=';
 const PROMPT_MARKER_PREFIX = '\u001b]633;TerminalCanvasPrompt=';
 const OSC_TERMINATORS = ['\u0007', '\u001b\\'] as const;
@@ -10,18 +12,11 @@ export interface CwdTrackingParseResult {
 }
 
 export function supportsPowerShellCwdTracking(commandFile: string): boolean {
-  const normalized = commandFile.toLowerCase();
-  return normalized.endsWith('powershell.exe') || normalized.endsWith('pwsh.exe');
+  return isPowerShellShell(commandFile);
 }
 
 export function supportsBashPromptTracking(commandFile: string): boolean {
-  const normalized = commandFile.toLowerCase();
-  return (
-    normalized === 'bash' ||
-    normalized.endsWith('/bash') ||
-    normalized.endsWith('\\bash') ||
-    normalized.endsWith('bash.exe')
-  );
+  return isBashShell(commandFile);
 }
 
 export function augmentPowerShellArgsForCwdTracking(args: string[]): string[] {
