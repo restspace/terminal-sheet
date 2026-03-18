@@ -1088,15 +1088,31 @@ button:disabled {
 }
 
 .terminal-header-close-button {
-  padding: 0.22rem 0.58rem;
-  font-size: 0.66rem;
-  line-height: 1.1;
-  border-color: rgba(214, 98, 88, 0.24);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 50%;
+  border-color: rgba(214, 98, 88, 0.34);
+  background: rgba(48, 14, 12, 0.78);
+  color: #ffc8c1;
+  line-height: 1;
+  flex: 0 0 auto;
 }
 
 .terminal-header-close-button:hover:not(:disabled) {
-  border-color: rgba(255, 159, 149, 0.56);
+  border-color: rgba(255, 159, 149, 0.68);
   background: rgba(58, 18, 15, 0.92);
+}
+
+.terminal-header-close-icon {
+  display: block;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .canvas-node-meta {
@@ -1519,6 +1535,7 @@ button:disabled {
 .markdown-header-badges {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
 }

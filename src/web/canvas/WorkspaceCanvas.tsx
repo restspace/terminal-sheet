@@ -369,6 +369,15 @@ export function WorkspaceCanvas({
   const incomingSwapSession = incomingSwapTerminal
     ? (sessions[incomingSwapTerminal.id] ?? null)
     : null;
+  const selectedTerminalAccent = selectedTerminal
+    ? (backendAccents.get(selectedTerminal.backendId ?? '') ?? null)
+    : null;
+  const outgoingSwapTerminalAccent = outgoingSwapTerminal
+    ? (backendAccents.get(outgoingSwapTerminal.backendId ?? '') ?? null)
+    : null;
+  const incomingSwapTerminalAccent = incomingSwapTerminal
+    ? (backendAccents.get(incomingSwapTerminal.backendId ?? '') ?? null)
+    : null;
   const shouldRenderDualSwapOverlay =
     workspace.layoutMode === 'focus-tiles' &&
     overlaySwapState !== null &&
@@ -587,6 +596,7 @@ export function WorkspaceCanvas({
                 outgoingSwapTerminal,
                 renderedBoundsByNodeId,
               )}
+              backendAccent={outgoingSwapTerminalAccent}
               session={outgoingSwapSession}
               viewport={workspace.currentViewport}
               autoFocusAtMs={null}
@@ -611,6 +621,7 @@ export function WorkspaceCanvas({
               incomingSwapTerminal,
               renderedBoundsByNodeId,
             )}
+            backendAccent={incomingSwapTerminalAccent}
             session={incomingSwapSession}
             viewport={workspace.currentViewport}
             autoFocusAtMs={focusAutoFocusAtMs}
@@ -635,6 +646,7 @@ export function WorkspaceCanvas({
             selectedTerminal,
             renderedBoundsByNodeId,
           )}
+          backendAccent={selectedTerminalAccent}
           session={selectedSession}
           viewport={workspace.currentViewport}
           autoFocusAtMs={focusAutoFocusAtMs}

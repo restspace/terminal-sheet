@@ -99,4 +99,26 @@ describe('TerminalTitleBar path bubble', () => {
       bubbles[2]?.getAttribute('style'),
     );
   });
+
+  it('renders a circular close icon button with Close title text', () => {
+    const terminal = createPlaceholderTerminal(0);
+
+    act(() => {
+      root.render(
+        createElement(TerminalTitleBar, {
+          terminal,
+          status: 'idle',
+          onClose: vi.fn(),
+        }),
+      );
+    });
+
+    const closeButton = container.querySelector(
+      '.terminal-header-close-button',
+    ) as HTMLButtonElement | null;
+
+    expect(closeButton).not.toBeNull();
+    expect(closeButton?.getAttribute('title')).toBe('Close');
+    expect(closeButton?.textContent?.trim()).toBe('X');
+  });
 });

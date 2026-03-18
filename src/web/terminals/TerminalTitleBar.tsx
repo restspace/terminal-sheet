@@ -104,10 +104,12 @@ export function TerminalTitleBar({
             {backendAccent.label}
           </span>
         ) : null}
+        <span className={`canvas-node-status is-${status}`}>{statusLabel}</span>
         {onClose ? (
           <button
             className="terminal-header-close-button nodrag nopan"
             type="button"
+            title="Close"
             aria-label={`Close ${terminal.label}`}
             onPointerDown={stopPointerEventPropagation}
             onClick={(event) => {
@@ -115,10 +117,11 @@ export function TerminalTitleBar({
               onClose(terminal.id);
             }}
           >
-            Close
+            <span className="terminal-header-close-icon" aria-hidden="true">
+              X
+            </span>
           </button>
         ) : null}
-        <span className={`canvas-node-status is-${status}`}>{statusLabel}</span>
       </div>
     </div>
   );

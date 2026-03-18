@@ -24,6 +24,7 @@ import type {
   CameraViewport,
   CreateTerminalNodeInput,
   TerminalNode,
+  Workspace,
   WorkspaceLayoutMode,
 } from '../../shared/workspace';
 import { getSemanticZoomMode } from '../../shared/workspace';
@@ -50,6 +51,7 @@ import {
 const MAX_NOTIFIED_EVENT_IDS = 256;
 const EMPTY_TERMINALS: TerminalNode[] = [];
 const DEFAULT_VIEWPORT: CameraViewport = { x: 0, y: 0, zoom: 1 };
+const BACKEND_SHELLS_STORAGE_KEY = 'tc-backend-shells';
 
 export function App() {
   const {
@@ -103,6 +105,8 @@ export function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [terminalShell, setTerminalShell] = useState(getDefaultShell());
+  const [backendShellById, setBackendShellById] =
+    useState<Record<string, string>>(readStoredBackendShellById);
   const [terminalAgentType, setTerminalAgentType] =
     useState<AgentType>('shell');
   const [terminalBackendId, setTerminalBackendId] =
@@ -363,6 +367,54 @@ export function App() {
     attentionTerminalCount: attentionTerminalIds.length,
     terminals,
   });
+  const inferredBackendShellById = useMemo(() => {
+    const next: Record<string, string> = {};
+
+    for (const terminal of terminals) {
+      const normalizedShell = terminal.shell.trim();
+
+      if (!normalizedShell) {
+        continue;
+      }
+
+      next[terminal.backendId ?? LOCAL_BACKEND_ID] = normalizedShell;
+    }
+
+    return next;
+  }, [terminals]);
+  const resolveBackendShell = useCallback((backendId: string): string => {
+    const configuredShell = backendShellById[backendId]?.trim();
+
+    if (configuredShell) {
+      return configuredShell;
+    }
+
+    const inferredShell = inferredBackendShellById[backendId]?.trim();
+
+    if (inferredShell) {
+      return inferredShell;
+    }
+
+    return getDefaultShell();
+  }, [backendShellById, inferredBackendShellById]);
+  const rememberBackendShell = useCallback((backendId: string, shell: string): void => {
+    const normalizedShell = shell.trim();
+
+    if (!normalizedShell) {
+      return;
+    }
+
+    setBackendShellById((current) => {
+      if (current[backendId] === normalizedShell) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [backendId]: normalizedShell,
+      };
+    });
+  }, []);
   const availableTerminalBackends = useMemo(
     () => [
       { id: LOCAL_BACKEND_ID, label: 'Local backend' },
@@ -381,7 +433,12 @@ export function App() {
     }
 
     setTerminalBackendId(LOCAL_BACKEND_ID);
-  }, [availableTerminalBackends, terminalBackendId]);
+    setTerminalShell(resolveBackendShell(LOCAL_BACKEND_ID));
+  }, [availableTerminalBackends, resolveBackendShell, terminalBackendId]);
+
+  useEffect(() => {
+    writeStoredBackendShellById(backendShellById);
+  }, [backendShellById]);
 
   const focusTerminal = useCallback((terminalId: string) => {
     const terminal = terminals.find((candidate) => candidate.id === terminalId);
@@ -627,7 +684,10 @@ export function App() {
   const createRemoteTerminal = useCallback(async (
     backendId: string,
     input: CreateTerminalNodeInput,
-  ): Promise<TerminalNode> => {
+  ): Promise<{
+    terminal: TerminalNode;
+    workspace: Workspace | null;
+  }> => {
     const response = await fetch(
       `/api/backends/${encodeURIComponent(backendId)}/terminals`,
       {
@@ -650,13 +710,19 @@ export function App() {
       throw new Error(payload.message ?? `Server error ${response.status}`);
     }
 
-    const payload = (await response.json()) as { terminal?: TerminalNode };
+    const payload = (await response.json()) as {
+      terminal?: TerminalNode;
+      workspace?: Workspace;
+    };
 
     if (!payload.terminal) {
       throw new Error('Remote backend did not return a created terminal.');
     }
 
-    return payload.terminal;
+    return {
+      terminal: payload.terminal,
+      workspace: payload.workspace ?? null,
+    };
   }, []);
 
   async function launchTerminal(input: CreateTerminalNodeInput) {
@@ -669,8 +735,13 @@ export function App() {
       createdTerminal = addTerminal(input, { persistImmediately: true });
     } else {
       try {
-        createdTerminal = await createRemoteTerminal(selectedBackendId, input);
-        void refreshWorkspaceFromServer();
+        const remoteCreate = await createRemoteTerminal(selectedBackendId, input);
+        createdTerminal = remoteCreate.terminal;
+        updateWorkspace(
+          (current) => upsertWorkspaceTerminal(current, remoteCreate.terminal),
+          { persistImmediately: true },
+        );
+        void refreshWorkspaceFromServer(remoteCreate.workspace);
       } catch (error) {
         setTerminalCreateError(
           error instanceof Error ? error.message : 'Failed to create remote terminal.',
@@ -684,6 +755,7 @@ export function App() {
       return;
     }
 
+    rememberBackendShell(selectedBackendId, createdTerminal.shell);
     bumpNodeInteraction(createdTerminal.id);
 
     if (layoutMode === 'focus-tiles') {
@@ -870,6 +942,25 @@ export function App() {
               Add Terminal
             </button>
             <label className="toolbar-select-field">
+              <span className="meta-label">Backend</span>
+              <select
+                className="toolbar-select"
+                value={terminalBackendId}
+                onChange={(event) => {
+                  const nextBackendId = event.target.value;
+                  setTerminalBackendId(nextBackendId);
+                  setTerminalShell(resolveBackendShell(nextBackendId));
+                  setTerminalCreateError(null);
+                }}
+              >
+                {availableTerminalBackends.map((backend) => (
+                  <option key={backend.id} value={backend.id}>
+                    {backend.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="toolbar-select-field">
               <span className="meta-label">Shell</span>
               <select
                 className="toolbar-select"
@@ -881,23 +972,6 @@ export function App() {
                 {terminalShellOptions.map((shellOption) => (
                   <option key={shellOption.value} value={shellOption.value}>
                     {shellOption.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="toolbar-select-field">
-              <span className="meta-label">Backend</span>
-              <select
-                className="toolbar-select"
-                value={terminalBackendId}
-                onChange={(event) => {
-                  setTerminalBackendId(event.target.value);
-                  setTerminalCreateError(null);
-                }}
-              >
-                {availableTerminalBackends.map((backend) => (
-                  <option key={backend.id} value={backend.id}>
-                    {backend.label}
                   </option>
                 ))}
               </select>
@@ -1350,6 +1424,76 @@ function writeStoredBoolean(key: string, value: boolean): void {
   window.localStorage.setItem(key, String(value));
 }
 
+function readStoredBackendShellById(): Record<string, string> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const rawValue = window.localStorage.getItem(BACKEND_SHELLS_STORAGE_KEY);
+
+  if (!rawValue) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const next: Record<string, string> = {};
+
+    for (const [backendId, shell] of Object.entries(parsed)) {
+      if (typeof shell !== 'string') {
+        continue;
+      }
+
+      const normalizedBackendId = backendId.trim();
+      const normalizedShell = shell.trim();
+
+      if (!normalizedBackendId || !normalizedShell) {
+        continue;
+      }
+
+      next[normalizedBackendId] = normalizedShell;
+    }
+
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredBackendShellById(value: Record<string, string>): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const entries = Object.entries(value);
+
+  if (!entries.length) {
+    window.localStorage.removeItem(BACKEND_SHELLS_STORAGE_KEY);
+    return;
+  }
+
+  const normalized = Object.fromEntries(
+    entries
+      .map(([backendId, shell]) => [backendId.trim(), shell.trim()] as const)
+      .filter(([backendId, shell]) => Boolean(backendId) && Boolean(shell)),
+  );
+
+  if (!Object.keys(normalized).length) {
+    window.localStorage.removeItem(BACKEND_SHELLS_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(
+    BACKEND_SHELLS_STORAGE_KEY,
+    JSON.stringify(normalized),
+  );
+}
+
 async function playNotificationTone(
   audioContextRef: RefObject<AudioContext | null>,
 ): Promise<void> {
@@ -1425,4 +1569,28 @@ function getConfiguredFooterAgent(
   }
 
   return null;
+}
+
+function upsertWorkspaceTerminal(
+  workspace: Workspace,
+  terminal: TerminalNode,
+): Workspace {
+  const existingIndex = workspace.terminals.findIndex(
+    (candidate) => candidate.id === terminal.id,
+  );
+
+  if (existingIndex === -1) {
+    return {
+      ...workspace,
+      terminals: [...workspace.terminals, terminal],
+    };
+  }
+
+  const nextTerminals = [...workspace.terminals];
+  nextTerminals[existingIndex] = terminal;
+
+  return {
+    ...workspace,
+    terminals: nextTerminals,
+  };
 }

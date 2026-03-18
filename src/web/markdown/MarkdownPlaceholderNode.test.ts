@@ -98,6 +98,34 @@ describe('MarkdownPlaceholderNode', () => {
       expect(panelBody.className).toContain('nodrag');
     }
   });
+
+  it('renders a close icon button with Close title text', () => {
+    const markdown = createPlaceholderMarkdown(0);
+    const onRemove = vi.fn();
+    const props = createNodeProps({
+      markdown,
+      document: createDocumentState(markdown.id, markdown.filePath),
+    });
+    props.data.onRemove = onRemove;
+
+    act(() => {
+      root.render(createElement(MarkdownPlaceholderNode, props));
+    });
+
+    const closeButton = container.querySelector(
+      '.terminal-header-close-button',
+    ) as HTMLButtonElement | null;
+
+    expect(closeButton).not.toBeNull();
+    expect(closeButton?.getAttribute('title')).toBe('Close');
+    expect(closeButton?.textContent?.trim()).toBe('X');
+
+    act(() => {
+      closeButton?.click();
+    });
+
+    expect(onRemove).toHaveBeenCalledWith(markdown.id);
+  });
 });
 
 function createNodeProps(options: {

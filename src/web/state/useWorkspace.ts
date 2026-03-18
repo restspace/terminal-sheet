@@ -49,6 +49,7 @@ export function useWorkspace() {
   const inFlightRevisionRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const pendingExternalWorkspaceRef = useRef<Workspace | null>(null);
+  const pendingServerRefreshRef = useRef(false);
 
   const applyLoadedWorkspace = useCallback((nextWorkspace: Workspace) => {
     hasLoadedRef.current = true;
@@ -57,6 +58,7 @@ export function useWorkspace() {
     lastSavedRevisionRef.current = 0;
     inFlightRevisionRef.current = null;
     pendingExternalWorkspaceRef.current = null;
+    pendingServerRefreshRef.current = false;
 
     startTransition(() => {
       setWorkspace(nextWorkspace);
@@ -120,7 +122,11 @@ export function useWorkspace() {
       inFlightRevisionRef.current !== null ||
       localRevisionRef.current > lastSavedRevisionRef.current
     ) {
-      pendingExternalWorkspaceRef.current = candidateWorkspace;
+      if (candidateWorkspace) {
+        pendingExternalWorkspaceRef.current = candidateWorkspace;
+      } else {
+        pendingServerRefreshRef.current = true;
+      }
       return false;
     }
 
@@ -135,7 +141,11 @@ export function useWorkspace() {
     }
 
     if (refreshInFlightRef.current) {
-      pendingExternalWorkspaceRef.current = candidateWorkspace;
+      if (candidateWorkspace) {
+        pendingExternalWorkspaceRef.current = candidateWorkspace;
+      } else {
+        pendingServerRefreshRef.current = true;
+      }
       return false;
     }
 
@@ -164,6 +174,23 @@ export function useWorkspace() {
       return false;
     } finally {
       refreshInFlightRef.current = false;
+
+      if (
+        inFlightRevisionRef.current === null &&
+        localRevisionRef.current <= lastSavedRevisionRef.current &&
+        (pendingExternalWorkspaceRef.current || pendingServerRefreshRef.current)
+      ) {
+        const pendingWorkspace = pendingExternalWorkspaceRef.current;
+        const shouldFetchServer = pendingServerRefreshRef.current;
+        pendingExternalWorkspaceRef.current = null;
+        pendingServerRefreshRef.current = false;
+
+        if (pendingWorkspace) {
+          void refreshWorkspaceFromServer(pendingWorkspace);
+        } else if (shouldFetchServer) {
+          void refreshWorkspaceFromServer();
+        }
+      }
     }
   }, [applyLoadedWorkspace]);
 
@@ -225,8 +252,20 @@ export function useWorkspace() {
 
       if (localRevisionRef.current > lastSavedRevisionRef.current) {
         schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
-      } else if (pendingExternalWorkspaceRef.current) {
-        void refreshWorkspaceFromServer(pendingExternalWorkspaceRef.current);
+      } else if (
+        pendingExternalWorkspaceRef.current ||
+        pendingServerRefreshRef.current
+      ) {
+        const pendingWorkspace = pendingExternalWorkspaceRef.current;
+        const shouldFetchServer = pendingServerRefreshRef.current;
+        pendingExternalWorkspaceRef.current = null;
+        pendingServerRefreshRef.current = false;
+
+        if (pendingWorkspace) {
+          void refreshWorkspaceFromServer(pendingWorkspace);
+        } else if (shouldFetchServer) {
+          void refreshWorkspaceFromServer();
+        }
       }
     }
   }, [refreshWorkspaceFromServer]);

@@ -73,18 +73,6 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
             </div>
           </div>
           <div className="markdown-header-badges">
-            <button
-              className="terminal-header-close-button nodrag nopan"
-              type="button"
-              aria-label={`Close ${markdown.label}`}
-              onPointerDown={stopPointerEventPropagation}
-              onClick={(event) => {
-                stopEventPropagation(event);
-                data.onRemove(markdown.id);
-              }}
-            >
-              Close
-            </button>
             {document?.dirty ? (
               <span className="canvas-node-status is-markdown">unsaved</span>
             ) : null}
@@ -94,6 +82,21 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
             <span className="canvas-node-status is-markdown">
               {markdown.readOnly ? 'read-only' : document?.status ?? 'loading'}
             </span>
+            <button
+              className="terminal-header-close-button nodrag nopan"
+              type="button"
+              title="Close"
+              aria-label={`Close ${markdown.label}`}
+              onPointerDown={stopPointerEventPropagation}
+              onClick={(event) => {
+                stopEventPropagation(event);
+                data.onRemove(markdown.id);
+              }}
+            >
+              <span className="terminal-header-close-icon" aria-hidden="true">
+                X
+              </span>
+            </button>
           </div>
         </div>
 

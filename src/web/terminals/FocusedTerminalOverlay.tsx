@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, type CSSProperties } from 'react';
 
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { CameraViewport, TerminalNode } from '../../shared/workspace';
+import type { BackendAccent } from '../canvas/backendAccents';
 import {
   getTerminalDisplayStatus,
   getTerminalRuntimePath,
@@ -11,6 +12,7 @@ import { TerminalTitleBar } from './TerminalTitleBar';
 
 interface FocusedTerminalOverlayProps {
   terminal: TerminalNode;
+  backendAccent: BackendAccent | null;
   session: TerminalSessionSnapshot | null;
   viewport: CameraViewport;
   autoFocusAtMs: number | null;
@@ -33,6 +35,7 @@ interface FocusedTerminalOverlayProps {
 
 export function FocusedTerminalOverlay({
   terminal,
+  backendAccent,
   session,
   viewport,
   autoFocusAtMs,
@@ -138,6 +141,7 @@ export function FocusedTerminalOverlay({
           terminal={terminal}
           status={status}
           currentPath={liveCwd}
+          backendAccent={backendAccent}
           onPathSelectRequest={onPathSelectRequest}
           onTerminalChange={onTerminalChange}
           onClose={onRemove}
