@@ -7,6 +7,7 @@ import type {
 } from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
+import type { BackendAccent } from './backendAccents';
 import type { TerminalPresentationMode } from '../terminals/presentationMode';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
 
@@ -36,6 +37,7 @@ export function getSelectedNodeIdFromChanges(
 
 interface BuildCanvasNodesOptions {
   workspace: Workspace;
+  backendAccents: ReadonlyMap<string, BackendAccent>;
   selectedNodeId: string | null;
   renderedBoundsByNodeId: ReadonlyMap<
     string,
@@ -79,6 +81,7 @@ interface BuildCanvasNodesOptions {
 
 export function buildCanvasNodes({
   workspace,
+  backendAccents,
   selectedNodeId,
   renderedBoundsByNodeId,
   nodesDraggable,
@@ -122,6 +125,7 @@ export function buildCanvasNodes({
       height: renderedBounds.height,
       data: {
         terminal,
+        backendAccent: backendAccents.get(terminal.backendId ?? '') ?? null,
         session: sessions[terminal.id] ?? null,
         presentationMode:
           terminalPresentationById.get(terminal.id) ?? 'overview',

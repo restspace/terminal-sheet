@@ -11,6 +11,8 @@ import type {
   AttentionIntegrationSetup,
 } from '../../shared/events';
 import { LOCAL_BACKEND_ID } from '../../shared/backends';
+import type { ServerRole } from '../../shared/backends';
+import { BackendManagerPanel } from '../backends/BackendManagerPanel';
 import {
   isAttentionRequiredStatus,
   shouldNotifyForAttentionEvent,
@@ -79,6 +81,8 @@ export function App() {
   } = useTerminalSessions();
   const [healthError, setHealthError] = useState<string | null>(null);
   const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(null);
+  const [serverRole, setServerRole] = useState<ServerRole | null>(null);
+  const [isBackendsPanelOpen, setIsBackendsPanelOpen] = useState(false);
   const [attentionSetup, setAttentionSetup] =
     useState<AttentionIntegrationSetup | null>(null);
   const [attentionSetupError, setAttentionSetupError] = useState<string | null>(
@@ -177,11 +181,13 @@ export function App() {
 
           const health = (await healthResponse.json()) as {
             workspacePath?: string;
+            role?: ServerRole;
           };
 
           if (!cancelled) {
             setHealthError(null);
             setWorkspaceFilePath(health.workspacePath ?? null);
+            setServerRole(health.role ?? null);
             setAttentionSetup(setup);
             setAttentionSetupError(null);
           }
@@ -890,9 +896,31 @@ export function App() {
             >
               Save current view
             </button>
+            <button
+              type="button"
+              className={
+                isBackendsPanelOpen
+                  ? 'toolbar-button is-active'
+                  : 'toolbar-button'
+              }
+              aria-controls="backend-manager-panel"
+              aria-expanded={isBackendsPanelOpen}
+              onClick={() => {
+                setIsBackendsPanelOpen((current) => !current);
+              }}
+            >
+              Backends
+            </button>
           </div>
         </div>
       </header>
+
+      {isBackendsPanelOpen ? (
+        <BackendManagerPanel
+          asideId="backend-manager-panel"
+          serverRole={serverRole}
+        />
+      ) : null}
 
       {isAttentionFeedExpanded ? (
         <AttentionFeed

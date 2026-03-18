@@ -17,7 +17,7 @@
     "clean": "rimraf dist",
     "dev": "tsx src/dev/devLauncher.ts",
     "dev:web": "vite --host 127.0.0.1 --port 4313 --strictPort --open",
-    "dev:server": "cross-env NODE_ENV=development TERMINAL_CANVAS_DEV_WEB_URL=http://127.0.0.1:4313 tsx watch src/cli/index.ts serve --no-open",
+    "dev:server": "cross-env NODE_ENV=development TERMINAL_CANVAS_DEV_WEB_URL=http://127.0.0.1:4313 tsx watch src/cli/index.ts serve --role home --no-open",
     "build": "npm run clean && npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "tsup src/cli/index.ts --format esm --target node20 --out-dir dist/server --clean --sourcemap",

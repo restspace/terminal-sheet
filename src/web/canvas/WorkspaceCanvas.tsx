@@ -26,6 +26,7 @@ import { FocusedTerminalOverlay } from '../terminals/FocusedTerminalOverlay';
 import { deriveTerminalPresentationState } from '../terminals/presentationMode';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
 import { getTerminalDisplayStatus } from '../terminals/presentation';
+import { buildBackendAccentsMap } from './backendAccents';
 import { getLayoutStrategy } from './layout/strategyRegistry';
 import type { NodeBounds } from './layout/types';
 import {
@@ -321,6 +322,10 @@ export function WorkspaceCanvas({
     };
   }, []);
 
+  const backendAccents = useMemo(
+    () => buildBackendAccentsMap(workspace.backends),
+    [workspace.backends],
+  );
   const terminalPresentationState = useMemo(
     () =>
       deriveTerminalPresentationState({
@@ -383,6 +388,7 @@ export function WorkspaceCanvas({
     () =>
       buildCanvasNodes({
         workspace,
+        backendAccents,
         selectedNodeId,
         renderedBoundsByNodeId,
         nodesDraggable: interactionPolicy.nodesDraggable,
@@ -414,6 +420,7 @@ export function WorkspaceCanvas({
         onResolveConflict,
       }),
     [
+      backendAccents,
       livePreviewTerminalIds,
       onMarkTerminalRead,
       onMarkdownDrop,
@@ -543,7 +550,11 @@ export function WorkspaceCanvas({
               const status = terminalStatusById.get(node.id);
 
               if (!status) {
-                return 'rgba(138, 180, 216, 0.78)';
+                const accent = backendAccents.get(
+                  (node.data as { terminal?: { backendId?: string } })
+                    ?.terminal?.backendId ?? '',
+                );
+                return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
               }
 
               if (isAttentionRequiredStatus(status)) {
@@ -556,7 +567,11 @@ export function WorkspaceCanvas({
                 return 'rgba(94, 196, 139, 0.82)';
               }
 
-              return 'rgba(138, 180, 216, 0.78)';
+              const accent = backendAccents.get(
+                (node.data as { terminal?: { backendId?: string } })
+                  ?.terminal?.backendId ?? '',
+              );
+              return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
             }}
           />
           <Controls position="top-right" showInteractive={false} />

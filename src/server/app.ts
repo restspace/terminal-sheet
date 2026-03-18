@@ -7,12 +7,14 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { LOCAL_BACKEND_ID, type ServerRole } from '../shared/backends';
 import { registerHealthRoutes } from './routes/health';
+import { registerInstallRoutes } from './routes/install';
 import { registerSessionRoutes } from './routes/sessions';
 import { registerAttentionRoutes } from './routes/attention';
 import { registerBackendRoutes } from './routes/backends';
 import { registerBackendMachineRoutes } from './routes/backendMachine';
 import { registerFileSystemRoutes } from './routes/filesystem';
 import { registerMarkdownRoutes } from './routes/markdown';
+import { registerTokenRoutes } from './routes/token';
 import { registerWorkspaceRoutes } from './routes/workspace';
 import { AttentionService } from './integrations/attentionService';
 import { LocalFileSystemService } from './filesystem/localFileSystemService';
@@ -29,6 +31,7 @@ export interface TerminalCanvasServerOptions {
   serverId?: string;
   localBackendId?: string;
   machineToken?: string;
+  serverIdentityFilePath?: string;
   workspaceFilePath: string;
   contentRoot?: string;
   devWebUrl?: string;
@@ -42,6 +45,7 @@ export async function createServer(
   const serverId = options.serverId ?? 'server-local';
   const localBackendId = options.localBackendId ?? LOCAL_BACKEND_ID;
   const machineToken = options.machineToken ?? 'dev-machine-token';
+  const serverIdentityFilePath = options.serverIdentityFilePath ?? options.workspaceFilePath;
   const contentRoot = options.contentRoot ?? process.cwd();
   const app = Fastify({ logger: true });
   const workspaceService = await WorkspaceService.create(options.workspaceFilePath);
@@ -125,6 +129,7 @@ export async function createServer(
     role,
     serverId,
     machineToken,
+    serverIdentityFilePath,
     localBackendId,
     workspaceService,
     ptySessionManager,
@@ -140,6 +145,11 @@ export async function createServer(
   await registerWorkspaceRoutes(app, {
     workspaceService,
   });
+  await registerTokenRoutes(app, {
+    serverIdentityFilePath,
+    serverId,
+  });
+  await registerInstallRoutes(app);
   await registerWorkspaceSocket(app, {
     runtimeManager,
     markdownService,

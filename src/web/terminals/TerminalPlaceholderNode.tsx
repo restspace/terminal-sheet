@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 import { type NodeProps, useViewport } from '@xyflow/react';
 
@@ -83,6 +83,11 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
     }
   }, [mode, onMarkRead, selected, session?.unreadCount, terminal.id]);
 
+  const backendAccent = data.backendAccent ?? null;
+  const nodeStyle = backendAccent
+    ? ({ '--machine-accent': backendAccent.color } as React.CSSProperties)
+    : undefined;
+
   return (
     <div
       className={
@@ -90,6 +95,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
           ? 'canvas-node terminal-node is-selected'
           : 'canvas-node terminal-node'
       }
+      style={nodeStyle}
       onDragOver={(event) => {
         if (readMarkdownDragNodeId(event)) {
           event.preventDefault();
@@ -109,6 +115,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
       <span
         className={`terminal-node-stripe is-${status}`}
         aria-hidden="true"
+        style={backendAccent ? { borderColor: backendAccent.color } : undefined}
       />
 
       <CanvasResizeHandles
@@ -129,6 +136,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
             terminal={terminal}
             status={status}
             currentPath={liveCwd}
+            backendAccent={backendAccent}
             onPathSelectRequest={data.onPathSelectRequest}
             onTerminalChange={onTerminalChange}
             onClose={onRemove}

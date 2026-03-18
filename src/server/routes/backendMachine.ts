@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ServerRole } from '../../shared/backends';
 import type { AttentionService } from '../integrations/attentionService';
+import { rotateServerIdentityToken } from '../persistence/serverIdentityStore';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { PtySessionManager } from '../pty/ptySessionManager';
 import { readMachineToken } from './machineAuth';
@@ -10,24 +11,28 @@ interface BackendMachineRouteOptions {
   role: ServerRole;
   serverId: string;
   machineToken: string;
+  serverIdentityFilePath: string;
   localBackendId: string;
   workspaceService: WorkspaceService;
   ptySessionManager: PtySessionManager;
   attentionService: AttentionService;
+  onTokenRotated?: (newToken: string) => void;
 }
 
 export async function registerBackendMachineRoutes(
   app: FastifyInstance,
   options: BackendMachineRouteOptions,
 ): Promise<void> {
+  const mutableOptions = options;
+
   app.addHook('preHandler', async (request, reply) => {
-    if (!request.url.startsWith('/api/backend')) {
+    if (!request.url.startsWith('/api/backend/')) {
       return;
     }
 
     const token = readMachineToken(request);
 
-    if (token !== options.machineToken) {
+    if (token !== mutableOptions.machineToken) {
       return reply.code(401).send({ message: 'Invalid machine token' });
     }
   });
@@ -108,4 +113,13 @@ export async function registerBackendMachineRoutes(
         : reply.code(404).send({ message: 'Unknown session' });
     },
   );
+
+  app.post('/api/backend/machine/token/rotate', async () => {
+    const newIdentity = await rotateServerIdentityToken(
+      options.serverIdentityFilePath,
+    );
+    mutableOptions.machineToken = newIdentity.machineToken;
+    options.onTokenRotated?.(newIdentity.machineToken);
+    return { machineToken: newIdentity.machineToken };
+  });
 }

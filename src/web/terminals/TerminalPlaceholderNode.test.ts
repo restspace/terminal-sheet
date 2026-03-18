@@ -150,6 +150,7 @@ function createNodeProps(options: {
       onRestart: vi.fn(),
       onMarkRead: vi.fn(),
       onMarkdownDrop: vi.fn(),
+      backendAccent: null,
       activeMarkdownLink: null,
       allowResize: true,
     } satisfies TerminalFlowNode['data'],

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 
 import type { TerminalNode, TerminalStatus } from '../../shared/workspace';
+import type { BackendAccent } from '../canvas/backendAccents';
 
 interface TerminalTitleBarProps {
   terminal: TerminalNode;
@@ -8,6 +9,7 @@ interface TerminalTitleBarProps {
   currentPath?: string;
   className?: string;
   sidecar?: ReactNode;
+  backendAccent?: BackendAccent | null;
   onPathSelectRequest?: (terminalId: string) => void;
   onTerminalChange?: (
     terminalId: string,
@@ -22,6 +24,7 @@ export function TerminalTitleBar({
   currentPath,
   className,
   sidecar,
+  backendAccent,
   onPathSelectRequest,
   onTerminalChange,
   onClose,
@@ -92,6 +95,15 @@ export function TerminalTitleBar({
       </div>
       <div className="terminal-header-sidecar">
         {sidecar}
+        {backendAccent ? (
+          <span
+            className="terminal-machine-badge nodrag nopan"
+            title={backendAccent.label}
+            style={{ background: backendAccent.color }}
+          >
+            {backendAccent.label}
+          </span>
+        ) : null}
         {onClose ? (
           <button
             className="terminal-header-close-button nodrag nopan"

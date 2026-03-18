@@ -103,6 +103,56 @@ export async function registerBackendRoutes(
     };
   });
 
+  app.post<{ Params: { backendId: string } }>(
+    '/api/backends/:backendId/rotate-token',
+    async (request, reply) => {
+      if (options.role !== 'home') {
+        return reply.code(400).send({ message: 'Token rotation only available on home servers.' });
+      }
+
+      const workspace = options.workspaceService.getWorkspace();
+      const backend = workspace.backends.find(
+        (candidate) => candidate.id === request.params.backendId,
+      );
+
+      if (!backend) {
+        return reply.code(404).send({ message: 'Backend not found.' });
+      }
+
+      const rotateResult = await fetchRemoteJson(
+        resolveUrl(backend.baseUrl, '/api/backend/machine/token/rotate'),
+        backend.token,
+        'POST',
+      );
+
+      if (!rotateResult.ok) {
+        return reply.code(rotateResult.status).send({
+          message: rotateResult.status === 401
+            ? 'Remote backend rejected the token.'
+            : 'Failed to rotate remote token.',
+        });
+      }
+
+      const rotatePayload = (await rotateResult.response.json()) as { machineToken?: string };
+
+      if (!rotatePayload.machineToken) {
+        return reply.code(502).send({ message: 'Remote backend did not return a new token.' });
+      }
+
+      const nextWorkspace = {
+        ...workspace,
+        backends: workspace.backends.map((candidate) =>
+          candidate.id === backend.id
+            ? { ...candidate, token: rotatePayload.machineToken as string }
+            : candidate,
+        ),
+      };
+      const savedWorkspace = await options.workspaceService.saveWorkspace(nextWorkspace);
+
+      return { backendId: backend.id, workspace: savedWorkspace };
+    },
+  );
+
   app.delete<{ Params: { backendId: string } }>(
     '/api/backends/:backendId',
     async (request, reply) => {
@@ -207,12 +257,14 @@ function mergeRemoteTerminals(
 async function fetchRemoteJson(
   url: string,
   token: string,
+  method = 'GET',
 ): Promise<{
   ok: boolean;
   status: number;
   response: Response;
 }> {
   const response = await fetch(url, {
+    method,
     headers: {
       'x-terminal-canvas-token': token,
     },

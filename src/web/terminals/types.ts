@@ -6,10 +6,12 @@ import type {
 } from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { MarkdownNode, TerminalNode } from '../../shared/workspace';
+import type { BackendAccent } from '../canvas/backendAccents';
 import type { TerminalPresentationMode } from './presentationMode';
 
 export interface TerminalNodeData extends Record<string, unknown> {
   terminal: TerminalNode;
+  backendAccent: BackendAccent | null;
   session: TerminalSessionSnapshot | null;
   presentationMode: TerminalPresentationMode;
   mountLivePreview: boolean;

@@ -1780,3 +1780,299 @@ body.is-dragging-terminal-overlay {
     max-width: min(32rem, calc(100vw - 4rem));
   }
 }
+
+/* ─── Backend Manager Panel ─────────────────────────────────── */
+
+.backend-manager-panel {
+  position: absolute;
+  top: 5.2rem;
+  right: 1rem;
+  z-index: 11;
+  display: flex;
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 11rem);
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem;
+  overflow-y: auto;
+  background: var(--panel-surface);
+  border: 1px solid var(--panel-border);
+  border-radius: 1.05rem;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+}
+
+.backend-manager-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.backend-manager-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.backend-manager-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(138, 180, 216, 0.12);
+}
+
+.backend-manager-section h3 {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8bafc9;
+}
+
+.backend-manager-loading,
+.backend-manager-error,
+.backend-manager-empty,
+.backend-manager-meta {
+  font-size: 0.75rem;
+  color: #b7ccde;
+}
+
+.backend-manager-error {
+  color: rgba(255, 140, 130, 0.9);
+}
+
+/* Backend list rows */
+
+.backend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.backend-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  background: rgba(138, 180, 216, 0.05);
+  border: 1px solid rgba(138, 180, 216, 0.12);
+  border-radius: 0.6rem;
+}
+
+.backend-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.backend-row-info strong {
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backend-row-url,
+.backend-row-error {
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #8bafc9;
+}
+
+.backend-row-error {
+  color: rgba(255, 140, 130, 0.85);
+}
+
+.backend-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: flex-end;
+}
+
+.backend-row-actions button {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+}
+
+/* Status dot */
+
+.backend-status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-top: 0.3rem;
+  flex-shrink: 0;
+  background: rgba(138, 180, 216, 0.5);
+}
+
+.backend-status-dot.is-connected {
+  background: rgba(94, 196, 139, 0.9);
+  box-shadow: 0 0 4px rgba(94, 196, 139, 0.5);
+}
+
+.backend-status-dot.is-connecting {
+  background: rgba(255, 194, 102, 0.8);
+}
+
+.backend-status-dot.is-disconnected,
+.backend-status-dot.is-error {
+  background: rgba(214, 98, 88, 0.85);
+}
+
+.backend-status-dot.is-auth-failed {
+  background: rgba(214, 98, 88, 0.85);
+}
+
+/* Add mode toggle */
+
+.backend-add-mode-toggle {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.backend-mode-tab {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.65rem;
+  border-radius: 2rem;
+  background: transparent;
+  border-color: rgba(138, 180, 216, 0.2);
+  color: #8bafc9;
+}
+
+.backend-mode-tab.is-active {
+  background: rgba(42, 80, 112, 0.7);
+  border-color: rgba(148, 196, 235, 0.5);
+  color: #d7eaf8;
+}
+
+/* Install script block */
+
+.backend-install-script {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(138, 180, 216, 0.1);
+  border-radius: 0.55rem;
+  font-size: 0.75rem;
+}
+
+.backend-install-script p {
+  margin: 0;
+  color: #b7ccde;
+}
+
+.backend-script-block {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.backend-script-block code {
+  flex: 1;
+  display: block;
+  padding: 0.35rem 0.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 0.35rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backend-copy-button {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+  flex-shrink: 0;
+}
+
+.backend-script-note {
+  font-size: 0.68rem;
+  color: #8bafc9;
+  margin: 0;
+}
+
+/* Add form */
+
+.backend-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.backend-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: #8bafc9;
+}
+
+.backend-form-field input {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(138, 180, 216, 0.18);
+  border-radius: 0.4rem;
+  color: #d7eaf8;
+}
+
+.backend-form-error {
+  font-size: 0.72rem;
+  color: rgba(255, 140, 130, 0.9);
+  margin: 0;
+}
+
+/* Local token row */
+
+.backend-token-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.backend-token-preview {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 0.3rem;
+  letter-spacing: 0.08em;
+}
+
+.backend-token-server-id {
+  font-size: 0.68rem;
+  color: #8bafc9;
+}
+
+.backend-token-row button {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+}
+
+/* Machine badge in title bar */
+
+.terminal-machine-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 2rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}

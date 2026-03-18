@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -25,15 +26,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 async function main(): Promise<void> {
-  const { positionals } = parseArgs({
-    allowPositionals: true,
-    options: {},
-    strict: false,
-  });
-  const [command, ...rest] = positionals;
+  const rawArgs = process.argv.slice(2);
+  const commandIndex = rawArgs.findIndex((arg) => !arg.startsWith('-'));
+  const command = commandIndex >= 0 ? rawArgs[commandIndex] : undefined;
+  const rest = commandIndex >= 0 ? rawArgs.slice(commandIndex + 1) : rawArgs;
 
-  if (!command || command.startsWith('-')) {
-    await runServeCommand([command, ...rest].filter(isString));
+  if (!command) {
+    await runServeCommand(rawArgs);
     return;
   }
 
@@ -49,6 +48,9 @@ async function main(): Promise<void> {
       return;
     case 'backend':
       await runBackendCommand(rest);
+      return;
+    case 'remote':
+      await runRemoteCommand(rest);
       return;
     case 'help':
     case '--help':
@@ -101,6 +103,7 @@ async function runServeCommand(argv: string[]): Promise<void> {
     serverId: identity.serverId,
     localBackendId: LOCAL_BACKEND_ID,
     machineToken: identity.machineToken,
+    serverIdentityFilePath: identityFilePath,
     workspaceFilePath,
     contentRoot: process.cwd(),
     devWebUrl,
@@ -322,6 +325,135 @@ async function runBackendCommand(argv: string[]): Promise<void> {
   }
 }
 
+async function runRemoteCommand(argv: string[]): Promise<void> {
+  const [subcommand, ...rest] = argv;
+
+  switch (subcommand) {
+    case 'install':
+      await runRemoteInstallCommand(rest);
+      return;
+    default:
+      throw new Error(
+        'Usage: tsheet remote install --ssh user@host [--label "Name"] [--port 4312] [--server <url>]',
+      );
+  }
+}
+
+async function runRemoteInstallCommand(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    allowPositionals: false,
+    options: {
+      ssh: {
+        type: 'string',
+      },
+      label: {
+        type: 'string',
+      },
+      port: {
+        type: 'string',
+        default: String(DEFAULT_PORT),
+      },
+      server: {
+        type: 'string',
+        default: DEFAULT_SERVER_URL,
+      },
+    },
+  });
+
+  if (!values.ssh) {
+    throw new Error(
+      'Usage: tsheet remote install --ssh user@host [--label "Name"] [--port 4312] [--server <url>]',
+    );
+  }
+
+  const label = values.label ?? values.ssh;
+  const remotePort = Number.parseInt(values.port, 10);
+
+  if (!Number.isFinite(remotePort)) {
+    throw new Error(`Invalid port: ${values.port}`);
+  }
+
+  const homeUrl = normalizeBaseUrl(values.server);
+  const installUrl = `${homeUrl}/install.sh`;
+
+  console.log(`Installing Terminal Sheet on ${values.ssh} via SSH...`);
+  console.log(`Home server: ${homeUrl}`);
+
+  const token = await runSshInstall(values.ssh, installUrl);
+
+  if (!token) {
+    throw new Error(
+      'Install completed but no TSHEET_TOKEN found in output. ' +
+        'Run `tsheet token show` on the remote machine to get the token, ' +
+        'then use `tsheet backend add` to register it.',
+    );
+  }
+
+  const sshHost = values.ssh.includes('@') ? values.ssh.split('@').slice(1).join('@') : values.ssh;
+  const remoteUrl = `http://${sshHost}:${remotePort}`;
+
+  console.log(`Registering backend: ${label} at ${remoteUrl}`);
+
+  const response = await fetchJson(resolveUrl(values.server, '/api/backends'), {
+    method: 'POST',
+    body: { label, baseUrl: remoteUrl, token },
+  });
+
+  const backendId =
+    typeof response.backend === 'object' &&
+    response.backend &&
+    'id' in response.backend &&
+    typeof response.backend.id === 'string'
+      ? response.backend.id
+      : label;
+  const importedTerminalCount =
+    typeof response.importedTerminalCount === 'number'
+      ? response.importedTerminalCount
+      : 0;
+
+  console.log(
+    `Remote install complete. Backend ${backendId} added with ${importedTerminalCount} imported terminals.`,
+  );
+}
+
+async function runSshInstall(sshTarget: string, installUrl: string): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const sshProcess = spawn(
+      'ssh',
+      [sshTarget, `curl -fsSL '${installUrl}' | bash`],
+      { stdio: ['inherit', 'pipe', 'inherit'] },
+    );
+
+    let capturedToken: string | null = null;
+    let outputBuffer = '';
+
+    sshProcess.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      outputBuffer += text;
+      process.stdout.write(text);
+
+      const match = outputBuffer.match(/TSHEET_TOKEN=([a-f0-9]+)/);
+
+      if (match) {
+        capturedToken = match[1] ?? null;
+      }
+    });
+
+    sshProcess.on('close', (code: number | null) => {
+      if (code === 0) {
+        resolve(capturedToken);
+      } else {
+        reject(new Error(`SSH install exited with code ${String(code)}`));
+      }
+    });
+
+    sshProcess.on('error', (err: Error) => {
+      reject(new Error(`SSH failed: ${err.message}`));
+    });
+  });
+}
+
 async function fetchJson(
   url: string,
   options?: {
@@ -389,7 +521,8 @@ function printHelp(): void {
   tsheet token <show|rotate> [--workspace <path>]
   tsheet backend add --label <name> --url <remote-url> --token <token> [--server <url>]
   tsheet backend list [--server <url>]
-  tsheet backend remove <backend-id> [--server <url>]`);
+  tsheet backend remove <backend-id> [--server <url>]
+  tsheet remote install --ssh user@host [--label "Name"] [--port 4312] [--server <url>]`);
 }
 
 main().catch((error: unknown) => {
