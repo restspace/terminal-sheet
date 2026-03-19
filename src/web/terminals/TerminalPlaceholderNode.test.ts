@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -124,6 +124,27 @@ describe('TerminalPlaceholderNode', () => {
     expect(container.textContent).not.toContain('Inspect preview');
     expect(container.querySelector('code')?.textContent).toBe('build started');
   });
+
+  it('skips heavy focus preview rendering when suppressed for overlay mode', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const session = createSessionSnapshot(terminal.id, {
+      scrollback: 'line 1\r\nline 2',
+    });
+    const props = createNodeProps({
+      terminal,
+      session,
+      presentationMode: 'focus',
+      mountLivePreview: false,
+    });
+    props.data.suppressHeavyPreview = true;
+
+    act(() => {
+      root.render(createElement(TerminalPlaceholderNode, props));
+    });
+
+    expect(container.querySelector('[data-testid="text-scroll-preview"]')).toBeNull();
+    expect(container.textContent).toContain('Select this node to focus it.');
+  });
 });
 
 function createNodeProps(options: {
@@ -131,7 +152,7 @@ function createNodeProps(options: {
   session: TerminalSessionSnapshot | null;
   presentationMode: 'overview' | 'inspect' | 'focus';
   mountLivePreview: boolean;
-}): Parameters<typeof TerminalPlaceholderNode>[0] {
+}): ComponentProps<typeof TerminalPlaceholderNode> {
   return {
     id: options.terminal.id,
     data: {
@@ -153,6 +174,8 @@ function createNodeProps(options: {
       backendAccent: null,
       activeMarkdownLink: null,
       allowResize: true,
+      resizeZoom: 1,
+      suppressHeavyPreview: false,
     } satisfies TerminalFlowNode['data'],
     width: options.terminal.bounds.width,
     height: options.terminal.bounds.height,
@@ -161,7 +184,7 @@ function createNodeProps(options: {
     zIndex: 1,
     isConnectable: false,
     type: 'terminal',
-  } as unknown as Parameters<typeof TerminalPlaceholderNode>[0];
+  } as unknown as ComponentProps<typeof TerminalPlaceholderNode>;
 }
 
 function createSessionSnapshot(

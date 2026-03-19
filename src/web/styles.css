@@ -765,6 +765,11 @@ button:disabled {
   will-change: transform, width, height;
 }
 
+.canvas-frame.is-viewport-interacting .react-flow__node {
+  transition: none;
+  will-change: transform;
+}
+
 .canvas-frame .react-flow__node.is-focus-target {
   z-index: 6;
 }
@@ -793,6 +798,11 @@ button:disabled {
     width var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing),
     height var(--layout-overlay-motion-ms) var(--layout-overlay-motion-easing);
   will-change: left, top, width, height;
+}
+
+.canvas-frame.is-viewport-interacting .canvas-node,
+.canvas-frame.is-viewport-interacting .focus-terminal-overlay {
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
 .focus-terminal-overlay-stripe {

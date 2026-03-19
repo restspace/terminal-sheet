@@ -6,7 +6,7 @@ import type {
   MarkdownLinkState,
 } from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
-import type { Workspace } from '../../shared/workspace';
+import type { SemanticZoomMode, Workspace } from '../../shared/workspace';
 import type { BackendAccent } from './backendAccents';
 import type { TerminalPresentationMode } from '../terminals/presentationMode';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
@@ -47,10 +47,13 @@ interface BuildCanvasNodesOptions {
   nodesResizable: boolean;
   livePreviewTerminalIds: ReadonlySet<string>;
   focusTerminalId: string | null;
+  viewportZoom: number;
+  semanticZoomMode: SemanticZoomMode;
   terminalPresentationById: ReadonlyMap<string, TerminalPresentationMode>;
   sessions: Record<string, TerminalSessionSnapshot>;
   markdownDocuments: Record<string, MarkdownDocumentState>;
-  markdownLinks: readonly MarkdownLinkState[];
+  activeMarkdownLinkByTerminalId: ReadonlyMap<string, MarkdownLinkState>;
+  activeMarkdownLinksByNodeId: ReadonlyMap<string, readonly MarkdownLinkState[]>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;
   onBoundsChange: (
@@ -88,10 +91,13 @@ export function buildCanvasNodes({
   nodesResizable,
   livePreviewTerminalIds,
   focusTerminalId,
+  viewportZoom,
+  semanticZoomMode,
   terminalPresentationById,
   sessions,
   markdownDocuments,
-  markdownLinks,
+  activeMarkdownLinkByTerminalId,
+  activeMarkdownLinksByNodeId,
   socketState,
   onSelect,
   onBoundsChange,
@@ -142,8 +148,10 @@ export function buildCanvasNodes({
         onMarkRead,
         onMarkdownDrop,
         activeMarkdownLink:
-          markdownLinks.find((link) => link.terminalId === terminal.id) ?? null,
+          activeMarkdownLinkByTerminalId.get(terminal.id) ?? null,
         allowResize: nodesResizable,
+        resizeZoom: selectedNodeId === terminal.id ? viewportZoom : 1,
+        suppressHeavyPreview: focusTerminalId === terminal.id,
       },
       style: {
         width: renderedBounds.width,
@@ -171,9 +179,7 @@ export function buildCanvasNodes({
       data: {
         markdown: node,
         document: markdownDocuments[node.id] ?? null,
-        activeLinks: markdownLinks.filter(
-          (link) => link.markdownNodeId === node.id,
-        ),
+        activeLinks: activeMarkdownLinksByNodeId.get(node.id) ?? [],
         onSelect,
         onFocusRequest: onMarkdownFocusRequest,
         onRemove: onMarkdownRemove,
@@ -183,6 +189,8 @@ export function buildCanvasNodes({
         onDocumentSave,
         onResolveConflict,
         allowResize: nodesResizable,
+        resizeZoom: selectedNodeId === node.id ? viewportZoom : 1,
+        semanticZoomMode,
       },
       style: {
         width: renderedBounds.width,

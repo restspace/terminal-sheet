@@ -1,15 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-let mockZoom = 1;
-
-vi.mock('@xyflow/react', () => ({
-  useViewport: () => ({ zoom: mockZoom }),
-}));
 
 vi.mock('../canvas/CanvasResizeHandles', () => ({
   CanvasResizeHandles: () => null,
@@ -32,7 +26,6 @@ describe('MarkdownPlaceholderNode', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    mockZoom = 1;
   });
 
   afterEach(() => {
@@ -54,6 +47,7 @@ describe('MarkdownPlaceholderNode', () => {
           createNodeProps({
             markdown,
             document: createDocumentState(markdown.id, markdown.filePath),
+            semanticZoomMode: 'inspect',
           }),
         ),
       );
@@ -71,7 +65,6 @@ describe('MarkdownPlaceholderNode', () => {
 
   it('marks focus-mode markdown editor and preview bodies as nowheel regions', () => {
     const markdown = createPlaceholderMarkdown(0);
-    mockZoom = 1.2;
 
     act(() => {
       root.render(
@@ -80,6 +73,7 @@ describe('MarkdownPlaceholderNode', () => {
           createNodeProps({
             markdown,
             document: createDocumentState(markdown.id, markdown.filePath),
+            semanticZoomMode: 'focus',
           }),
         ),
       );
@@ -105,6 +99,7 @@ describe('MarkdownPlaceholderNode', () => {
     const props = createNodeProps({
       markdown,
       document: createDocumentState(markdown.id, markdown.filePath),
+      semanticZoomMode: 'inspect',
     });
     props.data.onRemove = onRemove;
 
@@ -131,7 +126,8 @@ describe('MarkdownPlaceholderNode', () => {
 function createNodeProps(options: {
   markdown: ReturnType<typeof createPlaceholderMarkdown>;
   document: MarkdownDocumentState;
-}): Parameters<typeof MarkdownPlaceholderNode>[0] {
+  semanticZoomMode?: 'overview' | 'inspect' | 'focus';
+}): ComponentProps<typeof MarkdownPlaceholderNode> {
   return {
     id: options.markdown.id,
     data: {
@@ -147,6 +143,8 @@ function createNodeProps(options: {
       onDocumentSave: vi.fn(),
       onResolveConflict: vi.fn(),
       allowResize: true,
+      resizeZoom: 1,
+      semanticZoomMode: options.semanticZoomMode ?? 'inspect',
     },
     width: options.markdown.bounds.width,
     height: options.markdown.bounds.height,
@@ -155,7 +153,7 @@ function createNodeProps(options: {
     zIndex: 1,
     isConnectable: false,
     type: 'markdown',
-  } as unknown as Parameters<typeof MarkdownPlaceholderNode>[0];
+  } as unknown as ComponentProps<typeof MarkdownPlaceholderNode>;
 }
 
 function createDocumentState(

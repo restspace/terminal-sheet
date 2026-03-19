@@ -10,6 +10,7 @@ import {
 } from '@xyflow/react';
 
 import {
+  getSemanticZoomMode,
   type CameraViewport,
   type WorkspaceLayoutMode,
   type TerminalNode,
@@ -125,8 +126,17 @@ export function WorkspaceCanvas({
   const layoutAnimationTimerRef = useRef<number | null>(null);
   const lastLayoutAnimationKeyRef = useRef<string | null>(null);
   const overlaySwapTimerRef = useRef<number | null>(null);
+  const pendingViewportCommitRef = useRef<CameraViewport | null>(null);
+  const [lastCommittedViewport, setLastCommittedViewport] = useState<CameraViewport>(
+    workspace.currentViewport,
+  );
+  const [isAwaitingViewportCommit, setIsAwaitingViewportCommit] = useState(false);
   const lastOverlaySwapKeyRef = useRef<string | null>(null);
   const lastFocusTilesBoundsRef = useRef<Map<string, NodeBounds>>(new Map());
+  const [canvasViewport, setCanvasViewport] = useState<CameraViewport>(
+    workspace.currentViewport,
+  );
+  const [isViewportInteracting, setIsViewportInteracting] = useState(false);
   const [renderedBoundsByNodeId, setRenderedBoundsByNodeId] = useState<
     Map<string, NodeBounds>
   >(() => createInitialRenderedBoundsByNodeId(workspace));
@@ -137,6 +147,14 @@ export function WorkspaceCanvas({
   const [overlaySwapState, setOverlaySwapState] = useState<OverlaySwapState | null>(
     null,
   );
+  const hasPendingViewportCommit =
+    isAwaitingViewportCommit &&
+    !sameViewport(workspace.currentViewport, lastCommittedViewport);
+  const shouldUseCanvasViewport =
+    isViewportInteracting || hasPendingViewportCommit;
+  const activeViewport = shouldUseCanvasViewport
+    ? canvasViewport
+    : workspace.currentViewport;
   const focusedTerminalId = useMemo(
     () =>
       selectedNodeId && workspace.terminals.some((terminal) => terminal.id === selectedNodeId)
@@ -145,6 +163,22 @@ export function WorkspaceCanvas({
     [selectedNodeId, workspace.terminals],
   );
   const previousFocusedTerminalIdRef = useRef<string | null>(focusedTerminalId);
+  const layoutViewport =
+    workspace.layoutMode === 'focus-tiles'
+      ? activeViewport
+      : workspace.currentViewport;
+
+  useEffect(() => {
+    if (
+      !isAwaitingViewportCommit ||
+      !sameViewport(workspace.currentViewport, lastCommittedViewport)
+    ) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsAwaitingViewportCommit(false);
+  }, [isAwaitingViewportCommit, lastCommittedViewport, workspace.currentViewport]);
 
   useEffect(() => {
     const container = canvasFrameRef.current;
@@ -199,7 +233,7 @@ export function WorkspaceCanvas({
       ],
       selectedNodeId,
       interactionAtByNodeId: nodeInteractionAtMs,
-      viewport: workspace.currentViewport,
+      viewport: layoutViewport,
       viewportSize,
       safeAreaInsets: getLayoutSafeAreaInsets(viewportSize),
       previousState: layoutStateByModeRef.current[workspace.layoutMode] ?? null,
@@ -304,7 +338,7 @@ export function WorkspaceCanvas({
     onWorkspaceChange,
     selectedNodeId,
     viewportSize,
-    workspace.currentViewport,
+    layoutViewport,
     workspace.layoutMode,
     workspace.markdown,
     workspace.terminals,
@@ -336,10 +370,40 @@ export function WorkspaceCanvas({
       }),
     [selectedNodeId, sessions, nodeInteractionAtMs, workspace.terminals],
   );
+  const semanticZoomMode = useMemo(
+    () => getSemanticZoomMode(activeViewport.zoom),
+    [activeViewport.zoom],
+  );
   const livePreviewTerminalIds = useMemo(
     () => new Set(terminalPresentationState.inspectTerminalIds),
     [terminalPresentationState.inspectTerminalIds],
   );
+  const activeMarkdownLinkByTerminalId = useMemo(() => {
+    const linksByTerminalId = new Map<string, MarkdownLinkState>();
+
+    for (const link of markdownLinks) {
+      if (!linksByTerminalId.has(link.terminalId)) {
+        linksByTerminalId.set(link.terminalId, link);
+      }
+    }
+
+    return linksByTerminalId;
+  }, [markdownLinks]);
+  const activeMarkdownLinksByNodeId = useMemo(() => {
+    const linksByNodeId = new Map<string, MarkdownLinkState[]>();
+
+    for (const link of markdownLinks) {
+      const existing = linksByNodeId.get(link.markdownNodeId);
+
+      if (existing) {
+        existing.push(link);
+      } else {
+        linksByNodeId.set(link.markdownNodeId, [link]);
+      }
+    }
+
+    return linksByNodeId;
+  }, [markdownLinks]);
   const selectedTerminal = useMemo(
     () =>
       terminalPresentationState.focusedTerminalId
@@ -404,10 +468,13 @@ export function WorkspaceCanvas({
         nodesResizable: interactionPolicy.nodesResizable,
         livePreviewTerminalIds,
         focusTerminalId: selectedTerminal?.id ?? null,
+        viewportZoom: activeViewport.zoom,
+        semanticZoomMode,
         terminalPresentationById: terminalPresentationState.presentationById,
         sessions,
         markdownDocuments,
-        markdownLinks,
+        activeMarkdownLinkByTerminalId,
+        activeMarkdownLinksByNodeId,
         socketState,
         onSelect: onSelectedNodeChange,
         onBoundsChange: (nodeId, bounds) => {
@@ -431,6 +498,7 @@ export function WorkspaceCanvas({
     [
       backendAccents,
       livePreviewTerminalIds,
+      activeViewport.zoom,
       onMarkTerminalRead,
       onMarkdownDrop,
       onMarkdownFocusRequest,
@@ -453,8 +521,10 @@ export function WorkspaceCanvas({
       interactionPolicy.nodesResizable,
       sessions,
       markdownDocuments,
-      markdownLinks,
+      activeMarkdownLinkByTerminalId,
+      activeMarkdownLinksByNodeId,
       socketState,
+      semanticZoomMode,
       terminalPresentationState.presentationById,
       workspace,
       onResolveConflict,
@@ -469,9 +539,13 @@ export function WorkspaceCanvas({
     <div
       ref={canvasFrameRef}
       className={
-        layoutAnimationClassName
-          ? `canvas-frame ${layoutAnimationClassName}`
-          : 'canvas-frame'
+        [
+          'canvas-frame',
+          layoutAnimationClassName,
+          isViewportInteracting ? 'is-viewport-interacting' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')
       }
     >
       <ReactFlowProvider>
@@ -479,8 +553,39 @@ export function WorkspaceCanvas({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
-          viewport={workspace.currentViewport}
-          onViewportChange={onViewportChange}
+          viewport={activeViewport}
+          onViewportChange={(nextViewport) => {
+            setCanvasViewport((current) =>
+              sameViewport(current, nextViewport) ? current : nextViewport,
+            );
+            pendingViewportCommitRef.current = nextViewport;
+          }}
+          onMoveStart={() => {
+            setLastCommittedViewport(workspace.currentViewport);
+            setIsAwaitingViewportCommit(false);
+            setIsViewportInteracting(true);
+          }}
+          onMoveEnd={(_event, maybeViewport) => {
+            setIsViewportInteracting(false);
+
+            const finalViewport = isCameraViewport(maybeViewport)
+              ? maybeViewport
+              : (pendingViewportCommitRef.current ?? canvasViewport);
+            pendingViewportCommitRef.current = null;
+
+            if (!finalViewport) {
+              return;
+            }
+
+            setCanvasViewport((current) =>
+              sameViewport(current, finalViewport) ? current : finalViewport,
+            );
+            if (!sameViewport(lastCommittedViewport, finalViewport)) {
+              setIsAwaitingViewportCommit(true);
+              setLastCommittedViewport(finalViewport);
+              onViewportChange(finalViewport);
+            }
+          }}
           onNodesChange={(changes) => {
             const nextSelectedNodeId = getSelectedNodeIdFromChanges(changes);
 
@@ -598,7 +703,7 @@ export function WorkspaceCanvas({
               )}
               backendAccent={outgoingSwapTerminalAccent}
               session={outgoingSwapSession}
-              viewport={workspace.currentViewport}
+              viewport={activeViewport}
               autoFocusAtMs={null}
               visualVariant="swap-out"
               interactive={false}
@@ -623,7 +728,7 @@ export function WorkspaceCanvas({
             )}
             backendAccent={incomingSwapTerminalAccent}
             session={incomingSwapSession}
-            viewport={workspace.currentViewport}
+            viewport={activeViewport}
             autoFocusAtMs={focusAutoFocusAtMs}
             visualVariant="swap-in"
             interactive
@@ -648,7 +753,7 @@ export function WorkspaceCanvas({
           )}
           backendAccent={selectedTerminalAccent}
           session={selectedSession}
-          viewport={workspace.currentViewport}
+          viewport={activeViewport}
           autoFocusAtMs={focusAutoFocusAtMs}
           onInput={onTerminalInput}
           onResize={onTerminalResize}
@@ -829,4 +934,29 @@ function shouldStartOverlaySwapTransition(options: {
     Boolean(nextFocusedTerminalId) &&
     previousFocusedTerminalId !== nextFocusedTerminalId
   );
+}
+
+function isCameraViewport(value: unknown): value is CameraViewport {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<CameraViewport>;
+  return (
+    typeof candidate.x === 'number' &&
+    typeof candidate.y === 'number' &&
+    typeof candidate.zoom === 'number'
+  );
+}
+
+function sameViewport(left: CameraViewport, right: CameraViewport): boolean {
+  return (
+    almostEqual(left.x, right.x) &&
+    almostEqual(left.y, right.y) &&
+    almostEqual(left.zoom, right.zoom)
+  );
+}
+
+function almostEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) < 0.001;
 }

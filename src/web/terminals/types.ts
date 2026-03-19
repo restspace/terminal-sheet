@@ -4,6 +4,7 @@ import type {
   MarkdownDocumentState,
   MarkdownLinkState,
 } from '../../shared/markdown';
+import type { SemanticZoomMode } from '../../shared/workspace';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { MarkdownNode, TerminalNode } from '../../shared/workspace';
 import type { BackendAccent } from '../canvas/backendAccents';
@@ -34,12 +35,14 @@ export interface TerminalNodeData extends Record<string, unknown> {
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
   activeMarkdownLink: MarkdownLinkState | null;
   allowResize: boolean;
+  resizeZoom: number;
+  suppressHeavyPreview: boolean;
 }
 
 export interface MarkdownNodeData extends Record<string, unknown> {
   markdown: MarkdownNode;
   document: MarkdownDocumentState | null;
-  activeLinks: MarkdownLinkState[];
+  activeLinks: readonly MarkdownLinkState[];
   onSelect: (nodeId: string) => void;
   onFocusRequest: (nodeId: string) => void;
   onRemove: (nodeId: string) => void;
@@ -55,6 +58,8 @@ export interface MarkdownNodeData extends Record<string, unknown> {
     choice: 'reload-disk' | 'overwrite-disk' | 'keep-buffer',
   ) => void;
   allowResize: boolean;
+  resizeZoom: number;
+  semanticZoomMode: SemanticZoomMode;
 }
 
 export type TerminalFlowNode = Node<TerminalNodeData, 'terminal'>;

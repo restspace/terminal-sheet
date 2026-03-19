@@ -66,6 +66,10 @@ interface RendererController {
   dispose: () => void;
 }
 
+interface RendererInitializationOptions {
+  allowWebgl: boolean;
+}
+
 export function TerminalSurface({
   sessionId,
   scrollback,
@@ -114,7 +118,9 @@ export function TerminalSurface({
     const terminal = new Terminal(createTerminalOptions(readOnly, visualScale));
 
     terminal.open(container);
-    const rendererController = initializeTerminalRenderer(terminal);
+    const rendererController = initializeTerminalRenderer(terminal, {
+      allowWebgl: !readOnly,
+    });
     markTerminalDomAsCanvasSafe(terminal);
 
     if (readOnly && terminal.textarea instanceof HTMLTextAreaElement) {
@@ -539,8 +545,11 @@ function isReadOnlyViewportNearBottom(terminal: Terminal): boolean {
   return activeBuffer.baseY - activeBuffer.viewportY <= 1;
 }
 
-function initializeTerminalRenderer(terminal: Terminal): RendererController {
-  const webglRenderer = installWebglRenderer(terminal);
+function initializeTerminalRenderer(
+  terminal: Terminal,
+  options: RendererInitializationOptions,
+): RendererController {
+  const webglRenderer = options.allowWebgl ? installWebglRenderer(terminal) : null;
 
   if (webglRenderer) {
     return webglRenderer;

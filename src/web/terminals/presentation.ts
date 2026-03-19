@@ -7,6 +7,12 @@ const ATTENTION_STATUSES: readonly TerminalStatus[] = [
   'failed',
   'disconnected',
 ];
+const EVENT_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
 
 export function getTerminalDisplayStatus(
   terminal: TerminalNode,
@@ -84,12 +90,7 @@ export function formatTerminalEventTime(
     return `${deltaDays}d ago`;
   }
 
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(eventDate);
+  return EVENT_TIME_FORMATTER.format(eventDate);
 }
 
 export function getTerminalIntegrationBadgeLabel(

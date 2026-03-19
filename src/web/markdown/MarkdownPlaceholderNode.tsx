@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
-import { type NodeProps, useViewport } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 
-import { getSemanticZoomMode } from '../../shared/workspace';
 import { CanvasResizeHandles } from '../canvas/CanvasResizeHandles';
 import type { MarkdownFlowNode } from '../terminals/types';
 import { CodeMirrorMarkdownEditor } from './CodeMirrorMarkdownEditor';
@@ -10,18 +9,17 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 
 type FocusPanel = 'edit' | 'split' | 'preview';
 
-export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
+function MarkdownPlaceholderNodeComponent(props: NodeProps<MarkdownFlowNode>) {
   const { data, selected } = props;
-  const { zoom } = useViewport();
-  const mode = getSemanticZoomMode(zoom);
+  const mode = data.semanticZoomMode;
   const markdown = data.markdown;
   const document = data.document;
-  const { onBoundsChange } = data;
+  const { onBoundsChange, onDocumentLoad } = data;
   const [focusPanel, setFocusPanel] = useState<FocusPanel>('split');
 
   useEffect(() => {
-    data.onDocumentLoad(markdown.id);
-  }, [data, markdown.id]);
+    onDocumentLoad(markdown.id);
+  }, [onDocumentLoad, markdown.id]);
 
   const snippet = useMemo(
     () => getSnippet(document?.content ?? ''),
@@ -48,7 +46,7 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
         isVisible={selected && data.allowResize}
         minWidth={260}
         minHeight={200}
-        zoom={zoom}
+        zoom={data.resizeZoom}
         onBoundsChange={(bounds) => {
           onBoundsChange(markdown.id, bounds);
         }}
@@ -261,6 +259,12 @@ export function MarkdownPlaceholderNode(props: NodeProps<MarkdownFlowNode>) {
   );
 }
 
+export const MarkdownPlaceholderNode = memo(
+  MarkdownPlaceholderNodeComponent,
+  areMarkdownNodePropsEqual,
+);
+MarkdownPlaceholderNode.displayName = 'MarkdownPlaceholderNode';
+
 function getSnippet(content: string): string {
   const normalized = content
     .split(/\r?\n/)
@@ -286,4 +290,32 @@ function stopPointerEventPropagation(event: {
 }): void {
   event.preventDefault();
   event.stopPropagation();
+}
+
+function areMarkdownNodePropsEqual(
+  previous: NodeProps<MarkdownFlowNode>,
+  next: NodeProps<MarkdownFlowNode>,
+): boolean {
+  const previousData = previous.data;
+  const nextData = next.data;
+
+  return (
+    previous.selected === next.selected &&
+    previous.dragging === next.dragging &&
+    previous.width === next.width &&
+    previous.height === next.height &&
+    previousData.markdown === nextData.markdown &&
+    previousData.document === nextData.document &&
+    previousData.activeLinks === nextData.activeLinks &&
+    previousData.allowResize === nextData.allowResize &&
+    previousData.resizeZoom === nextData.resizeZoom &&
+    previousData.semanticZoomMode === nextData.semanticZoomMode &&
+    previousData.onFocusRequest === nextData.onFocusRequest &&
+    previousData.onRemove === nextData.onRemove &&
+    previousData.onBoundsChange === nextData.onBoundsChange &&
+    previousData.onDocumentLoad === nextData.onDocumentLoad &&
+    previousData.onDocumentChange === nextData.onDocumentChange &&
+    previousData.onDocumentSave === nextData.onDocumentSave &&
+    previousData.onResolveConflict === nextData.onResolveConflict
+  );
 }

@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 
-import { type NodeProps, useViewport } from '@xyflow/react';
+import { type NodeProps } from '@xyflow/react';
 
 import { CanvasResizeHandles } from '../canvas/CanvasResizeHandles';
 import { shouldAutoMarkRead } from './autoMarkRead';
@@ -20,9 +20,8 @@ import { TerminalScrollPreview } from './TerminalScrollPreview';
 import { TerminalTitleBar } from './TerminalTitleBar';
 import type { TerminalFlowNode } from './types';
 
-export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
+function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
   const { data, selected } = props;
-  const { zoom } = useViewport();
   const mode = data.presentationMode;
   const terminal = data.terminal;
   const session = data.session;
@@ -56,6 +55,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   const hideRedundantMetadata = selected && mode !== 'overview';
   const hideCardTitleBar = selected && mode === 'focus';
   const hideReadOnlyStatusRows = canMountLivePreview || canRenderFocusPreview;
+  const suppressHeavyPreview = data.suppressHeavyPreview;
   const previewScrollResetKey = `${mode}:${selected}`;
   const lastAutoMarkedUnreadCountRef = useRef<number>(0);
   const markdownLink = data.activeMarkdownLink;
@@ -123,7 +123,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         isVisible={selected && data.allowResize}
         minWidth={260}
         minHeight={180}
-        zoom={zoom}
+        zoom={data.resizeZoom}
         onBoundsChange={(bounds) => {
           onBoundsChange(terminal.id, bounds);
         }}
@@ -286,7 +286,7 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
         ) : null}
 
         {mode === 'focus' ? (
-          canRenderFocusPreview ? (
+          canRenderFocusPreview && !suppressHeavyPreview ? (
             <div className="canvas-node-summary terminal-live-preview-card">
               {!hideRedundantMetadata ? (
                 <div className="terminal-focus-toolbar">
@@ -355,8 +355,48 @@ export function TerminalPlaceholderNode(props: NodeProps<TerminalFlowNode>) {
   );
 }
 
+export const TerminalPlaceholderNode = memo(
+  TerminalPlaceholderNodeComponent,
+  areTerminalNodePropsEqual,
+);
+TerminalPlaceholderNode.displayName = 'TerminalPlaceholderNode';
+
 function readMarkdownDragNodeId(event: Pick<DragEvent, 'dataTransfer'>): string | null {
   const payload = event.dataTransfer?.getData('application/x-terminal-canvas-markdown');
 
   return payload?.trim() || null;
+}
+
+function areTerminalNodePropsEqual(
+  previous: NodeProps<TerminalFlowNode>,
+  next: NodeProps<TerminalFlowNode>,
+): boolean {
+  const previousData = previous.data;
+  const nextData = next.data;
+
+  return (
+    previous.selected === next.selected &&
+    previous.dragging === next.dragging &&
+    previous.width === next.width &&
+    previous.height === next.height &&
+    previousData.terminal === nextData.terminal &&
+    previousData.session === nextData.session &&
+    previousData.backendAccent === nextData.backendAccent &&
+    previousData.presentationMode === nextData.presentationMode &&
+    previousData.mountLivePreview === nextData.mountLivePreview &&
+    previousData.socketState === nextData.socketState &&
+    previousData.activeMarkdownLink === nextData.activeMarkdownLink &&
+    previousData.allowResize === nextData.allowResize &&
+    previousData.resizeZoom === nextData.resizeZoom &&
+    previousData.suppressHeavyPreview === nextData.suppressHeavyPreview &&
+    previousData.onBoundsChange === nextData.onBoundsChange &&
+    previousData.onTerminalChange === nextData.onTerminalChange &&
+    previousData.onPathSelectRequest === nextData.onPathSelectRequest &&
+    previousData.onRemove === nextData.onRemove &&
+    previousData.onInput === nextData.onInput &&
+    previousData.onResize === nextData.onResize &&
+    previousData.onRestart === nextData.onRestart &&
+    previousData.onMarkRead === nextData.onMarkRead &&
+    previousData.onMarkdownDrop === nextData.onMarkdownDrop
+  );
 }
