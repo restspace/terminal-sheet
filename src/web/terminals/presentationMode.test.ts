@@ -37,7 +37,7 @@ describe('deriveTerminalPresentationState', () => {
     expect(result.inspectTerminalIds).not.toContain(selectedTerminal!.id);
   });
 
-  it('uses the eight most recent non-selected terminals for inspect mode', () => {
+  it('keeps inspect previews within the live terminal surface budget', () => {
     const terminals = Array.from({ length: 12 }, (_, index) =>
       createPlaceholderTerminal(index),
     );
@@ -65,13 +65,13 @@ describe('deriveTerminalPresentationState', () => {
     });
 
     expect(result.inspectTerminalIds).toHaveLength(
-      MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
+      MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS - 1,
     );
     expect(result.inspectTerminalIds).toEqual(
-      terminals.slice(1, 9).map((terminal) => terminal.id),
+      terminals.slice(1, 8).map((terminal) => terminal.id),
     );
     expect(result.overviewTerminalIds).toEqual(
-      terminals.slice(9).map((terminal) => terminal.id),
+      terminals.slice(8).map((terminal) => terminal.id),
     );
   });
 

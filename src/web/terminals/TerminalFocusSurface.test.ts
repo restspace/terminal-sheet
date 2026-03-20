@@ -362,7 +362,7 @@ describe('ReadOnlyTerminalSurface', () => {
     expect(terminal.onDataHandlerCount).toBe(0);
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(0);
     expect(terminal.options.fontSize).toBe(10.5);
-    expect(terminal.options.scrollback).toBe(20_000);
+    expect(terminal.options.scrollback).toBe(2_500);
     expect(terminal.options.disableStdin).toBe(true);
     expect(terminal.options.theme).toMatchObject({
       foreground: '#d7e4ee',
@@ -370,7 +370,7 @@ describe('ReadOnlyTerminalSurface', () => {
       brightBlue: '#9dc7f5',
       cursor: 'transparent',
     });
-    expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon']);
+    expect(terminal.loadAddonCalls).toEqual(['MockCanvasAddon']);
 
     act(() => {
       root.render(
@@ -464,9 +464,7 @@ describe('ReadOnlyTerminalSurface', () => {
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(initialScrollCalls);
   });
 
-  it('falls back to the canvas renderer when webgl initialization fails', () => {
-    mockAddonState.webglActivateShouldThrow = true;
-
+  it('uses the canvas renderer for read-only surfaces', () => {
     act(() => {
       root.render(
         createElement(ReadOnlyTerminalSurface, {
@@ -478,8 +476,8 @@ describe('ReadOnlyTerminalSurface', () => {
 
     const terminal = getSingleMockTerminal();
 
-    expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon', 'MockCanvasAddon']);
-    expect(mockAddonState.webglInstances).toHaveLength(1);
+    expect(terminal.loadAddonCalls).toEqual(['MockCanvasAddon']);
+    expect(mockAddonState.webglInstances).toHaveLength(0);
     expect(mockAddonState.canvasInstances).toHaveLength(1);
   });
 });
@@ -562,7 +560,7 @@ describe('TerminalFocusSurface', () => {
       cursor: '#8ab4d8',
     });
     expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon']);
-    expect(mockAddonState.webglInstances[0]?.preserveDrawingBuffer).toBe(true);
+    expect(mockAddonState.webglInstances[0]?.preserveDrawingBuffer).toBe(false);
   });
 
   it('falls back to the canvas renderer after a webgl context loss', () => {

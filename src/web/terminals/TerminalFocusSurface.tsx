@@ -4,6 +4,7 @@ import { CanvasAddon } from '@xterm/addon-canvas';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 
+import { MAX_SCROLLBACK_CHARS } from '../../shared/scrollback';
 import {
   DEFAULT_TERMINAL_CELL_SIZE,
   measureCellSize,
@@ -32,10 +33,12 @@ interface TerminalSurfaceProps {
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
 const TERMINAL_FONT_SIZE = 10.5;
 const TERMINAL_LINE_HEIGHT = 1.1;
-const TERMINAL_SCROLLBACK_LINES = 20_000;
+// Keep xterm's internal line buffer aligned with the app's 120k-char
+// scrollback cap so mounted surfaces do not retain substantially more history.
+const TERMINAL_SCROLLBACK_LINES = Math.ceil(MAX_SCROLLBACK_CHARS / 48);
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
-const WEBGL_PRESERVE_DRAWING_BUFFER = true;
+const WEBGL_PRESERVE_DRAWING_BUFFER = false;
 const TERMINAL_THEME = {
   background: '#07111a',
   foreground: '#d7e4ee',

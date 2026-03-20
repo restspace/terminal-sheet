@@ -33,6 +33,9 @@ export function deriveTerminalPresentationState(options: {
   )
     ? selectedNodeId
     : null;
+  const inspectPreviewBudget = focusedTerminalId
+    ? Math.max(0, MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS - 1)
+    : MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS;
   const inspectTerminalIds = terminals
     .filter((terminal) => terminal.id !== focusedTerminalId)
     .sort((left, right) => {
@@ -56,7 +59,7 @@ export function deriveTerminalPresentationState(options: {
         (terminalOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
       );
     })
-    .slice(0, MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS)
+    .slice(0, inspectPreviewBudget)
     .map((terminal) => terminal.id);
   const inspectTerminalIdSet = new Set(inspectTerminalIds);
   const presentationById = new Map<string, TerminalPresentationMode>();
