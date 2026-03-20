@@ -3,9 +3,11 @@ import { type FastifyBaseLogger } from 'fastify';
 import type { BackendConnection, BackendStatus, ServerRole } from '../../shared/backends';
 import type { AttentionEvent } from '../../shared/events';
 import { parseJsonMessage, serializeJsonMessage } from '../../shared/jsonTransport';
+import { appendScrollback } from '../../shared/scrollback';
 import {
   terminalServerSocketMessageSchema,
   type TerminalServerSocketMessage,
+  type TerminalSessionOutputState,
   type TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
 import type { TerminalNode, Workspace } from '../../shared/workspace';
@@ -429,6 +431,16 @@ class RemoteBackendClient {
           return;
         }
 
+        const existing = this.sessions.get(message.sessionId);
+        const nextSnapshot = mergeRemoteSessionOutput(
+          existing,
+          this.connection.id,
+          message.sessionId,
+          message.data,
+          message.state,
+        );
+        this.sessions.set(message.sessionId, nextSnapshot);
+
         this.listeners.onSessionMessage({
           ...message,
           backendId: this.connection.id,
@@ -579,6 +591,32 @@ class RemoteBackendClient {
       );
     }
   }
+}
+
+function mergeRemoteSessionOutput(
+  existing: TerminalSessionSnapshot | undefined,
+  backendId: string,
+  sessionId: string,
+  data: string,
+  state: TerminalSessionOutputState,
+): TerminalSessionSnapshot {
+  const scrollback = appendScrollback(existing?.scrollback ?? '', data);
+
+  if (!existing) {
+    return {
+      sessionId,
+      backendId,
+      scrollback,
+      ...state,
+    };
+  }
+
+  return {
+    ...existing,
+    ...state,
+    backendId,
+    scrollback,
+  };
 }
 
 function createBackendStatus(

@@ -8,6 +8,7 @@ import type { AttentionEvent } from '../../shared/events';
 import {
   type TerminalIntegrationState,
   type TerminalServerSocketMessage,
+  type TerminalSessionOutputState,
   type TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
 import type { AgentType, TerminalNode, Workspace } from '../../shared/workspace';
@@ -407,9 +408,10 @@ export class PtySessionManager {
       sessionId: record.terminal.id,
       backendId: this.options.backendId ?? LOCAL_BACKEND_ID,
       data: cwdResult.output,
+      state: buildSessionOutputState(nextSnapshot),
     });
 
-    this.setSnapshot(record, nextSnapshot);
+    record.snapshot = nextSnapshot;
   }
 
   private handleExit(
@@ -760,6 +762,18 @@ export class PtySessionManager {
       );
     }
   }
+}
+
+function buildSessionOutputState(
+  snapshot: TerminalSessionSnapshot,
+): TerminalSessionOutputState {
+  const { sessionId: _sessionId, backendId: _backendId, scrollback: _scrollback, ...state } =
+    snapshot;
+  void _sessionId;
+  void _backendId;
+  void _scrollback;
+
+  return state;
 }
 
 function clamp(value: number, min: number, max: number): number {

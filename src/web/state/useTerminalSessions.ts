@@ -12,6 +12,7 @@ import {
   terminalServerSocketMessageSchema,
   type TerminalClientSocketMessage,
   type TerminalSessionSnapshot,
+  type TerminalSessionOutputState,
 } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
 
@@ -259,17 +260,11 @@ export function applyServerMessage(
       };
     case 'session.output': {
       const existing = current[message.sessionId];
-
-      if (!existing) {
-        return current;
-      }
+      const nextSession = mergeSessionOutput(existing, message);
 
       return {
         ...current,
-        [message.sessionId]: {
-          ...existing,
-          scrollback: appendScrollback(existing.scrollback, message.data),
-        },
+        [message.sessionId]: nextSession,
       };
     }
     case 'session.removed': {
@@ -285,6 +280,37 @@ export function applyServerMessage(
     case 'markdown.link':
       return current;
   }
+}
+
+function mergeSessionOutput(
+  existing: TerminalSessionSnapshot | undefined,
+  message: Extract<TerminalServerSocketMessage, { type: 'session.output' }>,
+): TerminalSessionSnapshot {
+  const scrollback = appendScrollback(existing?.scrollback ?? '', message.data);
+
+  if (!existing) {
+    return createSnapshotFromOutput(message.sessionId, message.backendId, message.state, scrollback);
+  }
+
+  return {
+    ...existing,
+    ...message.state,
+    scrollback,
+  };
+}
+
+function createSnapshotFromOutput(
+  sessionId: string,
+  backendId: string,
+  state: TerminalSessionOutputState,
+  scrollback: string,
+): TerminalSessionSnapshot {
+  return {
+    sessionId,
+    backendId,
+    scrollback,
+    ...state,
+  };
 }
 
 export function applyWorkspaceMessage(

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AttentionEvent } from '../../shared/events';
-import type { TerminalServerSocketMessage } from '../../shared/terminalSessions';
+import type {
+  TerminalServerSocketMessage,
+  TerminalSessionSnapshot,
+} from '../../shared/terminalSessions';
 import { createDefaultWorkspace } from '../../shared/workspace';
 import {
   applyAttentionMessage,
@@ -78,4 +81,81 @@ describe('useTerminalSessions helpers', () => {
     expect(shouldPollSnapshots('error')).toBe(true);
     expect(shouldPollSnapshots('open')).toBe(false);
   });
+
+  it('merges incremental output without requiring a full snapshot', () => {
+    const currentSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+      scrollback: 'hello',
+      unreadCount: 1,
+      summary: 'hello',
+    });
+
+    const next = applyServerMessage(
+      { 'terminal-1': currentSession },
+      {
+        type: 'session.output',
+        sessionId: 'terminal-1',
+        backendId: 'local',
+        data: ' world',
+        state: {
+          ...toOutputState(currentSession),
+          unreadCount: 2,
+          summary: 'hello world',
+        },
+      },
+    );
+
+    expect(next['terminal-1']).toMatchObject({
+      sessionId: 'terminal-1',
+      backendId: 'local',
+      scrollback: 'hello world',
+      unreadCount: 2,
+      summary: 'hello world',
+    });
+  });
 });
+
+function createSessionSnapshot(
+  overrides: Partial<TerminalSessionSnapshot> = {},
+): TerminalSessionSnapshot {
+  return {
+    sessionId: 'terminal-default',
+    backendId: 'local',
+    pid: null,
+    status: 'running',
+    commandState: 'running-command',
+    connected: true,
+    recoveryState: 'live',
+    startedAt: '2026-03-20T12:00:00.000Z',
+    lastActivityAt: '2026-03-20T12:00:00.000Z',
+    lastOutputAt: '2026-03-20T12:00:00.000Z',
+    lastOutputLine: 'hello',
+    previewLines: ['hello'],
+    scrollback: '',
+    unreadCount: 0,
+    summary: 'running',
+    exitCode: null,
+    disconnectReason: null,
+    cols: 80,
+    rows: 24,
+    liveCwd: 'C:\\workspace',
+    projectRoot: 'C:\\workspace',
+    integration: {
+      owner: null,
+      status: 'not-required',
+      message: null,
+      updatedAt: null,
+    },
+    ...overrides,
+  };
+}
+
+function toOutputState(snapshot: TerminalSessionSnapshot) {
+  const { sessionId: _sessionId, backendId: _backendId, scrollback: _scrollback, ...state } =
+    snapshot;
+  void _sessionId;
+  void _backendId;
+  void _scrollback;
+
+  return state;
+}

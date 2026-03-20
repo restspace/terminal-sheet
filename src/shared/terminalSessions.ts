@@ -63,6 +63,13 @@ export const terminalSessionSnapshotSchema = z.object({
   integration: terminalIntegrationStateSchema,
 });
 
+export const terminalSessionOutputStateSchema =
+  terminalSessionSnapshotSchema.omit({
+    sessionId: true,
+    backendId: true,
+    scrollback: true,
+  });
+
 export const terminalSocketReadyMessageSchema = z.object({
   type: z.literal('ready'),
   timestamp: z.iso.datetime(),
@@ -88,6 +95,7 @@ export const terminalSessionOutputMessageSchema = z.object({
   sessionId: z.string(),
   backendId: z.string().default(LOCAL_BACKEND_ID),
   data: z.string(),
+  state: terminalSessionOutputStateSchema,
 });
 
 export const terminalSessionRemovedMessageSchema = z.object({
@@ -161,6 +169,9 @@ export type TerminalIntegrationState = z.infer<
 >;
 export type TerminalSessionSnapshot = z.infer<
   typeof terminalSessionSnapshotSchema
+>;
+export type TerminalSessionOutputState = z.infer<
+  typeof terminalSessionOutputStateSchema
 >;
 export type TerminalServerSocketMessage = z.infer<
   typeof terminalServerSocketMessageSchema

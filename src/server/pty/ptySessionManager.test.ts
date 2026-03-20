@@ -103,6 +103,9 @@ describe('PtySessionManager', () => {
       sessionId: 'terminal-2',
       backendId: 'local',
       data: 'build complete\r\n',
+      state: expect.objectContaining({
+        summary: expect.any(String),
+      }),
     });
     expect(manager.getSnapshots()[0]?.scrollback).toContain('build complete');
     expect(manager.getSnapshots()[0]?.scrollback).not.toContain(
