@@ -52,6 +52,7 @@ const MAX_NOTIFIED_EVENT_IDS = 256;
 const EMPTY_TERMINALS: TerminalNode[] = [];
 const DEFAULT_VIEWPORT: CameraViewport = { x: 0, y: 0, zoom: 1 };
 const BACKEND_SHELLS_STORAGE_KEY = 'tc-backend-shells';
+const USER_TIMING_CLEAR_INTERVAL_MS = 5_000;
 
 export function App() {
   const {
@@ -169,6 +170,28 @@ export function App() {
   useEffect(() => {
     return () => {
       cancelViewportAnimation(viewportAnimationFrameRef);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof performance === 'undefined') {
+      return;
+    }
+
+    const clearUserTimingEntries = () => {
+      performance.clearMarks();
+      performance.clearMeasures();
+    };
+
+    clearUserTimingEntries();
+    const intervalId = window.setInterval(
+      clearUserTimingEntries,
+      USER_TIMING_CLEAR_INTERVAL_MS,
+    );
+
+    return () => {
+      window.clearInterval(intervalId);
+      clearUserTimingEntries();
     };
   }, []);
 

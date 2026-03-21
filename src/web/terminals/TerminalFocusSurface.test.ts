@@ -563,6 +563,37 @@ describe('TerminalFocusSurface', () => {
     expect(mockAddonState.webglInstances[0]?.preserveDrawingBuffer).toBe(false);
   });
 
+  it('updates the focused font size without remounting the terminal', () => {
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-focus',
+          scrollback: '',
+          visualScale: 1,
+          onInput: vi.fn(),
+          onResize: vi.fn(),
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal();
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-focus',
+          scrollback: '',
+          visualScale: 1.35,
+          onInput: vi.fn(),
+          onResize: vi.fn(),
+        }),
+      );
+    });
+
+    expect(mockTerminalState.instances).toHaveLength(1);
+    expect(terminal.options.fontSize).toBe(14.18);
+  });
+
   it('falls back to the canvas renderer after a webgl context loss', () => {
     act(() => {
       root.render(

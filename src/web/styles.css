@@ -756,6 +756,14 @@ button:disabled {
 
 .canvas-frame .react-flow__node {
   transition:
+    opacity 180ms ease,
+    filter 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.canvas-frame.is-layout-animating-enter .react-flow__node,
+.canvas-frame.is-layout-animating-swap .react-flow__node {
+  transition:
     transform var(--layout-node-motion-ms) var(--layout-node-motion-easing),
     width var(--layout-node-motion-ms) var(--layout-node-motion-easing),
     height var(--layout-node-motion-ms) var(--layout-node-motion-easing),

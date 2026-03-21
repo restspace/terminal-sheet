@@ -97,6 +97,8 @@ export function TerminalSurface({
   // recreated.  Updated synchronously on every render (not via an effect).
   const ptyColsRef = useRef<number | undefined>(ptyCols);
   ptyColsRef.current = ptyCols;
+  const visualScaleRef = useRef(visualScale);
+  visualScaleRef.current = visualScale;
   // Stable ref to scheduleFit so the ptyCols-change effect below can request
   // a re-fit without needing access to the mount-effect's closure.
   const scheduleFitRef = useRef<(() => void) | null>(null);
@@ -118,7 +120,9 @@ export function TerminalSurface({
       return;
     }
 
-    const terminal = new Terminal(createTerminalOptions(readOnly, visualScale));
+    const terminal = new Terminal(
+      createTerminalOptions(readOnly, visualScaleRef.current),
+    );
 
     terminal.open(container);
     const rendererController = initializeTerminalRenderer(terminal, {
@@ -265,7 +269,26 @@ export function TerminalSurface({
       lastRenderedScrollbackRef.current = '';
       lastSizeRef.current = '';
     };
-  }, [readOnly, sessionId, visualScale]);
+  }, [readOnly, sessionId]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+
+    if (!terminal) {
+      return;
+    }
+
+    const nextFontSize = getTerminalFontSize(visualScale);
+
+    if (almostEqualOption(terminal.options.fontSize, nextFontSize)) {
+      return;
+    }
+
+    terminal.options.fontSize = nextFontSize;
+    terminal.options.lineHeight = TERMINAL_LINE_HEIGHT;
+    lastSizeRef.current = '';
+    scheduleFitRef.current?.();
+  }, [visualScale]);
 
   // When the PTY's col count changes (e.g. the focused overlay was resized),
   // invalidate the cached size so the next fit uses the new ptyCols value.
@@ -628,15 +651,13 @@ function createTerminalOptions(
   readOnly: boolean,
   visualScale: number,
 ): NonNullable<ConstructorParameters<typeof Terminal>[0]> {
-  const fontScale = clamp(visualScale, 0.5, 2);
-
   return {
     allowTransparency: true,
     convertEol: true,
     cursorBlink: !readOnly,
     disableStdin: readOnly,
     fontFamily: TERMINAL_FONT_FAMILY,
-    fontSize: TERMINAL_FONT_SIZE * fontScale,
+    fontSize: getTerminalFontSize(visualScale),
     lineHeight: TERMINAL_LINE_HEIGHT,
     scrollback: TERMINAL_SCROLLBACK_LINES,
     theme: {
@@ -644,5 +665,14 @@ function createTerminalOptions(
       cursor: readOnly ? 'transparent' : TERMINAL_THEME.cursor,
     },
   };
+}
+
+function getTerminalFontSize(visualScale: number): number {
+  const fontScale = clamp(visualScale, 0.5, 2);
+  return Number((TERMINAL_FONT_SIZE * fontScale).toFixed(2));
+}
+
+function almostEqualOption(value: unknown, nextValue: number): boolean {
+  return typeof value === 'number' && Math.abs(value - nextValue) < 0.001;
 }
 

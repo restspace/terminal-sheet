@@ -18,6 +18,10 @@ import type { Workspace } from '../../shared/workspace';
 
 export type TerminalSocketState = 'connecting' | 'open' | 'closed' | 'error';
 
+interface MergeSessionSnapshotsOptions {
+  replaceAll?: boolean;
+}
+
 export function useTerminalSessions() {
   const [sessions, setSessions] = useState<
     Record<string, TerminalSessionSnapshot>
@@ -250,14 +254,21 @@ export function applyServerMessage(
     case 'workspace.updated':
       return current;
     case 'session.init':
-      return Object.fromEntries(
-        message.sessions.map((session) => [session.sessionId, session]),
-      );
-    case 'session.snapshot':
+      return mergeSessionSnapshots(current, message.sessions, {
+        replaceAll: true,
+      });
+    case 'session.snapshot': {
+      const existing = current[message.session.sessionId];
+
+      if (existing && areSessionSnapshotsEqual(existing, message.session)) {
+        return current;
+      }
+
       return {
         ...current,
         [message.session.sessionId]: message.session,
       };
+    }
     case 'session.output': {
       const existing = current[message.sessionId];
       const nextSession = mergeSessionOutput(existing, message);
@@ -339,21 +350,104 @@ export function applyAttentionMessage(
   }
 }
 
-function mergeSessionSnapshots(
+export function mergeSessionSnapshots(
   current: Record<string, TerminalSessionSnapshot>,
   sessions: TerminalSessionSnapshot[],
+  options: MergeSessionSnapshotsOptions = {},
 ): Record<string, TerminalSessionSnapshot> {
+  const { replaceAll = false } = options;
+
   if (!sessions.length) {
-    return current;
+    return replaceAll && Object.keys(current).length ? {} : current;
   }
 
-  const next = { ...current };
+  let changed = false;
+  const next = replaceAll ? {} : { ...current };
+  const seenSessionIds = new Set<string>();
 
   for (const session of sessions) {
-    next[session.sessionId] = session;
+    seenSessionIds.add(session.sessionId);
+
+    const existing = current[session.sessionId];
+    const nextSession =
+      existing && areSessionSnapshotsEqual(existing, session) ? existing : session;
+
+    if (existing !== nextSession) {
+      changed = true;
+    }
+
+    next[session.sessionId] = nextSession;
   }
 
-  return next;
+  if (replaceAll) {
+    for (const sessionId of Object.keys(current)) {
+      if (!seenSessionIds.has(sessionId)) {
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return changed ? next : current;
+}
+
+function areSessionSnapshotsEqual(
+  left: TerminalSessionSnapshot,
+  right: TerminalSessionSnapshot,
+): boolean {
+  return (
+    left.sessionId === right.sessionId &&
+    left.backendId === right.backendId &&
+    left.pid === right.pid &&
+    left.status === right.status &&
+    left.commandState === right.commandState &&
+    left.connected === right.connected &&
+    left.recoveryState === right.recoveryState &&
+    left.startedAt === right.startedAt &&
+    left.lastActivityAt === right.lastActivityAt &&
+    left.lastOutputAt === right.lastOutputAt &&
+    left.lastOutputLine === right.lastOutputLine &&
+    left.scrollback === right.scrollback &&
+    left.unreadCount === right.unreadCount &&
+    left.summary === right.summary &&
+    left.exitCode === right.exitCode &&
+    left.disconnectReason === right.disconnectReason &&
+    left.cols === right.cols &&
+    left.rows === right.rows &&
+    left.liveCwd === right.liveCwd &&
+    left.projectRoot === right.projectRoot &&
+    arePreviewLinesEqual(left.previewLines, right.previewLines) &&
+    areIntegrationStatesEqual(left.integration, right.integration)
+  );
+}
+
+function arePreviewLinesEqual(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function areIntegrationStatesEqual(
+  left: TerminalSessionSnapshot['integration'],
+  right: TerminalSessionSnapshot['integration'],
+): boolean {
+  return (
+    left.owner === right.owner &&
+    left.status === right.status &&
+    left.message === right.message &&
+    left.updatedAt === right.updatedAt
+  );
 }
 
 function applyMarkdownDocumentMessage(

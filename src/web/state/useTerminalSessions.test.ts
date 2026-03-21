@@ -10,6 +10,7 @@ import {
   applyAttentionMessage,
   applyServerMessage,
   applyWorkspaceMessage,
+  mergeSessionSnapshots,
   shouldPollSnapshots,
 } from './useTerminalSessions';
 
@@ -112,6 +113,74 @@ describe('useTerminalSessions helpers', () => {
       unreadCount: 2,
       summary: 'hello world',
     });
+  });
+
+  it('reuses identical snapshots during full-session polling merges', () => {
+    const currentSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+      scrollback: 'stable output',
+      summary: 'stable',
+    });
+    const current = {
+      'terminal-1': currentSession,
+    };
+
+    const next = mergeSessionSnapshots(
+      current,
+      [
+        {
+          ...currentSession,
+        },
+      ],
+      {
+        replaceAll: true,
+      },
+    );
+
+    expect(next).toBe(current);
+    expect(next['terminal-1']).toBe(currentSession);
+  });
+
+  it('prunes sessions missing from a full-session polling merge', () => {
+    const retainedSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+    });
+    const removedSession = createSessionSnapshot({
+      sessionId: 'terminal-2',
+    });
+
+    const next = mergeSessionSnapshots(
+      {
+        'terminal-1': retainedSession,
+        'terminal-2': removedSession,
+      },
+      [{ ...retainedSession }],
+      {
+        replaceAll: true,
+      },
+    );
+
+    expect(Object.keys(next)).toEqual(['terminal-1']);
+    expect(next['terminal-1']).toBe(retainedSession);
+  });
+
+  it('ignores identical session snapshot messages', () => {
+    const currentSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+      scrollback: 'stable output',
+    });
+    const current = {
+      'terminal-1': currentSession,
+    };
+
+    const next = applyServerMessage(current, {
+      type: 'session.snapshot',
+      session: {
+        ...currentSession,
+      },
+    });
+
+    expect(next).toBe(current);
   });
 });
 

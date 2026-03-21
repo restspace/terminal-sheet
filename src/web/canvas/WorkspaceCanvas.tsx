@@ -77,6 +77,7 @@ const nodeTypes = {
   terminal: TerminalPlaceholderNode,
   markdown: MarkdownPlaceholderNode,
 };
+const ENABLE_REACT_FLOW_MINIMAP = false;
 
 interface OverlaySwapState {
   key: string;
@@ -555,6 +556,10 @@ export function WorkspaceCanvas({
           nodeTypes={nodeTypes}
           viewport={activeViewport}
           onViewportChange={(nextViewport) => {
+            if (!isViewportInteracting && !hasPendingViewportCommit) {
+              return;
+            }
+
             setCanvasViewport((current) =>
               sameViewport(current, nextViewport) ? current : nextViewport,
             );
@@ -648,46 +653,48 @@ export function WorkspaceCanvas({
             size={1}
             color="rgba(91, 110, 130, 0.35)"
           />
-          <MiniMap
-            position="bottom-right"
-            pannable
-            zoomable
-            style={{
-              width: 160,
-              height: 120,
-            }}
-            nodeColor={(node) => {
-              if (node.type === 'markdown') {
-                return 'rgba(255, 207, 132, 0.75)';
-              }
+          {ENABLE_REACT_FLOW_MINIMAP ? (
+            <MiniMap
+              position="bottom-right"
+              pannable
+              zoomable
+              style={{
+                width: 160,
+                height: 120,
+              }}
+              nodeColor={(node) => {
+                if (node.type === 'markdown') {
+                  return 'rgba(255, 207, 132, 0.75)';
+                }
 
-              const status = terminalStatusById.get(node.id);
+                const status = terminalStatusById.get(node.id);
 
-              if (!status) {
+                if (!status) {
+                  const accent = backendAccents.get(
+                    (node.data as { terminal?: { backendId?: string } })
+                      ?.terminal?.backendId ?? '',
+                  );
+                  return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
+                }
+
+                if (isAttentionRequiredStatus(status)) {
+                  return status === 'approval-needed' || status === 'needs-input'
+                    ? 'rgba(255, 194, 102, 0.9)'
+                    : 'rgba(255, 123, 114, 0.9)';
+                }
+
+                if (status === 'completed') {
+                  return 'rgba(94, 196, 139, 0.82)';
+                }
+
                 const accent = backendAccents.get(
                   (node.data as { terminal?: { backendId?: string } })
                     ?.terminal?.backendId ?? '',
                 );
                 return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
-              }
-
-              if (isAttentionRequiredStatus(status)) {
-                return status === 'approval-needed' || status === 'needs-input'
-                  ? 'rgba(255, 194, 102, 0.9)'
-                  : 'rgba(255, 123, 114, 0.9)';
-              }
-
-              if (status === 'completed') {
-                return 'rgba(94, 196, 139, 0.82)';
-              }
-
-              const accent = backendAccents.get(
-                (node.data as { terminal?: { backendId?: string } })
-                  ?.terminal?.backendId ?? '',
-              );
-              return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
-            }}
-          />
+              }}
+            />
+          ) : null}
           <Controls position="top-right" showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>
