@@ -18,6 +18,9 @@ interface TerminalSurfaceProps {
   scrollback: string;
   className?: string;
   readOnly?: boolean;
+  // When true, this surface keeps the backend PTY sized to its measured
+  // dimensions even while rendered read-only (used by live inspect previews).
+  syncPtySize?: boolean;
   visualScale?: number;
   // For read-only surfaces: the col count the PTY was sized to when it
   // generated the scrollback content. Using the PTY's own col count ensures
@@ -40,6 +43,7 @@ const TERMINAL_SCROLLBACK_LINES = Math.ceil(MAX_SCROLLBACK_CHARS / 48);
 const MIN_TERMINAL_COLS = 12;
 const MIN_TERMINAL_ROWS = 1;
 const WEBGL_PRESERVE_DRAWING_BUFFER = false;
+const READ_ONLY_PTY_RESIZE_DEBOUNCE_MS = 300;
 const TERMINAL_THEME = {
   background: '#07111a',
   foreground: '#d7e4ee',
@@ -75,6 +79,7 @@ export function TerminalSurface({
   scrollback,
   className,
   readOnly = false,
+  syncPtySize,
   visualScale = 1,
   ptyCols,
   scrollResetKey,
@@ -86,12 +91,19 @@ export function TerminalSurface({
   const terminalRef = useRef<Terminal | null>(null);
   const lastRenderedScrollbackRef = useRef('');
   const lastSizeRef = useRef('');
+  const lastRenderedTerminalSizeRef = useRef('');
+  const lastSyncedBackendSizeRef = useRef('');
+  const pendingBackendSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const didInitializeReadOnlySizingRef = useRef(false);
   const focusTimerRef = useRef<number | null>(null);
+  const backendResizeTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
   const shouldStickToBottomRef = useRef(true);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  const syncPtySizeRef = useRef(syncPtySize ?? !readOnly);
+  syncPtySizeRef.current = syncPtySize ?? !readOnly;
   // Mutable ref so fitTerminal always sees the latest ptyCols without being
   // recreated.  Updated synchronously on every render (not via an effect).
   const ptyColsRef = useRef<number | undefined>(ptyCols);
@@ -107,8 +119,63 @@ export function TerminalSurface({
     }
   });
   const syncBackendSize = useEffectEvent((cols: number, rows: number) => {
-    if (!readOnly) {
-      onResize?.(sessionId, cols, rows);
+    if (syncPtySizeRef.current) {
+      const sizeKey = `${cols}x${rows}`;
+      const flushResize = () => {
+        if (sizeKey === lastSyncedBackendSizeRef.current) {
+          return;
+        }
+
+        logStateDebug('terminalSurface', 'resizeSentToBackend', {
+          sessionId,
+          cols,
+          rows,
+          readOnly: readOnlyRef.current,
+          debounced: readOnlyRef.current,
+        });
+        onResize?.(sessionId, cols, rows);
+        lastSyncedBackendSizeRef.current = sizeKey;
+      };
+
+      if (!readOnlyRef.current) {
+        if (backendResizeTimerRef.current !== null) {
+          window.clearTimeout(backendResizeTimerRef.current);
+          backendResizeTimerRef.current = null;
+        }
+        pendingBackendSizeRef.current = null;
+        flushResize();
+        return;
+      }
+
+      pendingBackendSizeRef.current = { cols, rows };
+      if (backendResizeTimerRef.current !== null) {
+        window.clearTimeout(backendResizeTimerRef.current);
+      }
+      backendResizeTimerRef.current = window.setTimeout(() => {
+        backendResizeTimerRef.current = null;
+        const pendingSize = pendingBackendSizeRef.current;
+        pendingBackendSizeRef.current = null;
+
+        if (!pendingSize || !syncPtySizeRef.current) {
+          return;
+        }
+
+        const pendingSizeKey = `${pendingSize.cols}x${pendingSize.rows}`;
+
+        if (pendingSizeKey === lastSyncedBackendSizeRef.current) {
+          return;
+        }
+
+        logStateDebug('terminalSurface', 'resizeSentToBackend', {
+          sessionId,
+          cols: pendingSize.cols,
+          rows: pendingSize.rows,
+          readOnly: readOnlyRef.current,
+          debounced: true,
+        });
+        onResize?.(sessionId, pendingSize.cols, pendingSize.rows);
+        lastSyncedBackendSizeRef.current = pendingSizeKey;
+      }, READ_ONLY_PTY_RESIZE_DEBOUNCE_MS);
     }
   });
 
@@ -117,6 +184,13 @@ export function TerminalSurface({
 
     if (!container) {
       return;
+    }
+
+    lastSyncedBackendSizeRef.current = '';
+    pendingBackendSizeRef.current = null;
+    if (backendResizeTimerRef.current !== null) {
+      window.clearTimeout(backendResizeTimerRef.current);
+      backendResizeTimerRef.current = null;
     }
 
     const terminal = new Terminal(createTerminalOptions(visualScaleRef.current));
@@ -132,6 +206,7 @@ export function TerminalSurface({
     logStateDebug('terminalSurface', 'mount', {
       sessionId,
       readOnly,
+      syncPtySize: syncPtySizeRef.current,
       scrollbackLength: scrollback.length,
       ptyCols: ptyColsRef.current ?? null,
       visualScale: visualScaleRef.current,
@@ -159,22 +234,28 @@ export function TerminalSurface({
     let disposed = false;
     const fitTerminal = () => {
       const isReadOnly = readOnlyRef.current;
+      const shouldSyncPtySize = syncPtySizeRef.current;
       cellSizeRef.current = getTerminalCellSize(
         terminal,
         container,
         cellSizeRef.current,
       );
       const size = measureTerminal(container, cellSizeRef.current);
-      // For read-only terminals, use the PTY's authoritative col count so that
-      // \r-based in-place rewrites land at the same cursor column as they did
-      // when the PTY generated the output.  The focused terminal sends its own
-      // col count to the PTY via onResize; the PTY stores it in session.cols,
-      // which callers pass as ptyCols here.  When ptyCols is absent (focused
-      // terminal path), fall back to the measured col count as before.
+      // For read-only terminals, keep rendering against the PTY's current col
+      // count so incoming scrollback is never reflowed locally before the PTY
+      // itself has switched widths. Live inspect previews still measure the
+      // container and request backend resizes, but they only adopt the new col
+      // count after the session snapshot catches up via ptyCols.
       const effectiveCols = isReadOnly && ptyColsRef.current
         ? ptyColsRef.current
         : size.cols;
-      const sizeKey = `${effectiveCols}x${size.rows}`;
+      const terminalSizeKey = `${effectiveCols}x${size.rows}`;
+      const backendTargetKey =
+        shouldSyncPtySize && isReadOnly ? `${size.cols}x${size.rows}` : '';
+      const sizeKey =
+        shouldSyncPtySize && isReadOnly
+          ? `${terminalSizeKey}|${backendTargetKey}`
+          : terminalSizeKey;
 
       if (sizeKey === lastSizeRef.current) {
         return;
@@ -184,6 +265,7 @@ export function TerminalSurface({
       logStateDebug('terminalSurface', 'fit', {
         sessionId,
         readOnly: isReadOnly,
+        syncPtySize: shouldSyncPtySize,
         effectiveCols,
         rows: size.rows,
         measuredCols: size.cols,
@@ -200,22 +282,35 @@ export function TerminalSurface({
         // line (the "frozen ticker" artifact).
         const cols = effectiveCols;
         const rows = size.rows;
+        const shouldResizeTerminal =
+          terminalSizeKey !== lastRenderedTerminalSizeRef.current;
         const stickToBottom =
           terminalRef.current === terminal && shouldStickToBottomRef.current;
         terminal.write('', () => {
-          terminal.resize(cols, rows);
+          if (shouldResizeTerminal) {
+            terminal.resize(cols, rows);
+            lastRenderedTerminalSizeRef.current = terminalSizeKey;
+          }
+          if (shouldSyncPtySize) {
+            syncBackendSize(size.cols, rows);
+          }
           syncReadOnlyViewport(terminal, stickToBottom);
         });
       } else {
         const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, isReadOnly);
-        terminal.resize(effectiveCols, size.rows);
-        logStateDebug('terminalSurface', 'resizeSentToBackend', {
-          sessionId,
-          cols: effectiveCols,
-          rows: size.rows,
+        const shouldResizeTerminal =
+          terminalSizeKey !== lastRenderedTerminalSizeRef.current;
+        // Serialize interactive resizes through xterm's write queue too. If a
+        // synchronous resize lands between queued PTY writes, wrapped lines can
+        // reflow mid-render and make the live cursor jump upward while typing.
+        terminal.write('', () => {
+          if (shouldResizeTerminal) {
+            terminal.resize(effectiveCols, size.rows);
+            lastRenderedTerminalSizeRef.current = terminalSizeKey;
+          }
+          syncBackendSize(effectiveCols, size.rows);
+          restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
         });
-        syncBackendSize(effectiveCols, size.rows);
-        restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
       }
     };
     const scheduleFit = () => {
@@ -268,6 +363,12 @@ export function TerminalSurface({
         window.cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
       }
+      if (backendResizeTimerRef.current !== null) {
+        window.clearTimeout(backendResizeTimerRef.current);
+        backendResizeTimerRef.current = null;
+      }
+      pendingBackendSizeRef.current = null;
+      lastSyncedBackendSizeRef.current = '';
       dataDisposable?.dispose();
       container.removeEventListener('wheel', handleUserScroll);
       rendererController.dispose();
@@ -275,9 +376,11 @@ export function TerminalSurface({
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
       lastSizeRef.current = '';
+      lastRenderedTerminalSizeRef.current = '';
       logStateDebug('terminalSurface', 'unmount', {
         sessionId,
         readOnly: readOnlyRef.current,
+        syncPtySize: syncPtySizeRef.current,
       });
     };
   }, [sessionId]);
@@ -320,16 +423,33 @@ export function TerminalSurface({
     scheduleFitRef.current?.();
   }, [visualScale]);
 
-  // When the PTY's col count changes (e.g. the focused terminal node was resized),
-  // invalidate the cached size so the next fit uses the new ptyCols value.
+  // When the read-only surface's size authority changes, invalidate the cached
+  // size so the next fit uses the right column source.
   useEffect(() => {
-    if (!readOnly || !ptyCols) {
+    if (!readOnly) {
+      return;
+    }
+
+    if (!didInitializeReadOnlySizingRef.current) {
+      didInitializeReadOnlySizingRef.current = true;
       return;
     }
 
     lastSizeRef.current = '';
     scheduleFitRef.current?.();
-  }, [readOnly, ptyCols]);
+  }, [readOnly, ptyCols, syncPtySize]);
+
+  useEffect(() => {
+    if (syncPtySize) {
+      return;
+    }
+
+    if (backendResizeTimerRef.current !== null) {
+      window.clearTimeout(backendResizeTimerRef.current);
+      backendResizeTimerRef.current = null;
+    }
+    pendingBackendSizeRef.current = null;
+  }, [syncPtySize]);
 
   useEffect(() => {
     if (readOnly) {

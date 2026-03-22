@@ -284,6 +284,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 sessionId={terminal.id}
                 scrollback={session.scrollback}
                 readOnly={mode !== 'focus'}
+                syncPtySize={canMountLivePreview}
                 ptyCols={mode === 'focus' ? undefined : session.cols}
                 scrollResetKey={previewScrollResetKey}
                 autoFocusAtMs={mode === 'focus' ? data.autoFocusAtMs : null}

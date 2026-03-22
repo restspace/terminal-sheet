@@ -1177,7 +1177,7 @@ button:disabled {
   flex: 1;
   overflow: hidden;
   border: 1px solid rgba(138, 180, 216, 0.15);
-  border-radius: 0.8rem;
+  border-radius: 0;
   background: rgba(7, 17, 26, 0.96);
   isolation: isolate;
 }
@@ -1194,7 +1194,7 @@ button:disabled {
   overflow: auto;
   padding: 0.6rem 0.72rem;
   border: 1px solid rgba(138, 180, 216, 0.12);
-  border-radius: 0.8rem;
+  border-radius: 0;
   border-color: rgba(138, 180, 216, 0.12);
   background: rgba(7, 17, 26, 0.88);
   color: #d7e4ee;
