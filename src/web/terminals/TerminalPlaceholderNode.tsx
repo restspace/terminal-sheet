@@ -15,8 +15,7 @@ import {
   getTerminalRuntimePath,
   hasAttentionState,
 } from './presentation';
-import { ReadOnlyTerminalSurface } from './TerminalFocusSurface';
-import { TerminalScrollPreview } from './TerminalScrollPreview';
+import { TerminalSurface } from './TerminalFocusSurface';
 import { TerminalTitleBar } from './TerminalTitleBar';
 import type { TerminalFlowNode } from './types';
 
@@ -25,10 +24,18 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
   const mode = data.presentationMode;
   const terminal = data.terminal;
   const session = data.session;
-  const { onBoundsChange, onRestart, onMarkRead, onTerminalChange, onRemove } =
-    data;
+  const {
+    onBoundsChange,
+    onInput,
+    onResize,
+    onRestart,
+    onMarkRead,
+    onTerminalChange,
+    onRemove,
+  } = data;
   const canMountLivePreview = data.mountLivePreview && session !== null;
-  const canRenderFocusPreview = mode === 'focus' && session !== null;
+  const canRenderLiveTerminal =
+    session !== null && (canMountLivePreview || mode === 'focus');
   const previewLines = session?.previewLines ?? [];
   const status = getTerminalDisplayStatus(terminal, session);
   const unreadCount = session?.unreadCount ?? 0;
@@ -53,9 +60,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     session,
   );
   const hideRedundantMetadata = selected && mode !== 'overview';
-  const hideCardTitleBar = selected && mode === 'focus';
-  const hideReadOnlyStatusRows = canMountLivePreview || canRenderFocusPreview;
-  const suppressHeavyPreview = data.suppressHeavyPreview;
+  const hideReadOnlyStatusRows = canRenderLiveTerminal;
   const previewScrollResetKey = `${mode}:${selected}`;
   const lastAutoMarkedUnreadCountRef = useRef<number>(0);
   const markdownLink = data.activeMarkdownLink;
@@ -88,13 +93,18 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     ? ({ '--machine-accent': backendAccent.color } as React.CSSProperties)
     : undefined;
 
+  const nodeClassName = [
+    'canvas-node',
+    'terminal-node',
+    selected ? 'is-selected' : '',
+    mode === 'focus' ? 'is-focus-mode' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
-      className={
-        selected
-          ? 'canvas-node terminal-node is-selected'
-          : 'canvas-node terminal-node'
-      }
+      className={nodeClassName}
       style={nodeStyle}
       onDragOver={(event) => {
         if (readMarkdownDragNodeId(event)) {
@@ -130,18 +140,29 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
       />
 
       <div className="canvas-node-content">
-        {!hideCardTitleBar ? (
-          <TerminalTitleBar
-            className="node-drag-handle canvas-node-header terminal-window-header"
-            terminal={terminal}
-            status={status}
-            currentPath={liveCwd}
-            backendAccent={backendAccent}
-            onPathSelectRequest={data.onPathSelectRequest}
-            onTerminalChange={onTerminalChange}
-            onClose={onRemove}
-          />
-        ) : null}
+        <TerminalTitleBar
+          className="node-drag-handle canvas-node-header terminal-window-header"
+          terminal={terminal}
+          status={status}
+          currentPath={liveCwd}
+          backendAccent={backendAccent}
+          onPathSelectRequest={data.onPathSelectRequest}
+          onTerminalChange={onTerminalChange}
+          onClose={onRemove}
+          sidecar={
+            mode === 'focus' && !session?.connected ? (
+              <button
+                className="nodrag nopan"
+                type="button"
+                onClick={() => {
+                  onRestart(terminal.id);
+                }}
+              >
+                Restart
+              </button>
+            ) : null
+          }
+        />
 
         {!hideRedundantMetadata && !hideReadOnlyStatusRows ? (
           <>
@@ -238,10 +259,10 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
           </div>
         ) : null}
 
-        {mode === 'inspect' ? (
-          canMountLivePreview ? (
+        {mode !== 'overview' ? (
+          canRenderLiveTerminal ? (
             <div className="canvas-node-summary terminal-live-preview-card">
-              {!session.connected ? (
+              {mode === 'inspect' && !session.connected ? (
                 <div className="terminal-preview-actions">
                   <button
                     className="nodrag nopan"
@@ -254,99 +275,53 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                   </button>
                 </div>
               ) : null}
-              <ReadOnlyTerminalSurface
-                className="terminal-context-surface"
+              <TerminalSurface
+                className={
+                  mode === 'focus'
+                    ? 'terminal-context-surface terminal-focus-surface'
+                    : 'terminal-context-surface'
+                }
                 sessionId={terminal.id}
                 scrollback={session.scrollback}
-                ptyCols={session.cols}
+                readOnly={mode !== 'focus'}
+                ptyCols={mode === 'focus' ? undefined : session.cols}
                 scrollResetKey={previewScrollResetKey}
+                autoFocusAtMs={mode === 'focus' ? data.autoFocusAtMs : null}
+                onInput={onInput}
+                onResize={onResize}
               />
             </div>
           ) : (
             <div className="canvas-node-summary">
-              <strong>
-                {session?.summary ??
-                  terminal.taskLabel ??
-                  'Waiting for PTY output'}
-              </strong>
-              {previewLines.length ? (
-                <div className="terminal-preview-lines">
-                  {previewLines.map((line, index) => (
-                    <code key={`${terminal.id}-${index}`}>{line}</code>
-                  ))}
-                </div>
+              {mode === 'focus' ? (
+                <>
+                  <strong>Launching terminal session.</strong>
+                  <span>
+                    The live terminal surface will attach here as soon as the
+                    backend publishes the first session snapshot.
+                  </span>
+                </>
               ) : (
-                <span>
-                  No terminal output yet. The live preview will appear here as
-                  soon as the backend publishes session output.
-                </span>
+                <>
+                  <strong>
+                    {session?.summary ??
+                      terminal.taskLabel ??
+                      'Waiting for PTY output'}
+                  </strong>
+                  {previewLines.length ? (
+                    <div className="terminal-preview-lines">
+                      {previewLines.map((line, index) => (
+                        <code key={`${terminal.id}-${index}`}>{line}</code>
+                      ))}
+                    </div>
+                  ) : (
+                    <span>
+                      No terminal output yet. The live preview will appear here
+                      as soon as the backend publishes session output.
+                    </span>
+                  )}
+                </>
               )}
-            </div>
-          )
-        ) : null}
-
-        {mode === 'focus' ? (
-          canRenderFocusPreview && !suppressHeavyPreview ? (
-            <div className="canvas-node-summary terminal-live-preview-card">
-              {!hideRedundantMetadata ? (
-                <div className="terminal-focus-toolbar">
-                  <div className="terminal-focus-title">
-                    <span className="terminal-focus-label">Focus shell</span>
-                    {session ? (
-                      <strong title={session.summary}>{session.summary}</strong>
-                    ) : null}
-                  </div>
-                  {!session?.connected ? (
-                    <button
-                      className="nodrag nopan"
-                      type="button"
-                      onClick={() => {
-                        onRestart(terminal.id);
-                      }}
-                    >
-                      Restart
-                    </button>
-                  ) : null}
-                </div>
-              ) : !session?.connected ? (
-                <div className="terminal-preview-actions">
-                  <button
-                    className="nodrag nopan"
-                    type="button"
-                    onClick={() => {
-                      onRestart(terminal.id);
-                    }}
-                  >
-                    Restart
-                  </button>
-                </div>
-              ) : null}
-              <TerminalScrollPreview
-                className="terminal-preview-surface"
-                scrollback={session?.scrollback ?? ''}
-                scrollResetKey={previewScrollResetKey}
-              />
-            </div>
-          ) : (
-            <div className="canvas-node-summary">
-              {!hideRedundantMetadata && session ? (
-                <div className="terminal-focus-toolbar">
-                  <div className="terminal-focus-title">
-                    <span className="terminal-focus-label">Focus shell</span>
-                    <strong title={session.summary}>{session.summary}</strong>
-                  </div>
-                </div>
-              ) : null}
-              <strong>
-                {selected
-                  ? 'Launching terminal session.'
-                  : 'Select this node to focus it.'}
-              </strong>
-              <span>
-                {selected
-                  ? 'The live terminal surface will attach here as soon as the backend publishes the first session snapshot.'
-                  : 'This terminal will return to inspect mode when it becomes one of the most recently interacted-with terminals.'}
-              </span>
             </div>
           )
         ) : null}
@@ -384,11 +359,11 @@ function areTerminalNodePropsEqual(
     previousData.backendAccent === nextData.backendAccent &&
     previousData.presentationMode === nextData.presentationMode &&
     previousData.mountLivePreview === nextData.mountLivePreview &&
+    previousData.autoFocusAtMs === nextData.autoFocusAtMs &&
     previousData.socketState === nextData.socketState &&
     previousData.activeMarkdownLink === nextData.activeMarkdownLink &&
     previousData.allowResize === nextData.allowResize &&
     previousData.resizeZoom === nextData.resizeZoom &&
-    previousData.suppressHeavyPreview === nextData.suppressHeavyPreview &&
     previousData.onBoundsChange === nextData.onBoundsChange &&
     previousData.onTerminalChange === nextData.onTerminalChange &&
     previousData.onPathSelectRequest === nextData.onPathSelectRequest &&

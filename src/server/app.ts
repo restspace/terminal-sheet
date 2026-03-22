@@ -12,11 +12,13 @@ import { registerSessionRoutes } from './routes/sessions';
 import { registerAttentionRoutes } from './routes/attention';
 import { registerBackendRoutes } from './routes/backends';
 import { registerBackendMachineRoutes } from './routes/backendMachine';
+import { registerDebugStateRoutes } from './routes/debugState';
 import { registerFileSystemRoutes } from './routes/filesystem';
 import { registerMarkdownRoutes } from './routes/markdown';
 import { registerTokenRoutes } from './routes/token';
 import { registerWorkspaceRoutes } from './routes/workspace';
 import { AttentionService } from './integrations/attentionService';
+import { StateDebugEventStore } from './debug/stateDebugEventStore';
 import { LocalFileSystemService } from './filesystem/localFileSystemService';
 import { MarkdownService } from './markdown/markdownService';
 import { WorkspaceService } from './persistence/workspaceService';
@@ -49,6 +51,7 @@ export async function createServer(
   const serverIdentityFilePath = options.serverIdentityFilePath ?? options.workspaceFilePath;
   const contentRoot = options.contentRoot ?? process.cwd();
   const app = Fastify({ logger: true });
+  const stateDebugEventStore = new StateDebugEventStore();
   const workspaceService = await WorkspaceService.create(options.workspaceFilePath);
   const markdownService = new MarkdownService(
     contentRoot,
@@ -132,6 +135,9 @@ export async function createServer(
   });
   await registerSessionRoutes(app, {
     runtimeManager,
+  });
+  await registerDebugStateRoutes(app, {
+    eventStore: stateDebugEventStore,
   });
   await registerBackendRoutes(app, {
     role,

@@ -77,6 +77,8 @@ export function removeTerminalFromWorkspace(
   return {
     ...workspace,
     terminals: nextTerminals,
+    selectedNodeId:
+      workspace.selectedNodeId === terminalId ? null : workspace.selectedNodeId,
   };
 }
 
@@ -95,6 +97,8 @@ export function removeMarkdownFromWorkspace(
   return {
     ...workspace,
     markdown: nextMarkdown,
+    selectedNodeId:
+      workspace.selectedNodeId === markdownId ? null : workspace.selectedNodeId,
     filters: {
       ...workspace.filters,
       activeMarkdownId:
@@ -184,6 +188,28 @@ export function setWorkspaceLayoutMode(
   return {
     ...workspace,
     layoutMode,
+  };
+}
+
+export function setWorkspaceSelectedNode(
+  workspace: Workspace,
+  selectedNodeId: string | null,
+): Workspace {
+  const normalizedSelectedNodeId =
+    selectedNodeId &&
+    [...workspace.terminals, ...workspace.markdown].some(
+      (node) => node.id === selectedNodeId,
+    )
+      ? selectedNodeId
+      : null;
+
+  if (workspace.selectedNodeId === normalizedSelectedNodeId) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    selectedNodeId: normalizedSelectedNodeId,
   };
 }
 

@@ -5,6 +5,11 @@ import {
   terminalClientSocketMessageSchema,
   type TerminalClientSocketMessage,
 } from '../../shared/terminalSessions';
+import {
+  getWorkspaceDebugSessionId,
+  logWorkspaceDebug,
+  summarizeWorkspaceForDebug,
+} from '../debug/workspaceDebug';
 import type { MarkdownService } from '../markdown/markdownService';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
@@ -20,11 +25,27 @@ export async function registerWorkspaceSocket(
   app: FastifyInstance,
   options: WorkspaceSocketOptions,
 ): Promise<void> {
-  app.get('/ws', { websocket: true }, (socket) => {
+  app.get('/ws', { websocket: true }, (socket, request) => {
+    const debugSessionId = getWorkspaceDebugSessionId(request);
+    logWorkspaceDebug(app.log, debugSessionId, 'workspace socket connected', {
+      url: request.url,
+    });
+
     sendJson(socket, {
       type: 'ready',
       timestamp: new Date().toISOString(),
     });
+
+    logWorkspaceDebug(
+      app.log,
+      debugSessionId,
+      'workspace socket send initial workspace',
+      {
+        workspace: summarizeWorkspaceForDebug(
+          options.workspaceService.getWorkspace(),
+        ),
+      },
+    );
     sendJson(socket, {
       type: 'workspace.updated',
       workspace: options.workspaceService.getWorkspace(),
@@ -70,6 +91,14 @@ export async function registerWorkspaceSocket(
       });
     });
     const unsubscribeWorkspace = options.workspaceService.subscribe((workspace) => {
+      logWorkspaceDebug(
+        app.log,
+        debugSessionId,
+        'workspace socket push workspace.updated',
+        {
+          workspace: summarizeWorkspaceForDebug(workspace),
+        },
+      );
       sendJson(socket, {
         type: 'workspace.updated',
         workspace,
@@ -87,6 +116,9 @@ export async function registerWorkspaceSocket(
     });
 
     socket.on('close', () => {
+      logWorkspaceDebug(app.log, debugSessionId, 'workspace socket closed', {
+        url: request.url,
+      });
       unsubscribe();
       unsubscribeAttention();
       unsubscribeDocuments();

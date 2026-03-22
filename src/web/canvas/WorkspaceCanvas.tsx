@@ -5,6 +5,7 @@ import {
   BackgroundVariant,
   Controls,
   MiniMap,
+  type NodeChange,
   ReactFlow,
   ReactFlowProvider,
 } from '@xyflow/react';
@@ -23,13 +24,13 @@ import type {
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import { isAttentionRequiredStatus } from '../../shared/events';
 import { MarkdownPlaceholderNode } from '../markdown/MarkdownPlaceholderNode';
-import { FocusedTerminalOverlay } from '../terminals/FocusedTerminalOverlay';
 import { deriveTerminalPresentationState } from '../terminals/presentationMode';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
 import { getTerminalDisplayStatus } from '../terminals/presentation';
 import { buildBackendAccentsMap } from './backendAccents';
 import { getLayoutStrategy } from './layout/strategyRegistry';
 import type { NodeBounds } from './layout/types';
+import { logStateDebug } from '../debug/stateDebug';
 import {
   applyNodeChangesToWorkspace,
   buildCanvasEdges,
@@ -79,13 +80,6 @@ const nodeTypes = {
 };
 const ENABLE_REACT_FLOW_MINIMAP = false;
 
-interface OverlaySwapState {
-  key: string;
-  fromTerminalId: string;
-  toTerminalId: string;
-  durationMs: number;
-}
-
 export function WorkspaceCanvas({
   workspace,
   selectedNodeId,
@@ -126,15 +120,16 @@ export function WorkspaceCanvas({
   const [layoutAnimationClassName, setLayoutAnimationClassName] = useState('');
   const layoutAnimationTimerRef = useRef<number | null>(null);
   const lastLayoutAnimationKeyRef = useRef<string | null>(null);
-  const overlaySwapTimerRef = useRef<number | null>(null);
   const pendingViewportCommitRef = useRef<CameraViewport | null>(null);
   const [lastCommittedViewport, setLastCommittedViewport] = useState<CameraViewport>(
     workspace.currentViewport,
   );
   const [isAwaitingViewportCommit, setIsAwaitingViewportCommit] = useState(false);
-  const lastOverlaySwapKeyRef = useRef<string | null>(null);
   const lastFocusTilesBoundsRef = useRef<Map<string, NodeBounds>>(new Map());
   const [canvasViewport, setCanvasViewport] = useState<CameraViewport>(
+    workspace.currentViewport,
+  );
+  const previousObservedWorkspaceViewportRef = useRef<CameraViewport>(
     workspace.currentViewport,
   );
   const [isViewportInteracting, setIsViewportInteracting] = useState(false);
@@ -145,9 +140,6 @@ export function WorkspaceCanvas({
     nodesDraggable: true,
     nodesResizable: true,
   });
-  const [overlaySwapState, setOverlaySwapState] = useState<OverlaySwapState | null>(
-    null,
-  );
   const hasPendingViewportCommit =
     isAwaitingViewportCommit &&
     !sameViewport(workspace.currentViewport, lastCommittedViewport);
@@ -163,7 +155,6 @@ export function WorkspaceCanvas({
         : null,
     [selectedNodeId, workspace.terminals],
   );
-  const previousFocusedTerminalIdRef = useRef<string | null>(focusedTerminalId);
   const layoutViewport =
     workspace.layoutMode === 'focus-tiles'
       ? activeViewport
@@ -180,6 +171,33 @@ export function WorkspaceCanvas({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsAwaitingViewportCommit(false);
   }, [isAwaitingViewportCommit, lastCommittedViewport, workspace.currentViewport]);
+
+  useEffect(() => {
+    if (
+      sameViewport(
+        previousObservedWorkspaceViewportRef.current,
+        workspace.currentViewport,
+      )
+    ) {
+      return;
+    }
+
+    logStateDebug('canvas', 'workspaceViewportObserved', {
+      previousViewport: previousObservedWorkspaceViewportRef.current,
+      nextViewport: workspace.currentViewport,
+      canvasViewport,
+      lastCommittedViewport,
+      isViewportInteracting,
+      hasPendingViewportCommit,
+    });
+    previousObservedWorkspaceViewportRef.current = workspace.currentViewport;
+  }, [
+    canvasViewport,
+    hasPendingViewportCommit,
+    isViewportInteracting,
+    lastCommittedViewport,
+    workspace.currentViewport,
+  ]);
 
   useEffect(() => {
     const container = canvasFrameRef.current;
@@ -245,6 +263,19 @@ export function WorkspaceCanvas({
     previousLayoutModeRef.current = workspace.layoutMode;
 
     if (workspace.layoutMode === 'focus-tiles') {
+      const focusTilesState = readFocusTilesDebugState(layoutResult.nextState);
+      logStateDebug('focusTiles', 'layoutComputed', {
+        selectedNodeId,
+        focusedTerminalId,
+        viewportSize,
+        layoutViewport,
+        animationKey: layoutResult.animation?.key ?? null,
+        animationDurationMs: layoutResult.animation?.durationMs ?? null,
+        state: focusTilesState,
+      });
+    }
+
+    if (workspace.layoutMode === 'focus-tiles') {
       lastFocusTilesBoundsRef.current = new Map(layoutResult.boundsByNodeId);
     }
 
@@ -272,43 +303,6 @@ export function WorkspaceCanvas({
         ? current
         : layoutResult.interactionPolicy,
     );
-
-    if (
-      shouldStartOverlaySwapTransition({
-        layoutMode: workspace.layoutMode,
-        animationKey: layoutResult.animation?.key ?? null,
-        previousFocusedTerminalId: previousFocusedTerminalIdRef.current,
-        nextFocusedTerminalId: focusedTerminalId,
-      }) &&
-      layoutResult.animation &&
-      layoutResult.animation.key !== lastOverlaySwapKeyRef.current
-    ) {
-      const nextOverlaySwapState: OverlaySwapState = {
-        key: layoutResult.animation.key,
-        fromTerminalId: previousFocusedTerminalIdRef.current as string,
-        toTerminalId: focusedTerminalId as string,
-        durationMs: layoutResult.animation.durationMs,
-      };
-
-      lastOverlaySwapKeyRef.current = nextOverlaySwapState.key;
-      setOverlaySwapState(nextOverlaySwapState);
-
-      if (overlaySwapTimerRef.current !== null) {
-        window.clearTimeout(overlaySwapTimerRef.current);
-      }
-
-      overlaySwapTimerRef.current = window.setTimeout(() => {
-        overlaySwapTimerRef.current = null;
-        setOverlaySwapState((current) =>
-          current?.key === nextOverlaySwapState.key ? null : current,
-        );
-      }, nextOverlaySwapState.durationMs);
-    } else if (workspace.layoutMode !== 'focus-tiles') {
-      setOverlaySwapState(null);
-      lastOverlaySwapKeyRef.current = null;
-    }
-
-    previousFocusedTerminalIdRef.current = focusedTerminalId;
 
     if (!layoutResult.animation) {
       return;
@@ -349,10 +343,6 @@ export function WorkspaceCanvas({
     return () => {
       if (layoutAnimationTimerRef.current !== null) {
         window.clearTimeout(layoutAnimationTimerRef.current);
-      }
-
-      if (overlaySwapTimerRef.current !== null) {
-        window.clearTimeout(overlaySwapTimerRef.current);
       }
     };
   }, []);
@@ -405,49 +395,6 @@ export function WorkspaceCanvas({
 
     return linksByNodeId;
   }, [markdownLinks]);
-  const selectedTerminal = useMemo(
-    () =>
-      terminalPresentationState.focusedTerminalId
-        ? (workspace.terminals.find(
-            (terminal) =>
-              terminal.id === terminalPresentationState.focusedTerminalId,
-          ) ?? null)
-        : null,
-    [terminalPresentationState.focusedTerminalId, workspace.terminals],
-  );
-  const selectedSession = selectedTerminal
-    ? (sessions[selectedTerminal.id] ?? null)
-    : null;
-  const terminalById = useMemo(
-    () => new Map(workspace.terminals.map((terminal) => [terminal.id, terminal])),
-    [workspace.terminals],
-  );
-  const outgoingSwapTerminal = overlaySwapState
-    ? (terminalById.get(overlaySwapState.fromTerminalId) ?? null)
-    : null;
-  const incomingSwapTerminal = overlaySwapState
-    ? (terminalById.get(overlaySwapState.toTerminalId) ?? null)
-    : null;
-  const outgoingSwapSession = outgoingSwapTerminal
-    ? (sessions[outgoingSwapTerminal.id] ?? null)
-    : null;
-  const incomingSwapSession = incomingSwapTerminal
-    ? (sessions[incomingSwapTerminal.id] ?? null)
-    : null;
-  const selectedTerminalAccent = selectedTerminal
-    ? (backendAccents.get(selectedTerminal.backendId ?? '') ?? null)
-    : null;
-  const outgoingSwapTerminalAccent = outgoingSwapTerminal
-    ? (backendAccents.get(outgoingSwapTerminal.backendId ?? '') ?? null)
-    : null;
-  const incomingSwapTerminalAccent = incomingSwapTerminal
-    ? (backendAccents.get(incomingSwapTerminal.backendId ?? '') ?? null)
-    : null;
-  const shouldRenderDualSwapOverlay =
-    workspace.layoutMode === 'focus-tiles' &&
-    overlaySwapState !== null &&
-    incomingSwapTerminal !== null &&
-    overlaySwapState.toTerminalId === focusedTerminalId;
   const terminalStatusById = useMemo(
     () =>
       new Map(
@@ -468,7 +415,7 @@ export function WorkspaceCanvas({
         nodesDraggable: interactionPolicy.nodesDraggable,
         nodesResizable: interactionPolicy.nodesResizable,
         livePreviewTerminalIds,
-        focusTerminalId: selectedTerminal?.id ?? null,
+        focusAutoFocusAtMs,
         viewportZoom: activeViewport.zoom,
         semanticZoomMode,
         terminalPresentationById: terminalPresentationState.presentationById,
@@ -500,6 +447,7 @@ export function WorkspaceCanvas({
       backendAccents,
       livePreviewTerminalIds,
       activeViewport.zoom,
+      focusAutoFocusAtMs,
       onMarkTerminalRead,
       onMarkdownDrop,
       onMarkdownFocusRequest,
@@ -516,7 +464,6 @@ export function WorkspaceCanvas({
       onTerminalRestart,
       onWorkspaceChange,
       selectedNodeId,
-      selectedTerminal?.id,
       renderedBoundsByNodeId,
       interactionPolicy.nodesDraggable,
       interactionPolicy.nodesResizable,
@@ -556,7 +503,21 @@ export function WorkspaceCanvas({
           nodeTypes={nodeTypes}
           viewport={activeViewport}
           onViewportChange={(nextViewport) => {
+            logStateDebug('canvas', 'reactFlowViewportChange', {
+              nextViewport,
+              activeViewport,
+              workspaceViewport: workspace.currentViewport,
+              canvasViewport,
+              lastCommittedViewport,
+              isViewportInteracting,
+              hasPendingViewportCommit,
+            });
+
             if (!isViewportInteracting && !hasPendingViewportCommit) {
+              logStateDebug('canvas', 'reactFlowViewportChangeIgnored', {
+                nextViewport,
+                reason: 'not-interacting-and-no-pending-commit',
+              });
               return;
             }
 
@@ -565,12 +526,51 @@ export function WorkspaceCanvas({
             );
             pendingViewportCommitRef.current = nextViewport;
           }}
-          onMoveStart={() => {
+          onMoveStart={(event) => {
+            logStateDebug('canvas', 'reactFlowMoveStart', {
+              event: summarizeMoveEvent(event),
+              workspaceViewport: workspace.currentViewport,
+              canvasViewport,
+              lastCommittedViewport,
+              activeViewport,
+            });
+
+            if (!isUserViewportEvent(event)) {
+              logStateDebug('canvas', 'reactFlowMoveStartIgnored', {
+                reason: 'non-user-event',
+                event: summarizeMoveEvent(event),
+              });
+              return;
+            }
+
+            pendingViewportCommitRef.current = null;
+            setCanvasViewport((current) =>
+              sameViewport(current, workspace.currentViewport)
+                ? current
+                : workspace.currentViewport,
+            );
             setLastCommittedViewport(workspace.currentViewport);
             setIsAwaitingViewportCommit(false);
             setIsViewportInteracting(true);
           }}
-          onMoveEnd={(_event, maybeViewport) => {
+          onMoveEnd={(event, maybeViewport) => {
+            logStateDebug('canvas', 'reactFlowMoveEnd', {
+              event: summarizeMoveEvent(event),
+              maybeViewport: isCameraViewport(maybeViewport) ? maybeViewport : null,
+              pendingViewport: pendingViewportCommitRef.current,
+              canvasViewport,
+              lastCommittedViewport,
+              workspaceViewport: workspace.currentViewport,
+            });
+
+            if (!isUserViewportEvent(event)) {
+              logStateDebug('canvas', 'reactFlowMoveEndIgnored', {
+                reason: 'non-user-event',
+                event: summarizeMoveEvent(event),
+              });
+              return;
+            }
+
             setIsViewportInteracting(false);
 
             const finalViewport = isCameraViewport(maybeViewport)
@@ -586,12 +586,26 @@ export function WorkspaceCanvas({
               sameViewport(current, finalViewport) ? current : finalViewport,
             );
             if (!sameViewport(lastCommittedViewport, finalViewport)) {
+              logStateDebug('canvas', 'reactFlowViewportCommit', {
+                previousViewport: lastCommittedViewport,
+                nextViewport: finalViewport,
+              });
               setIsAwaitingViewportCommit(true);
               setLastCommittedViewport(finalViewport);
               onViewportChange(finalViewport);
+            } else {
+              logStateDebug('canvas', 'reactFlowViewportCommitSkipped', {
+                reason: 'same-as-last-committed',
+                viewport: finalViewport,
+              });
             }
           }}
           onNodesChange={(changes) => {
+            logStateDebug('canvas', 'reactFlowNodesChange', {
+              isViewportInteracting,
+              hasPendingViewportCommit,
+              changes: summarizeNodeChangesForDebug(changes),
+            });
             const nextSelectedNodeId = getSelectedNodeIdFromChanges(changes);
 
             if (nextSelectedNodeId !== undefined) {
@@ -699,83 +713,6 @@ export function WorkspaceCanvas({
         </ReactFlow>
       </ReactFlowProvider>
 
-      {shouldRenderDualSwapOverlay ? (
-        <>
-          {outgoingSwapTerminal ? (
-            <FocusedTerminalOverlay
-              key={`swap-out-${overlaySwapState.key}`}
-              terminal={applyRenderedBoundsToTerminal(
-                outgoingSwapTerminal,
-                renderedBoundsByNodeId,
-              )}
-              backendAccent={outgoingSwapTerminalAccent}
-              session={outgoingSwapSession}
-              viewport={activeViewport}
-              autoFocusAtMs={null}
-              visualVariant="swap-out"
-              interactive={false}
-              onInput={onTerminalInput}
-              onResize={onTerminalResize}
-              onBoundsChange={(nodeId, bounds) => {
-                onWorkspaceChange((current) =>
-                  updateNodeBounds(current, nodeId, bounds),
-                );
-              }}
-              onTerminalChange={onTerminalChange}
-              onPathSelectRequest={onPathSelectRequest}
-              onRemove={onTerminalRemove}
-              onRestart={onTerminalRestart}
-            />
-          ) : null}
-          <FocusedTerminalOverlay
-            key={`swap-in-${overlaySwapState.key}`}
-            terminal={applyRenderedBoundsToTerminal(
-              incomingSwapTerminal,
-              renderedBoundsByNodeId,
-            )}
-            backendAccent={incomingSwapTerminalAccent}
-            session={incomingSwapSession}
-            viewport={activeViewport}
-            autoFocusAtMs={focusAutoFocusAtMs}
-            visualVariant="swap-in"
-            interactive
-            onInput={onTerminalInput}
-            onResize={onTerminalResize}
-            onBoundsChange={(nodeId, bounds) => {
-              onWorkspaceChange((current) =>
-                updateNodeBounds(current, nodeId, bounds),
-              );
-            }}
-            onTerminalChange={onTerminalChange}
-            onPathSelectRequest={onPathSelectRequest}
-            onRemove={onTerminalRemove}
-            onRestart={onTerminalRestart}
-          />
-        </>
-      ) : selectedTerminal ? (
-        <FocusedTerminalOverlay
-          terminal={applyRenderedBoundsToTerminal(
-            selectedTerminal,
-            renderedBoundsByNodeId,
-          )}
-          backendAccent={selectedTerminalAccent}
-          session={selectedSession}
-          viewport={activeViewport}
-          autoFocusAtMs={focusAutoFocusAtMs}
-          onInput={onTerminalInput}
-          onResize={onTerminalResize}
-          onBoundsChange={(nodeId, bounds) => {
-            onWorkspaceChange((current) =>
-              updateNodeBounds(current, nodeId, bounds),
-            );
-          }}
-          onTerminalChange={onTerminalChange}
-          onPathSelectRequest={onPathSelectRequest}
-          onRemove={onTerminalRemove}
-          onRestart={onTerminalRestart}
-        />
-      ) : null}
-
       {!workspace.terminals.length && !workspace.markdown.length ? (
         <div className="canvas-empty-state">
           <p className="eyebrow">Blank Canvas</p>
@@ -826,22 +763,6 @@ function createInitialRenderedBoundsByNodeId(
       node.bounds,
     ]),
   );
-}
-
-function applyRenderedBoundsToTerminal(
-  terminal: TerminalNode,
-  renderedBoundsByNodeId: ReadonlyMap<string, NodeBounds>,
-): TerminalNode {
-  const renderedBounds = renderedBoundsByNodeId.get(terminal.id);
-
-  if (!renderedBounds || sameBounds(renderedBounds, terminal.bounds)) {
-    return terminal;
-  }
-
-  return {
-    ...terminal,
-    bounds: renderedBounds,
-  };
 }
 
 function applyRenderedBoundsToWorkspace(
@@ -915,34 +836,6 @@ function sameBoundsByNodeId(
   return true;
 }
 
-function shouldStartOverlaySwapTransition(options: {
-  layoutMode: WorkspaceLayoutMode;
-  animationKey: string | null;
-  previousFocusedTerminalId: string | null;
-  nextFocusedTerminalId: string | null;
-}): boolean {
-  const {
-    layoutMode,
-    animationKey,
-    previousFocusedTerminalId,
-    nextFocusedTerminalId,
-  } = options;
-
-  if (layoutMode !== 'focus-tiles') {
-    return false;
-  }
-
-  if (!animationKey?.startsWith('swap:')) {
-    return false;
-  }
-
-  return (
-    Boolean(previousFocusedTerminalId) &&
-    Boolean(nextFocusedTerminalId) &&
-    previousFocusedTerminalId !== nextFocusedTerminalId
-  );
-}
-
 function isCameraViewport(value: unknown): value is CameraViewport {
   if (!value || typeof value !== 'object') {
     return false;
@@ -956,6 +849,128 @@ function isCameraViewport(value: unknown): value is CameraViewport {
   );
 }
 
+function readFocusTilesDebugState(value: unknown): {
+  centerNodeId: string | null;
+  sideNodeIds: string[];
+} | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as {
+    centerNodeId?: unknown;
+    sideNodeIds?: unknown;
+  };
+
+  return {
+    centerNodeId:
+      typeof candidate.centerNodeId === 'string'
+        ? candidate.centerNodeId
+        : null,
+    sideNodeIds: Array.isArray(candidate.sideNodeIds)
+      ? candidate.sideNodeIds.filter(
+          (nodeId): nodeId is string => typeof nodeId === 'string',
+        )
+      : [],
+  };
+}
+
+function summarizeMoveEvent(
+  event: unknown,
+): Record<string, unknown> | null {
+  if (!event) {
+    return null;
+  }
+
+  if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
+    return {
+      kind: 'mouse',
+      type: event.type,
+      button: event.button,
+      buttons: event.buttons,
+      clientX: roundForEventDebug(event.clientX),
+      clientY: roundForEventDebug(event.clientY),
+    };
+  }
+
+  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+    const firstTouch = event.touches[0] ?? event.changedTouches[0] ?? null;
+
+    return {
+      kind: 'touch',
+      type: event.type,
+      touches: event.touches.length,
+      changedTouches: event.changedTouches.length,
+      clientX: firstTouch ? roundForEventDebug(firstTouch.clientX) : null,
+      clientY: firstTouch ? roundForEventDebug(firstTouch.clientY) : null,
+    };
+  }
+
+  return {
+    kind: 'unknown',
+    type:
+      typeof event === 'object' &&
+      event !== null &&
+      'type' in event &&
+      typeof event.type === 'string'
+        ? event.type
+        : null,
+    constructorName:
+      typeof event === 'object' &&
+      event !== null &&
+      'constructor' in event &&
+      typeof event.constructor === 'function' &&
+      'name' in event.constructor &&
+      typeof event.constructor.name === 'string'
+        ? event.constructor.name
+        : null,
+  };
+}
+
+function summarizeNodeChangesForDebug(
+  changes: NodeChange[],
+): Array<Record<string, unknown>> {
+  return changes.map((change) => {
+    switch (change.type) {
+      case 'position':
+        return {
+          id: change.id,
+          type: change.type,
+          dragging: change.dragging ?? null,
+          position: change.position
+            ? {
+                x: roundForEventDebug(change.position.x),
+                y: roundForEventDebug(change.position.y),
+              }
+            : null,
+        };
+      case 'dimensions':
+        return {
+          id: change.id,
+          type: change.type,
+          dimensions: change.dimensions
+            ? {
+                width: roundForEventDebug(change.dimensions.width),
+                height: roundForEventDebug(change.dimensions.height),
+              }
+            : null,
+          resizing: change.resizing ?? null,
+        };
+      case 'select':
+        return {
+          id: change.id,
+          type: change.type,
+          selected: change.selected,
+        };
+      default:
+        return {
+          id: 'id' in change ? change.id : null,
+          type: change.type,
+        };
+    }
+  });
+}
+
 function sameViewport(left: CameraViewport, right: CameraViewport): boolean {
   return (
     almostEqual(left.x, right.x) &&
@@ -964,6 +979,28 @@ function sameViewport(left: CameraViewport, right: CameraViewport): boolean {
   );
 }
 
+function roundForEventDebug(value: number): number {
+  return Number(value.toFixed(3));
+}
+
 function almostEqual(left: number, right: number): boolean {
   return Math.abs(left - right) < 0.001;
+}
+
+function isUserViewportEvent(
+  event: unknown,
+): event is MouseEvent | TouchEvent {
+  if (!event) {
+    return false;
+  }
+
+  if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
+    return true;
+  }
+
+  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+    return true;
+  }
+
+  return false;
 }

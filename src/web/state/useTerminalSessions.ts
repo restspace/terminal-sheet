@@ -15,6 +15,12 @@ import {
   type TerminalSessionOutputState,
 } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
+import {
+  appendStateDebugSessionToUrl,
+  logStateDebug,
+  summarizeWorkspaceDiffForDebug,
+  summarizeWorkspaceForDebug,
+} from '../debug/stateDebug';
 
 export type TerminalSocketState = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -69,18 +75,28 @@ export function useTerminalSessions() {
 
       setSocketState('connecting');
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+      const socket = new WebSocket(
+        appendStateDebugSessionToUrl(
+          `${protocol}://${window.location.host}/ws`,
+        ),
+      );
       socketRef.current = socket;
 
       socket.addEventListener('open', () => {
         if (!cancelled) {
           setSocketState('open');
+          logStateDebug('socket', 'open', {
+            url: socket.url,
+          });
         }
       });
 
       socket.addEventListener('error', () => {
         if (!cancelled) {
           setSocketState('error');
+          logStateDebug('socket', 'error', {
+            url: socket.url,
+          });
         }
       });
 
@@ -90,6 +106,9 @@ export function useTerminalSessions() {
         }
 
         setSocketState('closed');
+        logStateDebug('socket', 'close', {
+          url: socket.url,
+        });
         reconnectTimerRef.current = window.setTimeout(() => {
           connect();
         }, 1_000);
@@ -108,7 +127,18 @@ export function useTerminalSessions() {
         );
         setMarkdownLinks((current) => applyMarkdownLinkMessage(current, parsed));
         setAttentionEvents((current) => applyAttentionMessage(current, parsed));
-        setWorkspaceSnapshot((current) => applyWorkspaceMessage(current, parsed));
+        setWorkspaceSnapshot((current) => {
+          const nextWorkspace = applyWorkspaceMessage(current, parsed);
+
+          if (parsed.type === 'workspace.updated') {
+            logStateDebug('socket', 'workspace.updated', {
+              workspace: summarizeWorkspaceForDebug(nextWorkspace),
+              diff: summarizeWorkspaceDiffForDebug(current, nextWorkspace),
+            });
+          }
+
+          return nextWorkspace;
+        });
       });
     };
 

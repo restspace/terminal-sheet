@@ -29,6 +29,12 @@ const mockTerminalState = vi.hoisted(() => ({
 
     readonly textarea = document.createElement('textarea');
 
+    textareaFocusCalls = 0;
+
+    blurOnNextWrite = false;
+
+    blurOnNextResize = false;
+
     rows = 0;
 
     scrollToBottomCalls = 0;
@@ -41,6 +47,11 @@ const mockTerminalState = vi.hoisted(() => ({
 
     constructor(options: Record<string, unknown> = {}) {
       this.options = options;
+      const originalFocus = this.textarea.focus.bind(this.textarea);
+      this.textarea.focus = ((options?: FocusOptions) => {
+        this.textareaFocusCalls += 1;
+        originalFocus(options);
+      }) as typeof this.textarea.focus;
     }
 
     open(container: HTMLElement): void {
@@ -72,12 +83,23 @@ const mockTerminalState = vi.hoisted(() => ({
     write(data: string, callback?: () => void): void {
       this.writeCalls.push(data);
       this.buffer.active.baseY += Math.max(1, data.split('\n').length - 1);
+
+      if (this.blurOnNextWrite) {
+        this.blurOnNextWrite = false;
+        this.textarea.blur();
+      }
+
       callback?.();
     }
 
     resize(cols: number, rows: number): void {
       this.resizeCalls.push({ cols, rows });
       this.rows = rows;
+
+      if (this.blurOnNextResize) {
+        this.blurOnNextResize = false;
+        this.textarea.blur();
+      }
     }
 
     reset(): void {
@@ -223,6 +245,7 @@ vi.mock('@xterm/addon-canvas', () => ({
 import {
   TerminalFocusSurface,
   ReadOnlyTerminalSurface,
+  TerminalSurface,
 } from './TerminalFocusSurface';
 import { getIncrementalWrite } from './incrementalWrite';
 import { measureCellSize } from './terminalSizing';
@@ -359,7 +382,7 @@ describe('ReadOnlyTerminalSurface', () => {
 
     const terminal = getSingleMockTerminal();
     expect(terminal.writeCalls).toEqual(['', 'hello']);
-    expect(terminal.onDataHandlerCount).toBe(0);
+    expect(terminal.onDataHandlerCount).toBe(1);
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(0);
     expect(terminal.options.fontSize).toBe(10.5);
     expect(terminal.options.scrollback).toBe(2_500);
@@ -370,7 +393,7 @@ describe('ReadOnlyTerminalSurface', () => {
       brightBlue: '#9dc7f5',
       cursor: 'transparent',
     });
-    expect(terminal.loadAddonCalls).toEqual(['MockCanvasAddon']);
+    expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon']);
 
     act(() => {
       root.render(
@@ -464,7 +487,7 @@ describe('ReadOnlyTerminalSurface', () => {
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(initialScrollCalls);
   });
 
-  it('uses the canvas renderer for read-only surfaces', () => {
+  it('uses the same webgl-first renderer path for read-only surfaces', () => {
     act(() => {
       root.render(
         createElement(ReadOnlyTerminalSurface, {
@@ -476,9 +499,70 @@ describe('ReadOnlyTerminalSurface', () => {
 
     const terminal = getSingleMockTerminal();
 
-    expect(terminal.loadAddonCalls).toEqual(['MockCanvasAddon']);
-    expect(mockAddonState.webglInstances).toHaveLength(0);
-    expect(mockAddonState.canvasInstances).toHaveLength(1);
+    expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon']);
+    expect(mockAddonState.webglInstances).toHaveLength(1);
+    expect(mockAddonState.canvasInstances).toHaveLength(0);
+  });
+
+  it('updates interactivity in place when the surface mode changes', () => {
+    const onInput = vi.fn();
+    const onResize = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-shared',
+          scrollback: '',
+          readOnly: true,
+          onInput,
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal();
+    expect(terminal.options.disableStdin).toBe(true);
+    expect(terminal.options.theme).toMatchObject({
+      cursor: 'transparent',
+    });
+    expect(terminal.textarea.getAttribute('aria-hidden')).toBe('true');
+    expect(terminal.textarea.tabIndex).toBe(-1);
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-shared',
+          scrollback: '',
+          readOnly: false,
+          onInput,
+          onResize,
+        }),
+      );
+    });
+
+    expect(mockTerminalState.instances).toHaveLength(1);
+    expect(terminal.options.disableStdin).toBe(false);
+    expect(terminal.options.theme).toMatchObject({
+      cursor: '#8ab4d8',
+    });
+    expect(terminal.textarea.getAttribute('aria-hidden')).toBeNull();
+    expect(terminal.textarea.tabIndex).toBe(0);
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-shared',
+          scrollback: '',
+          readOnly: true,
+          onInput,
+          onResize,
+        }),
+      );
+    });
+
+    expect(mockTerminalState.instances).toHaveLength(1);
+    expect(terminal.options.disableStdin).toBe(true);
+    expect(terminal.textarea.getAttribute('aria-hidden')).toBe('true');
   });
 });
 
@@ -617,6 +701,42 @@ describe('TerminalFocusSurface', () => {
     expect(terminal.loadAddonCalls).toEqual(['MockWebglAddon', 'MockCanvasAddon']);
     expect(mockAddonState.webglInstances[0]?.disposed).toBe(false);
     expect(mockAddonState.canvasInstances).toHaveLength(1);
+  });
+
+  it('restores focus after an interactive write blurs the xterm textarea', () => {
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-focus',
+          scrollback: 'line 1',
+          onInput: vi.fn(),
+          onResize: vi.fn(),
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal();
+    const initialFocusCalls = terminal.textareaFocusCalls;
+
+    act(() => {
+      terminal.textarea.focus();
+    });
+
+    terminal.blurOnNextWrite = true;
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-focus',
+          scrollback: 'line 1\nline 2',
+          onInput: vi.fn(),
+          onResize: vi.fn(),
+        }),
+      );
+    });
+
+    expect(document.activeElement).toBe(terminal.textarea);
+    expect(terminal.textareaFocusCalls).toBeGreaterThan(initialFocusCalls + 1);
   });
 });
 

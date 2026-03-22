@@ -46,7 +46,7 @@ interface BuildCanvasNodesOptions {
   nodesDraggable: boolean;
   nodesResizable: boolean;
   livePreviewTerminalIds: ReadonlySet<string>;
-  focusTerminalId: string | null;
+  focusAutoFocusAtMs: number | null;
   viewportZoom: number;
   semanticZoomMode: SemanticZoomMode;
   terminalPresentationById: ReadonlyMap<string, TerminalPresentationMode>;
@@ -90,7 +90,7 @@ export function buildCanvasNodes({
   nodesDraggable,
   nodesResizable,
   livePreviewTerminalIds,
-  focusTerminalId,
+  focusAutoFocusAtMs,
   viewportZoom,
   semanticZoomMode,
   terminalPresentationById,
@@ -117,7 +117,9 @@ export function buildCanvasNodes({
   onResolveConflict,
 }: BuildCanvasNodesOptions): CanvasNode[] {
   const terminals = workspace.terminals.map((terminal) => {
-    const isFocusTarget = focusTerminalId === terminal.id;
+    const presentationMode =
+      terminalPresentationById.get(terminal.id) ?? 'overview';
+    const isFocusTarget = presentationMode === 'focus';
     const renderedBounds = renderedBoundsByNodeId.get(terminal.id) ?? terminal.bounds;
 
     return {
@@ -133,9 +135,9 @@ export function buildCanvasNodes({
         terminal,
         backendAccent: backendAccents.get(terminal.backendId ?? '') ?? null,
         session: sessions[terminal.id] ?? null,
-        presentationMode:
-          terminalPresentationById.get(terminal.id) ?? 'overview',
+        presentationMode,
         mountLivePreview: livePreviewTerminalIds.has(terminal.id),
+        autoFocusAtMs: isFocusTarget ? focusAutoFocusAtMs : null,
         socketState,
         onSelect,
         onBoundsChange,
@@ -151,7 +153,6 @@ export function buildCanvasNodes({
           activeMarkdownLinkByTerminalId.get(terminal.id) ?? null,
         allowResize: nodesResizable,
         resizeZoom: selectedNodeId === terminal.id ? viewportZoom : 1,
-        suppressHeavyPreview: focusTerminalId === terminal.id,
       },
       style: {
         width: renderedBounds.width,
@@ -161,6 +162,7 @@ export function buildCanvasNodes({
       selected: selectedNodeId === terminal.id,
       selectable: true as const,
       draggable: nodesDraggable,
+      dragHandle: '.node-drag-handle',
     };
   });
 
@@ -276,13 +278,21 @@ export function updateNodeBounds(
   nodeId: string,
   partialBounds: Partial<Workspace['terminals'][number]['bounds']>,
 ): Workspace {
-  const terminalResult = updateById(workspace.terminals, nodeId, (terminal) => ({
-    ...terminal,
-    bounds: {
+  const terminalResult = updateById(workspace.terminals, nodeId, (terminal) => {
+    const nextBounds = {
       ...terminal.bounds,
       ...partialBounds,
-    },
-  }));
+    };
+
+    if (sameNodeBounds(terminal.bounds, nextBounds)) {
+      return terminal;
+    }
+
+    return {
+      ...terminal,
+      bounds: nextBounds,
+    };
+  });
 
   if (terminalResult.found && terminalResult.changed) {
     return {
@@ -291,13 +301,21 @@ export function updateNodeBounds(
     };
   }
 
-  const markdownResult = updateById(workspace.markdown, nodeId, (markdown) => ({
-    ...markdown,
-    bounds: {
+  const markdownResult = updateById(workspace.markdown, nodeId, (markdown) => {
+    const nextBounds = {
       ...markdown.bounds,
       ...partialBounds,
-    },
-  }));
+    };
+
+    if (sameNodeBounds(markdown.bounds, nextBounds)) {
+      return markdown;
+    }
+
+    return {
+      ...markdown,
+      bounds: nextBounds,
+    };
+  });
 
   if (markdownResult.found && markdownResult.changed) {
     return {
@@ -307,4 +325,16 @@ export function updateNodeBounds(
   }
 
   return workspace;
+}
+
+function sameNodeBounds(
+  left: Workspace['terminals'][number]['bounds'],
+  right: Workspace['terminals'][number]['bounds'],
+): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
 }

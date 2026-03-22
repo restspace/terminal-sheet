@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDefaultWorkspace, createMarkdownNode } from '../shared/workspace';
+import { WORKSPACE_BASE_UPDATED_AT_HEADER } from '../shared/workspaceTransport';
 import { createServer } from './app';
 
 describe('createServer web entrypoint', () => {
@@ -363,6 +364,66 @@ describe('createServer web entrypoint', () => {
       expect(response.json()).toMatchObject({
         message:
           "Filesystem server 'remote-server-1' is not supported yet.",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects stale workspace saves with a conflict response', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 4312,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+    });
+
+    try {
+      const initialWorkspaceResponse = await app.inject({
+        method: 'GET',
+        url: '/api/workspace',
+      });
+      const initialWorkspace = initialWorkspaceResponse.json();
+      const firstUpdate = {
+        ...initialWorkspace,
+        currentViewport: {
+          x: 120,
+          y: 24,
+          zoom: 0.9,
+        },
+      };
+
+      const firstSaveResponse = await app.inject({
+        method: 'PUT',
+        url: '/api/workspace',
+        headers: {
+          [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
+        },
+        payload: firstUpdate,
+      });
+
+      expect(firstSaveResponse.statusCode).toBe(200);
+      const savedWorkspace = firstSaveResponse.json();
+
+      const staleSaveResponse = await app.inject({
+        method: 'PUT',
+        url: '/api/workspace',
+        headers: {
+          [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
+        },
+        payload: {
+          ...initialWorkspace,
+          currentViewport: {
+            x: -500,
+            y: 0,
+            zoom: 0.72,
+          },
+        },
+      });
+
+      expect(staleSaveResponse.statusCode).toBe(409);
+      expect(staleSaveResponse.json()).toMatchObject({
+        message: 'Workspace state is out of date.',
+        workspace: savedWorkspace,
       });
     } finally {
       await app.close();

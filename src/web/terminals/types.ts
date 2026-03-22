@@ -16,6 +16,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
   session: TerminalSessionSnapshot | null;
   presentationMode: TerminalPresentationMode;
   mountLivePreview: boolean;
+  autoFocusAtMs: number | null;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;
   onBoundsChange: (
@@ -36,7 +37,6 @@ export interface TerminalNodeData extends Record<string, unknown> {
   activeMarkdownLink: MarkdownLinkState | null;
   allowResize: boolean;
   resizeZoom: number;
-  suppressHeavyPreview: boolean;
 }
 
 export interface MarkdownNodeData extends Record<string, unknown> {

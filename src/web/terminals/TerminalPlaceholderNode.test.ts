@@ -1,9 +1,19 @@
 /** @vitest-environment jsdom */
 
-import { createElement, type ComponentProps } from 'react';
+import {
+  createElement,
+  type ComponentProps,
+  type ReactNode,
+  useEffect,
+} from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockSurfaceState = vi.hoisted(() => ({
+  mountCount: 0,
+  unmountCount: 0,
+}));
 
 vi.mock('@xyflow/react', () => ({
   useViewport: () => ({ zoom: 1 }),
@@ -14,30 +24,35 @@ vi.mock('../canvas/CanvasResizeHandles', () => ({
 }));
 
 vi.mock('./TerminalTitleBar', () => ({
-  TerminalTitleBar: () => createElement('div', { 'data-testid': 'terminal-title-bar' }),
+  TerminalTitleBar: (props: { sidecar?: ReactNode }) =>
+    createElement('div', { 'data-testid': 'terminal-title-bar' }, props.sidecar),
 }));
 
 vi.mock('./TerminalFocusSurface', () => ({
-  ReadOnlyTerminalSurface: (props: {
+  TerminalSurface: (props: {
     className?: string;
     sessionId: string;
     scrollback: string;
-    scrollResetKey?: string | number | boolean;
-  }) =>
-    createElement('div', {
-      'data-testid': 'readonly-live-preview',
+    readOnly?: boolean;
+    autoFocusAtMs?: number | null;
+  }) => {
+    useEffect(() => {
+      mockSurfaceState.mountCount += 1;
+
+      return () => {
+        mockSurfaceState.unmountCount += 1;
+      };
+    }, []);
+
+    return createElement('div', {
+      'data-testid': 'terminal-surface',
       'data-session-id': props.sessionId,
       'data-scrollback': props.scrollback,
-      'data-reset-key': String(props.scrollResetKey ?? ''),
+      'data-read-only': String(Boolean(props.readOnly)),
+      'data-auto-focus': String(props.autoFocusAtMs ?? ''),
       className: props.className,
-    }),
-}));
-
-vi.mock('./TerminalScrollPreview', () => ({
-  TerminalScrollPreview: () =>
-    createElement('pre', {
-      'data-testid': 'text-scroll-preview',
-    }),
+    });
+  },
 }));
 
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
@@ -55,6 +70,8 @@ describe('TerminalPlaceholderNode', () => {
 
   beforeEach(() => {
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    mockSurfaceState.mountCount = 0;
+    mockSurfaceState.unmountCount = 0;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -69,7 +86,7 @@ describe('TerminalPlaceholderNode', () => {
     vi.clearAllMocks();
   });
 
-  it('uses the read-only live xterm surface for inspect-mode live previews', () => {
+  it('uses the shared terminal surface for inspect-mode live previews in read-only mode', () => {
     const terminal = createPlaceholderTerminal(0);
     const session = createSessionSnapshot(terminal.id, {
       scrollback: 'line 1\r\nline 2',
@@ -89,13 +106,13 @@ describe('TerminalPlaceholderNode', () => {
       );
     });
 
-    const preview = container.querySelector('[data-testid="readonly-live-preview"]');
+    const preview = container.querySelector('[data-testid="terminal-surface"]');
 
     expect(preview).not.toBeNull();
     expect(preview?.getAttribute('data-session-id')).toBe(terminal.id);
     expect(preview?.getAttribute('data-scrollback')).toBe('line 1\r\nline 2');
-    expect(container.querySelector('[data-testid="text-scroll-preview"]')).toBeNull();
-    expect(container.textContent).not.toContain('Inspect preview');
+    expect(preview?.getAttribute('data-read-only')).toBe('true');
+    expect(container.textContent).not.toContain('No terminal output yet');
   });
 
   it('falls back to the static inspect summary when no live preview is mounted', () => {
@@ -119,31 +136,59 @@ describe('TerminalPlaceholderNode', () => {
       );
     });
 
-    expect(container.querySelector('[data-testid="readonly-live-preview"]')).toBeNull();
+    expect(container.querySelector('[data-testid="terminal-surface"]')).toBeNull();
     expect(container.textContent).toContain('build finished');
-    expect(container.textContent).not.toContain('Inspect preview');
     expect(container.querySelector('code')?.textContent).toBe('build started');
   });
 
-  it('skips heavy focus preview rendering when suppressed for overlay mode', () => {
+  it('reuses the same mounted terminal surface when inspect mode becomes focus mode', () => {
     const terminal = createPlaceholderTerminal(0);
     const session = createSessionSnapshot(terminal.id, {
-      scrollback: 'line 1\r\nline 2',
+      scrollback: 'streaming output',
     });
-    const props = createNodeProps({
-      terminal,
-      session,
-      presentationMode: 'focus',
-      mountLivePreview: false,
-    });
-    props.data.suppressHeavyPreview = true;
 
     act(() => {
-      root.render(createElement(TerminalPlaceholderNode, props));
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal,
+            session,
+            presentationMode: 'inspect',
+            mountLivePreview: true,
+          }),
+        ),
+      );
     });
 
-    expect(container.querySelector('[data-testid="text-scroll-preview"]')).toBeNull();
-    expect(container.textContent).toContain('Select this node to focus it.');
+    const inspectSurface = container.querySelector('[data-testid="terminal-surface"]');
+
+    expect(inspectSurface?.getAttribute('data-read-only')).toBe('true');
+    expect(mockSurfaceState.mountCount).toBe(1);
+    expect(mockSurfaceState.unmountCount).toBe(0);
+
+    act(() => {
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal,
+            session,
+            presentationMode: 'focus',
+            mountLivePreview: false,
+            selected: true,
+            autoFocusAtMs: 123,
+          }),
+        ),
+      );
+    });
+
+    const focusSurface = container.querySelector('[data-testid="terminal-surface"]');
+
+    expect(focusSurface?.getAttribute('data-read-only')).toBe('false');
+    expect(focusSurface?.getAttribute('data-auto-focus')).toBe('123');
+    expect(mockSurfaceState.mountCount).toBe(1);
+    expect(mockSurfaceState.unmountCount).toBe(0);
   });
 });
 
@@ -152,6 +197,8 @@ function createNodeProps(options: {
   session: TerminalSessionSnapshot | null;
   presentationMode: 'overview' | 'inspect' | 'focus';
   mountLivePreview: boolean;
+  selected?: boolean;
+  autoFocusAtMs?: number | null;
 }): ComponentProps<typeof TerminalPlaceholderNode> {
   return {
     id: options.terminal.id,
@@ -160,6 +207,7 @@ function createNodeProps(options: {
       session: options.session,
       presentationMode: options.presentationMode,
       mountLivePreview: options.mountLivePreview,
+      autoFocusAtMs: options.autoFocusAtMs ?? null,
       socketState: 'open' as const,
       onSelect: vi.fn(),
       onBoundsChange: vi.fn(),
@@ -175,11 +223,10 @@ function createNodeProps(options: {
       activeMarkdownLink: null,
       allowResize: true,
       resizeZoom: 1,
-      suppressHeavyPreview: false,
     } satisfies TerminalFlowNode['data'],
     width: options.terminal.bounds.width,
     height: options.terminal.bounds.height,
-    selected: false,
+    selected: options.selected ?? false,
     dragging: false,
     zIndex: 1,
     isConnectable: false,

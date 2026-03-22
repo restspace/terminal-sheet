@@ -41,6 +41,11 @@ import { fetchAttentionSetup } from '../state/attentionClient';
 import { useMarkdownDocuments } from '../state/useMarkdownDocuments';
 import { useTerminalSessions } from '../state/useTerminalSessions';
 import { useWorkspace } from '../state/useWorkspace';
+import { isNewerWorkspaceSnapshot } from '../state/workspaceFreshness';
+import {
+  logStateDebug,
+  summarizeWorkspaceForDebug,
+} from '../debug/stateDebug';
 import { waitForRetry } from '../utils/retry';
 import {
   formatTerminalEventTime,
@@ -68,7 +73,9 @@ export function App() {
     setViewport,
     saveViewportToPreset,
     setLayoutMode,
+    setSelectedNodeId,
   } = useWorkspace();
+  const selectedNodeId = workspace?.selectedNodeId ?? null;
   const {
     sessions,
     markdownDocuments: remoteMarkdownDocuments,
@@ -103,7 +110,6 @@ export function App() {
       ? window.Notification.permission
       : 'unsupported',
   );
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [terminalShell, setTerminalShell] = useState(getDefaultShell());
   const [backendShellById, setBackendShellById] =
@@ -150,6 +156,8 @@ export function App() {
   const didAutoFocusSingleTerminalRef = useRef(false);
   const notifiedEventIdsRef = useRef(new Set<string>());
   const audioContextRef = useRef<AudioContext | null>(null);
+  const previousSelectedNodeIdRef = useRef<string | null>(null);
+  const previousWorkspaceLayoutModeRef = useRef<WorkspaceLayoutMode | null>(null);
   const bumpNodeInteraction = useCallback((nodeId: string, throttleMs = 0) => {
     const now = Date.now();
 
@@ -166,6 +174,33 @@ export function App() {
       };
     });
   }, []);
+  const handleCanvasViewportChange = useCallback((viewport: CameraViewport) => {
+    setViewport(viewport, {
+      debugSource: 'canvas.viewportCommit',
+    });
+  }, [setViewport]);
+  const handleSingleTerminalAutoFocusViewportChange = useCallback((
+    viewport: CameraViewport,
+  ) => {
+    setViewport(viewport, {
+      debugSource: 'focus.singleTerminalAutoFocus',
+    });
+  }, [setViewport]);
+  const handleTerminalFocusViewportChange = useCallback((viewport: CameraViewport) => {
+    setViewport(viewport, {
+      debugSource: 'focus.terminal',
+    });
+  }, [setViewport]);
+  const handleMarkdownFocusViewportChange = useCallback((viewport: CameraViewport) => {
+    setViewport(viewport, {
+      debugSource: 'focus.markdown',
+    });
+  }, [setViewport]);
+  const handleNewTerminalFocusViewportChange = useCallback((viewport: CameraViewport) => {
+    setViewport(viewport, {
+      debugSource: 'focus.newTerminal',
+    });
+  }, [setViewport]);
 
   useEffect(() => {
     return () => {
@@ -264,6 +299,37 @@ export function App() {
   }, [activePresetId, workspace]);
 
   useEffect(() => {
+    if (!workspace) {
+      return;
+    }
+
+    if (previousWorkspaceLayoutModeRef.current === workspace.layoutMode) {
+      return;
+    }
+
+    logStateDebug('app', 'layoutModeObserved', {
+      previousLayoutMode: previousWorkspaceLayoutModeRef.current,
+      nextLayoutMode: workspace.layoutMode,
+      workspace: summarizeWorkspaceForDebug(workspace),
+    });
+    previousWorkspaceLayoutModeRef.current = workspace.layoutMode;
+  }, [workspace]);
+
+  useEffect(() => {
+    if (previousSelectedNodeIdRef.current === selectedNodeId) {
+      return;
+    }
+
+    logStateDebug('app', 'selectedNodeChanged', {
+      previousSelectedNodeId: previousSelectedNodeIdRef.current,
+      nextSelectedNodeId: selectedNodeId,
+      workspaceLayoutMode: workspace?.layoutMode ?? null,
+      note: 'selectedNodeId is persisted on the workspace.',
+    });
+    previousSelectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId, workspace?.layoutMode]);
+
+  useEffect(() => {
     if (!workspace || selectedNodeId) {
       return;
     }
@@ -293,17 +359,34 @@ export function App() {
       updateWorkspace,
       onSelectTerminal: setSelectedNodeId,
       onAutoFocusAtChange: setFocusAutoFocusAtMs,
-      onViewportChange: setViewport,
+      onViewportChange: handleSingleTerminalAutoFocusViewportChange,
       animationFrameRef: viewportAnimationFrameRef,
     });
-  }, [bumpNodeInteraction, selectedNodeId, setViewport, updateWorkspace, workspace]);
+  }, [
+    bumpNodeInteraction,
+    handleSingleTerminalAutoFocusViewportChange,
+    selectedNodeId,
+    setSelectedNodeId,
+    updateWorkspace,
+    workspace,
+  ]);
 
   useEffect(() => {
     if (!workspaceSnapshot || !workspace) {
       return;
     }
 
-    if (workspaceSnapshot.updatedAt === workspace.updatedAt) {
+    const shouldRefreshWorkspace = isNewerWorkspaceSnapshot(
+      workspaceSnapshot,
+      workspace,
+    );
+    logStateDebug('app', 'workspaceSnapshotObserved', {
+      localWorkspace: summarizeWorkspaceForDebug(workspace),
+      snapshotWorkspace: summarizeWorkspaceForDebug(workspaceSnapshot),
+      shouldRefreshWorkspace,
+    });
+
+    if (!shouldRefreshWorkspace) {
       return;
     }
 
@@ -470,6 +553,12 @@ export function App() {
       return;
     }
 
+    logStateDebug('app', 'focusTerminalRequested', {
+      terminalId,
+      layoutMode,
+      currentViewport,
+    });
+
     bumpNodeInteraction(terminalId);
 
     if (layoutMode === 'focus-tiles') {
@@ -484,14 +573,15 @@ export function App() {
       updateWorkspace,
       onSelectTerminal: setSelectedNodeId,
       onAutoFocusAtChange: setFocusAutoFocusAtMs,
-      onViewportChange: setViewport,
+      onViewportChange: handleTerminalFocusViewportChange,
       animationFrameRef: viewportAnimationFrameRef,
     });
   }, [
     bumpNodeInteraction,
     currentViewport,
+    handleTerminalFocusViewportChange,
     layoutMode,
-    setViewport,
+    setSelectedNodeId,
     terminals,
     updateWorkspace,
   ]);
@@ -563,6 +653,12 @@ export function App() {
       return;
     }
 
+    logStateDebug('app', 'focusMarkdownRequested', {
+      markdownId,
+      layoutMode,
+      currentViewport,
+    });
+
     bumpNodeInteraction(markdownId);
 
     if (layoutMode === 'focus-tiles') {
@@ -577,14 +673,15 @@ export function App() {
       startViewport: currentViewport,
       updateWorkspace,
       onSelectMarkdown: setSelectedNodeId,
-      onViewportChange: setViewport,
+      onViewportChange: handleMarkdownFocusViewportChange,
       animationFrameRef: viewportAnimationFrameRef,
     });
   }, [
     bumpNodeInteraction,
     currentViewport,
+    handleMarkdownFocusViewportChange,
     layoutMode,
-    setViewport,
+    setSelectedNodeId,
     updateWorkspace,
     workspace,
   ]);
@@ -762,7 +859,10 @@ export function App() {
         createdTerminal = remoteCreate.terminal;
         updateWorkspace(
           (current) => upsertWorkspaceTerminal(current, remoteCreate.terminal),
-          { persistImmediately: true },
+          {
+            persistImmediately: true,
+            debugSource: 'remoteTerminalUpsert',
+          },
         );
         void refreshWorkspaceFromServer(remoteCreate.workspace);
       } catch (error) {
@@ -791,7 +891,7 @@ export function App() {
         updateWorkspace,
         onSelectTerminal: setSelectedNodeId,
         onAutoFocusAtChange: setFocusAutoFocusAtMs,
-        onViewportChange: setViewport,
+        onViewportChange: handleNewTerminalFocusViewportChange,
         animationFrameRef: viewportAnimationFrameRef,
       });
     }
@@ -804,12 +904,15 @@ export function App() {
       bumpNodeInteraction(nodeId);
     }
 
+    logStateDebug('app', 'selectedNodeChangeRequested', {
+      nextSelectedNodeId: nodeId,
+      layoutMode,
+    });
     setSelectedNodeId(nodeId);
-  }, [bumpNodeInteraction]);
+  }, [bumpNodeInteraction, layoutMode, setSelectedNodeId]);
 
   const handleTerminalRemove = useCallback((terminalId: string) => {
     setFocusAutoFocusAtMs(null);
-    setSelectedNodeId((current) => (current === terminalId ? null : current));
     setNodeInteractionAtMs((current) => {
       if (!(terminalId in current)) {
         return current;
@@ -823,7 +926,6 @@ export function App() {
   }, [removeTerminal]);
 
   const handleMarkdownRemove = useCallback((markdownId: string) => {
-    setSelectedNodeId((current) => (current === markdownId ? null : current));
     setNodeInteractionAtMs((current) => {
       if (!(markdownId in current)) {
         return current;
@@ -851,10 +953,23 @@ export function App() {
     markSessionRead(sessionId);
   }, [bumpNodeInteraction, markSessionRead]);
 
+  const handleWorkspaceChange = useCallback((
+    updater: Parameters<typeof updateWorkspace>[0],
+  ) => {
+    updateWorkspace(updater, {
+      debugSource: 'canvas.change',
+    });
+  }, [updateWorkspace]);
+
   const handleLayoutModeChange = useCallback((nextLayoutMode: WorkspaceLayoutMode): void => {
     setFocusAutoFocusAtMs(null);
+    logStateDebug('app', 'layoutModeChangeRequested', {
+      previousLayoutMode: workspace?.layoutMode ?? null,
+      nextLayoutMode,
+      persistencePhase: persistence.phase,
+    });
     setLayoutMode(nextLayoutMode);
-  }, [setLayoutMode]);
+  }, [persistence.phase, setLayoutMode, workspace?.layoutMode]);
 
   const handleBrowserNotificationsToggle = useCallback(async () => {
     if (notificationPermission === 'unsupported' || !('Notification' in window)) {
@@ -935,8 +1050,8 @@ export function App() {
         onMarkdownRemove={handleMarkdownRemove}
         onSelectedNodeChange={handleSelectedNodeChange}
         onTerminalFocusRequest={focusTerminal}
-        onWorkspaceChange={updateWorkspace}
-        onViewportChange={setViewport}
+        onWorkspaceChange={handleWorkspaceChange}
+        onViewportChange={handleCanvasViewportChange}
         focusAutoFocusAtMs={focusAutoFocusAtMs}
         onDocumentLoad={handleDocumentLoad}
         onDocumentChange={handleDocumentChange}

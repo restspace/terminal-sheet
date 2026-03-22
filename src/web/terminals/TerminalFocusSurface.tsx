@@ -11,6 +11,7 @@ import {
   type TerminalCellSize,
 } from './terminalSizing';
 import { getIncrementalWrite } from './incrementalWrite';
+import { logStateDebug } from '../debug/stateDebug';
 
 interface TerminalSurfaceProps {
   sessionId: string;
@@ -69,10 +70,6 @@ interface RendererController {
   dispose: () => void;
 }
 
-interface RendererInitializationOptions {
-  allowWebgl: boolean;
-}
-
 export function TerminalSurface({
   sessionId,
   scrollback,
@@ -93,6 +90,8 @@ export function TerminalSurface({
   const resizeFrameRef = useRef<number | null>(null);
   const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
   const shouldStickToBottomRef = useRef(true);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   // Mutable ref so fitTerminal always sees the latest ptyCols without being
   // recreated.  Updated synchronously on every render (not via an effect).
   const ptyColsRef = useRef<number | undefined>(ptyCols);
@@ -120,55 +119,46 @@ export function TerminalSurface({
       return;
     }
 
-    const terminal = new Terminal(
-      createTerminalOptions(readOnly, visualScaleRef.current),
-    );
+    const terminal = new Terminal(createTerminalOptions(visualScaleRef.current));
 
     terminal.open(container);
-    const rendererController = initializeTerminalRenderer(terminal, {
-      allowWebgl: !readOnly,
-    });
+    const rendererController = initializeTerminalRenderer(terminal);
+    applyTerminalInteractivity(terminal, readOnlyRef.current);
     markTerminalDomAsCanvasSafe(terminal);
-
-    if (readOnly && terminal.textarea instanceof HTMLTextAreaElement) {
-      terminal.textarea.tabIndex = -1;
-      terminal.textarea.setAttribute('aria-hidden', 'true');
-    }
 
     lastRenderedScrollbackRef.current = '';
     shouldStickToBottomRef.current = true;
     terminalRef.current = terminal;
+    logStateDebug('terminalSurface', 'mount', {
+      sessionId,
+      readOnly,
+      scrollbackLength: scrollback.length,
+      ptyCols: ptyColsRef.current ?? null,
+      visualScale: visualScaleRef.current,
+    });
 
-    const dataDisposable = readOnly
-      ? null
-      : terminal.onData((data) => {
-          forwardInput(data);
-        });
+    const dataDisposable = terminal.onData((data) => {
+      forwardInput(data);
+    });
 
     // Track whether user has scrolled away from the bottom.
     // wheel listener rather than terminal.onScroll() because onScroll fires
     // on internal buffer growth (new lines added during writes), not just on
     // user-initiated scrolling. Using onScroll caused shouldStickToBottomRef
     // to be prematurely set to false during rapid output, breaking auto-scroll.
-    let userScrollCleanup: (() => void) | null = null;
+    const handleUserScroll = () => {
+      window.requestAnimationFrame(() => {
+        if (terminalRef.current === terminal) {
+          shouldStickToBottomRef.current = isViewportNearBottom(terminal);
+        }
+      });
+    };
 
-    if (readOnly) {
-      const handleUserScroll = () => {
-        window.requestAnimationFrame(() => {
-          if (terminalRef.current === terminal) {
-            shouldStickToBottomRef.current = isReadOnlyViewportNearBottom(terminal);
-          }
-        });
-      };
-
-      container.addEventListener('wheel', handleUserScroll, { passive: true });
-      userScrollCleanup = () => {
-        container.removeEventListener('wheel', handleUserScroll);
-      };
-    }
+    container.addEventListener('wheel', handleUserScroll, { passive: true });
 
     let disposed = false;
     const fitTerminal = () => {
+      const isReadOnly = readOnlyRef.current;
       cellSizeRef.current = getTerminalCellSize(
         terminal,
         container,
@@ -181,7 +171,7 @@ export function TerminalSurface({
       // col count to the PTY via onResize; the PTY stores it in session.cols,
       // which callers pass as ptyCols here.  When ptyCols is absent (focused
       // terminal path), fall back to the measured col count as before.
-      const effectiveCols = readOnly && ptyColsRef.current
+      const effectiveCols = isReadOnly && ptyColsRef.current
         ? ptyColsRef.current
         : size.cols;
       const sizeKey = `${effectiveCols}x${size.rows}`;
@@ -191,8 +181,18 @@ export function TerminalSurface({
       }
 
       lastSizeRef.current = sizeKey;
+      logStateDebug('terminalSurface', 'fit', {
+        sessionId,
+        readOnly: isReadOnly,
+        effectiveCols,
+        rows: size.rows,
+        measuredCols: size.cols,
+        ptyCols: ptyColsRef.current ?? null,
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
+      });
 
-      if (readOnly) {
+      if (isReadOnly) {
         // Queue the resize through xterm's write pipeline so it executes
         // AFTER any pending terminal.write() calls. A synchronous resize
         // between queued writes can reflow the buffer and displace the
@@ -207,8 +207,15 @@ export function TerminalSurface({
           syncReadOnlyViewport(terminal, stickToBottom);
         });
       } else {
+        const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, isReadOnly);
         terminal.resize(effectiveCols, size.rows);
+        logStateDebug('terminalSurface', 'resizeSentToBackend', {
+          sessionId,
+          cols: effectiveCols,
+          rows: size.rows,
+        });
         syncBackendSize(effectiveCols, size.rows);
+        restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
       }
     };
     const scheduleFit = () => {
@@ -262,14 +269,37 @@ export function TerminalSurface({
         resizeFrameRef.current = null;
       }
       dataDisposable?.dispose();
-      userScrollCleanup?.();
+      container.removeEventListener('wheel', handleUserScroll);
       rendererController.dispose();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
       lastSizeRef.current = '';
+      logStateDebug('terminalSurface', 'unmount', {
+        sessionId,
+        readOnly: readOnlyRef.current,
+      });
     };
-  }, [readOnly, sessionId]);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+
+    if (!terminal) {
+      return;
+    }
+
+    if (
+      terminal.options.disableStdin === readOnly &&
+      terminal.options.cursorBlink === !readOnly
+    ) {
+      return;
+    }
+
+    applyTerminalInteractivity(terminal, readOnly);
+    lastSizeRef.current = '';
+    scheduleFitRef.current?.();
+  }, [readOnly]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -290,7 +320,7 @@ export function TerminalSurface({
     scheduleFitRef.current?.();
   }, [visualScale]);
 
-  // When the PTY's col count changes (e.g. the focused overlay was resized),
+  // When the PTY's col count changes (e.g. the focused terminal node was resized),
   // invalidate the cached size so the next fit uses the new ptyCols value.
   useEffect(() => {
     if (!readOnly || !ptyCols) {
@@ -339,6 +369,7 @@ export function TerminalSurface({
     }
 
     const incrementalWrite = getIncrementalWrite(previousScrollback, scrollback);
+    const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, readOnly);
 
     if (incrementalWrite !== null) {
       // No scrollToBottom() call here. xterm's buffer service auto-scrolls
@@ -347,7 +378,9 @@ export function TerminalSurface({
       // any manual intervention. Calling scrollToBottom() from a write
       // callback fires xterm's internal scroll event mid-render, disrupting
       // dirty-row tracking and causing visual corruption.
-      terminal.write(incrementalWrite);
+      terminal.write(incrementalWrite, () => {
+        restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
+      });
     } else {
       // Write the VT full-reset sequence (RIS) in-band rather than calling
       // terminal.reset() synchronously. terminal.reset() clears terminal state
@@ -355,7 +388,15 @@ export function TerminalSurface({
       // writes queued before the reset still execute afterwards, re-introducing
       // stale content. Serialising the reset through the write queue ensures
       // the slate is wiped only after all previously queued data has processed.
-      terminal.write('\x1bc' + scrollback);
+      terminal.write('\x1bc' + scrollback, () => {
+        restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
+      });
+      logStateDebug('terminalSurface', 'fullResetWrite', {
+        sessionId,
+        readOnly,
+        scrollbackLength: scrollback.length,
+        previousScrollbackLength: previousScrollback.length,
+      });
     }
 
     lastRenderedScrollbackRef.current = scrollback;
@@ -368,6 +409,11 @@ export function TerminalSurface({
 
     shouldStickToBottomRef.current = true;
     syncReadOnlyViewport(terminalRef.current, true);
+    logStateDebug('terminalSurface', 'scrollReset', {
+      sessionId,
+      readOnly,
+      scrollResetKey: scrollResetKey ?? null,
+    });
   }, [readOnly, scrollResetKey]);
 
   return (
@@ -375,6 +421,7 @@ export function TerminalSurface({
       ref={containerRef}
       className={buildSurfaceClassName(className, readOnly)}
       aria-hidden={readOnly}
+      onPointerDown={readOnly ? undefined : stopCanvasInteractionPropagation}
       onClick={focusTerminalSurface}
       onWheel={stopCanvasInteractionPropagation}
     />
@@ -382,10 +429,10 @@ export function TerminalSurface({
 
   function focusTerminalSurface(event: React.MouseEvent<HTMLDivElement>): void {
     focusTerminalInput(terminalRef.current);
-    // For the focused overlay (not read-only) stop propagation so the click
-    // doesn't reach the canvas panning/selection layer beneath the overlay.
-    // For the read-only card on the canvas we let the click bubble so the
-    // canvas node still gets selected normally.
+    // For the interactive surface stop propagation so terminal clicks stay
+    // inside the node instead of reaching the canvas selection/pan layer.
+    // For the read-only card we let the click bubble so the node still gets
+    // selected normally.
     if (!readOnly) {
       event.stopPropagation();
     }
@@ -499,6 +546,58 @@ function focusTerminalInput(terminal: Terminal | null): void {
   terminal.focus();
 }
 
+function shouldRestoreTerminalFocus(
+  terminal: Terminal,
+  readOnly: boolean,
+): boolean {
+  if (readOnly || typeof document === 'undefined') {
+    return false;
+  }
+
+  const activeElement = document.activeElement;
+  const terminalElement = terminal.element;
+  const textarea = terminal.textarea;
+
+  if (textarea instanceof HTMLElement && activeElement === textarea) {
+    return true;
+  }
+
+  return terminalElement instanceof HTMLElement
+    ? terminalElement.contains(activeElement)
+    : false;
+}
+
+function restoreInteractiveFocusIfNeeded(
+  terminal: Terminal,
+  shouldRestoreFocus: boolean,
+): void {
+  if (!shouldRestoreFocus) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    const terminalElement = terminal.element;
+    const textarea = terminal.textarea;
+    const activeElement = document.activeElement;
+
+    if (
+      textarea instanceof HTMLElement &&
+      activeElement === textarea
+    ) {
+      return;
+    }
+
+    if (
+      terminalElement instanceof HTMLElement &&
+      terminalElement.contains(activeElement)
+    ) {
+      return;
+    }
+
+    focusTerminalInput(terminal);
+  });
+}
+
 function markTerminalDomAsCanvasSafe(
   terminal: Terminal,
 ): void {
@@ -565,7 +664,7 @@ function syncReadOnlyViewport(
   }
 }
 
-function isReadOnlyViewportNearBottom(terminal: Terminal): boolean {
+function isViewportNearBottom(terminal: Terminal): boolean {
   const activeBuffer = terminal.buffer.active;
 
   return activeBuffer.baseY - activeBuffer.viewportY <= 1;
@@ -573,9 +672,8 @@ function isReadOnlyViewportNearBottom(terminal: Terminal): boolean {
 
 function initializeTerminalRenderer(
   terminal: Terminal,
-  options: RendererInitializationOptions,
 ): RendererController {
-  const webglRenderer = options.allowWebgl ? installWebglRenderer(terminal) : null;
+  const webglRenderer = installWebglRenderer(terminal);
 
   if (webglRenderer) {
     return webglRenderer;
@@ -648,22 +746,51 @@ function installCanvasRenderer(terminal: Terminal): RendererController | null {
 }
 
 function createTerminalOptions(
-  readOnly: boolean,
   visualScale: number,
 ): NonNullable<ConstructorParameters<typeof Terminal>[0]> {
   return {
     allowTransparency: true,
     convertEol: true,
-    cursorBlink: !readOnly,
-    disableStdin: readOnly,
+    cursorBlink: true,
+    disableStdin: false,
     fontFamily: TERMINAL_FONT_FAMILY,
     fontSize: getTerminalFontSize(visualScale),
     lineHeight: TERMINAL_LINE_HEIGHT,
     scrollback: TERMINAL_SCROLLBACK_LINES,
-    theme: {
-      ...TERMINAL_THEME,
-      cursor: readOnly ? 'transparent' : TERMINAL_THEME.cursor,
-    },
+    theme: TERMINAL_THEME,
+  };
+}
+
+function applyTerminalInteractivity(
+  terminal: Terminal,
+  readOnly: boolean,
+): void {
+  terminal.options.disableStdin = readOnly;
+  terminal.options.cursorBlink = !readOnly;
+  terminal.options.theme = getTerminalTheme(readOnly);
+
+  const textarea = terminal.textarea;
+
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+
+  textarea.tabIndex = readOnly ? -1 : 0;
+
+  if (readOnly) {
+    textarea.setAttribute('aria-hidden', 'true');
+    return;
+  }
+
+  textarea.removeAttribute('aria-hidden');
+}
+
+function getTerminalTheme(
+  readOnly: boolean,
+): NonNullable<ConstructorParameters<typeof Terminal>[0]>['theme'] {
+  return {
+    ...TERMINAL_THEME,
+    cursor: readOnly ? 'transparent' : TERMINAL_THEME.cursor,
   };
 }
 

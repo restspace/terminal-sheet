@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createDefaultWorkspace, createPlaceholderMarkdown, createPlaceholderTerminal } from '../../shared/workspace';
-import { getSelectedNodeIdFromChanges, buildCanvasEdges } from './flow';
+import { applyNodeChangesToWorkspace, buildCanvasEdges, getSelectedNodeIdFromChanges } from './flow';
 
 describe('getSelectedNodeIdFromChanges', () => {
   it('returns the newly selected node when selection changes include a node selection', () => {
@@ -55,5 +55,35 @@ describe('getSelectedNodeIdFromChanges', () => {
     expect(edges[0]?.animated).toBe(true);
     expect(edges[0]?.source).toBe(markdown.id);
     expect(edges[0]?.target).toBe(terminal.id);
+  });
+
+  it('ignores repeated no-op node dimension and position changes', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      terminals: [terminal],
+    };
+
+    const nextWorkspace = applyNodeChangesToWorkspace(workspace, [
+      {
+        id: terminal.id,
+        type: 'dimensions',
+        dimensions: {
+          width: terminal.bounds.width,
+          height: terminal.bounds.height,
+        },
+      },
+      {
+        id: terminal.id,
+        type: 'position',
+        position: {
+          x: terminal.bounds.x,
+          y: terminal.bounds.y,
+        },
+        dragging: false,
+      },
+    ]);
+
+    expect(nextWorkspace).toBe(workspace);
   });
 });
