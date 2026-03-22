@@ -27,3 +27,6 @@ Recent history uses short, imperative commit subjects such as `Fix focused termi
 
 ## Configuration & Safety Tips
 The app binds to localhost by default and accepts `--port`, `--workspace`, and `--no-open` from the CLI. Prefer custom workspace files for experiments instead of editing `.terminal-canvas/workspace.json` by hand.
+
+## Terminal Preview Requirement
+Unfocused terminal windows must keep the same live-preview rendering style as focused terminal windows while background output is streaming. Do not replace background terminal previews with simplified text-only fallbacks or otherwise deviate from the focused-window visual behavior unless the user explicitly asks for that tradeoff.
