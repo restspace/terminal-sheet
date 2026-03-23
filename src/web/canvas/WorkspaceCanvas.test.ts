@@ -100,11 +100,22 @@ vi.mock('../markdown/MarkdownPlaceholderNode', () => ({
     }),
 }));
 
+vi.mock('./layout/strategyRegistry', async () => {
+  const actual = await vi.importActual<typeof import('./layout/strategyRegistry')>(
+    './layout/strategyRegistry',
+  );
+  return {
+    ...actual,
+    getLayoutStrategy: vi.fn(actual.getLayoutStrategy),
+  };
+});
+
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import {
   createDefaultWorkspace,
   createPlaceholderTerminal,
 } from '../../shared/workspace';
+import { getLayoutStrategy } from './layout/strategyRegistry';
 import { WorkspaceCanvas } from './WorkspaceCanvas';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -191,6 +202,65 @@ describe('WorkspaceCanvas', () => {
     expect(focusedNode?.getAttribute('data-auto-focus')).toBe('321');
     expect(inspectNode?.getAttribute('data-mode')).toBe('inspect');
     expect(container.querySelector('.focus-terminal-overlay')).toBeNull();
+  });
+
+  it('keeps terminal callback props stable across session updates', () => {
+    const focusedTerminal = createPlaceholderTerminal(0);
+    const inspectTerminal = createPlaceholderTerminal(1);
+    const focusedSession = createSessionSnapshot(focusedTerminal.id);
+    const inspectSession = createSessionSnapshot(inspectTerminal.id);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      terminals: [focusedTerminal, inspectTerminal],
+      selectedNodeId: focusedTerminal.id,
+    };
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          selectedNodeId: focusedTerminal.id,
+          sessions: {
+            [focusedTerminal.id]: focusedSession,
+            [inspectTerminal.id]: inspectSession,
+          },
+        })),
+      );
+    });
+
+    const previousData = expectTerminalNodeData(inspectTerminal.id);
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace: {
+            ...workspace,
+            updatedAt: '2026-03-23T12:40:00.000Z',
+          },
+          selectedNodeId: focusedTerminal.id,
+          sessions: {
+            [focusedTerminal.id]: {
+              ...focusedSession,
+              lastOutputAt: '2026-03-23T12:40:00.000Z',
+              lastOutputLine: 'new output',
+              previewLines: ['new output'],
+            },
+            [inspectTerminal.id]: inspectSession,
+          },
+        })),
+      );
+    });
+
+    const nextData = expectTerminalNodeData(inspectTerminal.id);
+
+    expect(nextData.onTerminalChange).toBe(previousData.onTerminalChange);
+    expect(nextData.onPathSelectRequest).toBe(previousData.onPathSelectRequest);
+    expect(nextData.onRemove).toBe(previousData.onRemove);
+    expect(nextData.onInput).toBe(previousData.onInput);
+    expect(nextData.onResize).toBe(previousData.onResize);
+    expect(nextData.onRestart).toBe(previousData.onRestart);
+    expect(nextData.onMarkRead).toBe(previousData.onMarkRead);
+    expect(nextData.onMarkdownDrop).toBe(previousData.onMarkdownDrop);
   });
 
   it('reports measured canvas viewport size to the parent', () => {
@@ -424,6 +494,55 @@ describe('WorkspaceCanvas', () => {
 
     expect(onViewportChange).toHaveBeenCalledWith(nextViewport);
   });
+
+  it('debounces layout recomputation on node interaction updates', () => {
+    vi.useFakeTimers();
+    try {
+      const terminal = createPlaceholderTerminal(0);
+      const workspace = {
+        ...createDefaultWorkspace(),
+        terminals: [terminal],
+      };
+      const mockedGetLayoutStrategy = vi.mocked(getLayoutStrategy);
+
+      act(() => {
+        root.render(
+          createElement(WorkspaceCanvas, createCanvasProps({
+            workspace,
+            nodeInteractionAtMs: {
+              [terminal.id]: 100,
+            },
+          })),
+        );
+      });
+
+      const callsAfterInitialRender = mockedGetLayoutStrategy.mock.calls.length;
+
+      act(() => {
+        root.render(
+          createElement(WorkspaceCanvas, createCanvasProps({
+            workspace: {
+              ...workspace,
+              updatedAt: '2026-03-23T13:00:00.000Z',
+            },
+            nodeInteractionAtMs: {
+              [terminal.id]: 150,
+            },
+          })),
+        );
+      });
+
+      expect(mockedGetLayoutStrategy.mock.calls.length).toBe(callsAfterInitialRender);
+
+      act(() => {
+        vi.advanceTimersByTime(120);
+      });
+
+      expect(mockedGetLayoutStrategy.mock.calls.length).toBe(callsAfterInitialRender + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function createCanvasProps(
@@ -499,4 +618,14 @@ function expectNodePosition(nodeId: string): { x: number; y: number } {
 
   expect(node?.position).toBeDefined();
   return node!.position!;
+}
+
+function expectTerminalNodeData(nodeId: string): Record<string, unknown> {
+  const node = latestReactFlowProps?.nodes.find((candidate) => candidate.id === nodeId);
+
+  expect(node).toBeDefined();
+  expect(node?.type).toBe('terminal');
+  expect(node?.data).toBeTruthy();
+
+  return node!.data as Record<string, unknown>;
 }

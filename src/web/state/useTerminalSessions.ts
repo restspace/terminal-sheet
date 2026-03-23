@@ -70,6 +70,7 @@ export function useTerminalSessions({
   const { socketState, send } = useWorkspaceSocket({
     onMessage: handleServerMessage,
   });
+  const pendingSessionPollTokensRef = useRef(new Map<string, symbol>());
 
   useEffect(() => {
     const initialRefreshTimerId = window.setTimeout(() => {
@@ -91,12 +92,14 @@ export function useTerminalSessions({
 
   useEffect(() => {
     const pendingSessionTimers = pendingSessionTimersRef.current;
+    const pendingSessionPollTokens = pendingSessionPollTokensRef.current;
 
     return () => {
       for (const timerId of pendingSessionTimers.values()) {
         window.clearTimeout(timerId);
       }
       pendingSessionTimers.clear();
+      pendingSessionPollTokens.clear();
     };
   }, []);
 
@@ -108,14 +111,27 @@ export function useTerminalSessions({
     socketState,
     awaitSession: useCallback(
       (sessionId: string) => {
-        if (pendingSessionTimersRef.current.has(sessionId)) {
-          return;
+        const existingTimerId = pendingSessionTimersRef.current.get(sessionId);
+        if (existingTimerId !== undefined) {
+          window.clearTimeout(existingTimerId);
         }
+        pendingSessionTimersRef.current.delete(sessionId);
+
+        const pollToken = Symbol(sessionId);
+        pendingSessionPollTokensRef.current.set(sessionId, pollToken);
 
         let attemptsRemaining = 12;
 
         const pollForSession = async () => {
+          if (pendingSessionPollTokensRef.current.get(sessionId) !== pollToken) {
+            return;
+          }
+
           const sessionsSnapshot = await refreshSnapshots();
+
+          if (pendingSessionPollTokensRef.current.get(sessionId) !== pollToken) {
+            return;
+          }
 
           if (
             sessionsSnapshot.some((session) => session.sessionId === sessionId)
@@ -126,13 +142,20 @@ export function useTerminalSessions({
               window.clearTimeout(timerId);
             }
             pendingSessionTimersRef.current.delete(sessionId);
+            pendingSessionPollTokensRef.current.delete(sessionId);
             return;
           }
 
           attemptsRemaining -= 1;
 
           if (attemptsRemaining <= 0) {
+            const timerId = pendingSessionTimersRef.current.get(sessionId);
+
+            if (timerId !== undefined) {
+              window.clearTimeout(timerId);
+            }
             pendingSessionTimersRef.current.delete(sessionId);
+            pendingSessionPollTokensRef.current.delete(sessionId);
             return;
           }
 

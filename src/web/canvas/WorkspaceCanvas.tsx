@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   Background,
@@ -82,6 +82,7 @@ const nodeTypes = {
   markdown: MarkdownPlaceholderNode,
 };
 const ENABLE_REACT_FLOW_MINIMAP = false;
+const LAYOUT_INTERACTION_DEBOUNCE_MS = 96;
 
 export function WorkspaceCanvas({
   workspace,
@@ -120,14 +121,103 @@ export function WorkspaceCanvas({
   const previousLayoutModeRef = useRef<WorkspaceLayoutMode | null>(null);
   const [layoutAnimationClassName, setLayoutAnimationClassName] = useState('');
   const layoutAnimationTimerRef = useRef<number | null>(null);
+  const debouncedLayoutInteractionTimerRef = useRef<number | null>(null);
   const lastLayoutAnimationKeyRef = useRef<string | null>(null);
+  const [debouncedNodeInteractionAtMs, setDebouncedNodeInteractionAtMs] =
+    useState(nodeInteractionAtMs);
   const [renderedBoundsByNodeId, setRenderedBoundsByNodeId] = useState<
     Map<string, NodeBounds>
   >(() => createInitialRenderedBoundsByNodeId(workspace));
+  const workspaceRef = useRef(workspace);
+  const renderedBoundsByNodeIdRef = useRef<ReadonlyMap<string, NodeBounds>>(
+    renderedBoundsByNodeId,
+  );
+  const onNodeBoundsChangeRef = useRef(onNodeBoundsChange);
+  const onTerminalChangeRef = useRef(onTerminalChange);
+  const onPathSelectRequestRef = useRef(onPathSelectRequest);
+  const onTerminalRemoveRef = useRef(onTerminalRemove);
+  const onTerminalInputRef = useRef(onTerminalInput);
+  const onTerminalResizeRef = useRef(onTerminalResize);
+  const onTerminalRestartRef = useRef(onTerminalRestart);
+  const onMarkTerminalReadRef = useRef(onMarkTerminalRead);
+  const onMarkdownDropRef = useRef(onMarkdownDrop);
+  workspaceRef.current = workspace;
+  renderedBoundsByNodeIdRef.current = renderedBoundsByNodeId;
+  onNodeBoundsChangeRef.current = onNodeBoundsChange;
+  onTerminalChangeRef.current = onTerminalChange;
+  onPathSelectRequestRef.current = onPathSelectRequest;
+  onTerminalRemoveRef.current = onTerminalRemove;
+  onTerminalInputRef.current = onTerminalInput;
+  onTerminalResizeRef.current = onTerminalResize;
+  onTerminalRestartRef.current = onTerminalRestart;
+  onMarkTerminalReadRef.current = onMarkTerminalRead;
+  onMarkdownDropRef.current = onMarkdownDrop;
   const [interactionPolicy, setInteractionPolicy] = useState({
     nodesDraggable: true,
     nodesResizable: true,
   });
+  const handleNodeBoundsChange = useCallback(
+    (nodeId: string, bounds: Partial<NodeBounds>) => {
+      const currentWorkspace = workspaceRef.current;
+      const nextBounds = resolveNextRenderedBounds(
+        renderedBoundsByNodeIdRef.current,
+        currentWorkspace,
+        nodeId,
+        bounds,
+      );
+
+      if (!nextBounds) {
+        return;
+      }
+
+      setRenderedBoundsByNodeId((current) =>
+        applyRenderedBoundsUpdate(current, currentWorkspace, nodeId, bounds),
+      );
+      onNodeBoundsChangeRef.current(nodeId, nextBounds);
+    },
+    [],
+  );
+  const handleTerminalChange = useCallback<
+    WorkspaceCanvasProps['onTerminalChange']
+  >((nodeId, patch) => {
+    onTerminalChangeRef.current(nodeId, patch);
+  }, []);
+  const handlePathSelectRequest = useCallback<
+    WorkspaceCanvasProps['onPathSelectRequest']
+  >((terminalId) => {
+    onPathSelectRequestRef.current(terminalId);
+  }, []);
+  const handleTerminalRemove = useCallback<
+    WorkspaceCanvasProps['onTerminalRemove']
+  >((terminalId) => {
+    onTerminalRemoveRef.current(terminalId);
+  }, []);
+  const handleTerminalInput = useCallback<
+    WorkspaceCanvasProps['onTerminalInput']
+  >((sessionId, data) => {
+    onTerminalInputRef.current(sessionId, data);
+  }, []);
+  const handleTerminalResize = useCallback<
+    WorkspaceCanvasProps['onTerminalResize']
+  >((sessionId, cols, rows) => {
+    onTerminalResizeRef.current(sessionId, cols, rows);
+  }, []);
+  const handleTerminalRestart = useCallback<
+    WorkspaceCanvasProps['onTerminalRestart']
+  >((sessionId) => {
+    onTerminalRestartRef.current(sessionId);
+  }, []);
+  const handleMarkTerminalRead = useCallback<
+    WorkspaceCanvasProps['onMarkTerminalRead']
+  >((sessionId) => {
+    onMarkTerminalReadRef.current(sessionId);
+  }, []);
+  const handleMarkdownDrop = useCallback<WorkspaceCanvasProps['onMarkdownDrop']>(
+    (markdownNodeId, terminalId) => {
+      onMarkdownDropRef.current(markdownNodeId, terminalId);
+    },
+    [],
+  );
   const {
     activeViewport,
     isViewportInteracting,
@@ -194,6 +284,21 @@ export function WorkspaceCanvas({
   }, [onViewportSizeChange, viewportSize]);
 
   useEffect(() => {
+    if (areInteractionTimestampsEqual(debouncedNodeInteractionAtMs, nodeInteractionAtMs)) {
+      return;
+    }
+
+    if (debouncedLayoutInteractionTimerRef.current !== null) {
+      window.clearTimeout(debouncedLayoutInteractionTimerRef.current);
+    }
+
+    debouncedLayoutInteractionTimerRef.current = window.setTimeout(() => {
+      debouncedLayoutInteractionTimerRef.current = null;
+      setDebouncedNodeInteractionAtMs(nodeInteractionAtMs);
+    }, LAYOUT_INTERACTION_DEBOUNCE_MS);
+  }, [debouncedNodeInteractionAtMs, nodeInteractionAtMs]);
+
+  useEffect(() => {
     const layoutStrategy = getLayoutStrategy(workspace.layoutMode);
     const layoutResult = layoutStrategy.compute({
       mode: workspace.layoutMode,
@@ -210,7 +315,7 @@ export function WorkspaceCanvas({
         })),
       ],
       selectedNodeId,
-      interactionAtByNodeId: nodeInteractionAtMs,
+      interactionAtByNodeId: debouncedNodeInteractionAtMs,
       viewport: layoutViewport,
       viewportSize,
       safeAreaInsets: getLayoutSafeAreaInsets(viewportSize),
@@ -270,8 +375,8 @@ export function WorkspaceCanvas({
       setLayoutAnimationClassName('');
     }, layoutResult.animation.durationMs);
   }, [
+    debouncedNodeInteractionAtMs,
     focusedTerminalId,
-    nodeInteractionAtMs,
     selectedNodeId,
     viewportSize,
     layoutViewport,
@@ -284,6 +389,9 @@ export function WorkspaceCanvas({
     return () => {
       if (layoutAnimationTimerRef.current !== null) {
         window.clearTimeout(layoutAnimationTimerRef.current);
+      }
+      if (debouncedLayoutInteractionTimerRef.current !== null) {
+        window.clearTimeout(debouncedLayoutInteractionTimerRef.current);
       }
     };
   }, []);
@@ -368,31 +476,15 @@ export function WorkspaceCanvas({
         activeMarkdownLinksByNodeId,
         socketState,
         onSelect: onSelectedNodeChange,
-        onBoundsChange: (nodeId, bounds) => {
-          const nextBounds = resolveNextRenderedBounds(
-            renderedBoundsByNodeId,
-            workspace,
-            nodeId,
-            bounds,
-          );
-
-          if (!nextBounds) {
-            return;
-          }
-
-          setRenderedBoundsByNodeId((current) =>
-            applyRenderedBoundsUpdate(current, workspace, nodeId, bounds),
-          );
-          onNodeBoundsChange(nodeId, nextBounds);
-        },
-        onTerminalChange,
-        onPathSelectRequest,
-        onRemove: onTerminalRemove,
-        onInput: onTerminalInput,
-        onResize: onTerminalResize,
-        onRestart: onTerminalRestart,
-        onMarkRead: onMarkTerminalRead,
-        onMarkdownDrop,
+        onBoundsChange: handleNodeBoundsChange,
+        onTerminalChange: handleTerminalChange,
+        onPathSelectRequest: handlePathSelectRequest,
+        onRemove: handleTerminalRemove,
+        onInput: handleTerminalInput,
+        onResize: handleTerminalResize,
+        onRestart: handleTerminalRestart,
+        onMarkRead: handleMarkTerminalRead,
+        onMarkdownDrop: handleMarkdownDrop,
         onMarkdownFocusRequest,
         onMarkdownRemove,
         onDocumentLoad,
@@ -404,21 +496,21 @@ export function WorkspaceCanvas({
       backendAccents,
       activeViewport.zoom,
       focusAutoFocusAtMs,
-      onMarkTerminalRead,
-      onMarkdownDrop,
+      handleMarkTerminalRead,
+      handleMarkdownDrop,
+      handleNodeBoundsChange,
+      handlePathSelectRequest,
+      handleTerminalChange,
+      handleTerminalInput,
+      handleTerminalRemove,
+      handleTerminalResize,
+      handleTerminalRestart,
       onMarkdownFocusRequest,
       onMarkdownRemove,
       onDocumentChange,
       onDocumentLoad,
       onDocumentSave,
       onSelectedNodeChange,
-      onTerminalChange,
-      onPathSelectRequest,
-      onTerminalInput,
-      onTerminalRemove,
-      onTerminalResize,
-      onTerminalRestart,
-      onNodeBoundsChange,
       selectedNodeId,
       renderedBoundsByNodeId,
       interactionPolicy.nodesDraggable,
@@ -862,4 +954,28 @@ function summarizeNodeChangesForDebug(
 
 function roundForEventDebug(value: number): number {
   return Number(value.toFixed(3));
+}
+
+function areInteractionTimestampsEqual(
+  left: Readonly<Record<string, number>>,
+  right: Readonly<Record<string, number>>,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  const leftNodeIds = Object.keys(left);
+  const rightNodeIds = Object.keys(right);
+
+  if (leftNodeIds.length !== rightNodeIds.length) {
+    return false;
+  }
+
+  for (const nodeId of leftNodeIds) {
+    if (left[nodeId] !== right[nodeId]) {
+      return false;
+    }
+  }
+
+  return true;
 }
