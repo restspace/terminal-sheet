@@ -25,6 +25,9 @@ import { WorkspaceService } from './persistence/workspaceService';
 import { PtySessionManager } from './pty/ptySessionManager';
 import { BackendRuntimeManager } from './runtime/backendRuntimeManager';
 import { SshTunnelManager } from './runtime/sshTunnelManager';
+import { registerWorkspaceReconciliations } from './workspace/registerWorkspaceReconciliations';
+import { WorkspaceCommitPublisher } from './workspace/workspaceCommitPublisher';
+import { WorkspaceCommitService } from './workspace/workspaceCommitService';
 import { registerBackendSocket } from './ws/registerBackendSocket';
 import { registerWorkspaceSocket } from './ws/registerWorkspaceSocket';
 
@@ -53,6 +56,11 @@ export async function createServer(
   const app = Fastify({ logger: true });
   const stateDebugEventStore = new StateDebugEventStore();
   const workspaceService = await WorkspaceService.create(options.workspaceFilePath);
+  const workspaceCommitPublisher = new WorkspaceCommitPublisher();
+  const workspaceCommitService = new WorkspaceCommitService(
+    workspaceService,
+    workspaceCommitPublisher,
+  );
   const markdownService = new MarkdownService(
     contentRoot,
     dirname(options.workspaceFilePath),
@@ -89,35 +97,16 @@ export async function createServer(
   );
 
   await app.register(websocket);
-  await markdownService.syncWithWorkspace(workspaceService.getWorkspace());
-  await tunnelManager.syncWithWorkspace(workspaceService.getWorkspace());
-  await runtimeManager.syncWithWorkspace(workspaceService.getWorkspace());
-  workspaceService.subscribe((workspace) => {
-    void markdownService.syncWithWorkspace(workspace).catch((error) => {
-      app.log.error(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to sync markdown documents with workspace update',
-      );
-    });
-    void tunnelManager.syncWithWorkspace(workspace).catch((error) => {
-      app.log.error(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to sync SSH tunnels with workspace update',
-      );
-    });
-    void runtimeManager.syncWithWorkspace(workspace).catch((error) => {
-      app.log.error(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to sync PTY sessions with workspace update',
-      );
-    });
-  });
+  const unsubscribeWorkspaceReconciliations = await registerWorkspaceReconciliations(
+    app.log,
+    {
+      workspaceService,
+      workspaceCommitPublisher,
+      markdownService,
+      runtimeManager,
+      tunnelManager,
+    },
+  );
 
   await registerHealthRoutes(app, {
     port: options.port,
@@ -142,6 +131,7 @@ export async function createServer(
   await registerBackendRoutes(app, {
     role,
     workspaceService,
+    workspaceCommitService,
     runtimeManager,
     tunnelManager,
     contentRoot,
@@ -153,18 +143,21 @@ export async function createServer(
     serverIdentityFilePath,
     localBackendId,
     workspaceService,
+    workspaceCommitService,
     ptySessionManager,
     attentionService,
   });
   await registerMarkdownRoutes(app, {
     markdownService,
     workspaceService,
+    workspaceCommitService,
   });
   await registerFileSystemRoutes(app, {
     localFileSystemService,
   });
   await registerWorkspaceRoutes(app, {
     workspaceService,
+    workspaceCommitService,
   });
   await registerTokenRoutes(app, {
     serverIdentityFilePath,
@@ -175,6 +168,7 @@ export async function createServer(
     runtimeManager,
     markdownService,
     workspaceService,
+    workspaceCommitPublisher,
   });
   await registerBackendSocket(app, {
     machineToken,
@@ -183,9 +177,9 @@ export async function createServer(
   });
 
   app.addHook('onClose', async () => {
+    unsubscribeWorkspaceReconciliations();
     markdownService.close();
-    await tunnelManager.close();
-    await runtimeManager.close();
+    await Promise.allSettled([tunnelManager.close(), runtimeManager.close()]);
     ptySessionManager.close();
   });
 

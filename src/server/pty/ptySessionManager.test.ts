@@ -281,7 +281,6 @@ function createWorkspace(terminal: {
     createdAt: '2026-03-11T10:00:00.000Z',
     updatedAt: '2026-03-11T10:00:00.000Z',
     layoutMode: 'free',
-    selectedNodeId: null,
     currentViewport: { x: 0, y: 0, zoom: 1 },
     terminals: [
       {

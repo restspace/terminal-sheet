@@ -9,7 +9,6 @@ import {
   removeTerminalFromWorkspace,
   saveWorkspaceViewportToPreset,
   setWorkspaceLayoutMode,
-  setWorkspaceSelectedNode,
   setWorkspaceViewport,
 } from './workspaceActions';
 
@@ -65,26 +64,6 @@ describe('workspace actions', () => {
     expect(nextWorkspace.markdown).toHaveLength(1);
   });
 
-  it('clears selectedNodeId when the selected terminal is removed', () => {
-    const firstTerminal = addTerminalToWorkspace(createDefaultWorkspace(), {
-      label: 'Build worker',
-    });
-    const secondTerminal = addTerminalToWorkspace(firstTerminal.workspace, {
-      label: 'Review worker',
-    });
-    const selectedWorkspace = setWorkspaceSelectedNode(
-      secondTerminal.workspace,
-      firstTerminal.terminal.id,
-    );
-
-    const nextWorkspace = removeTerminalFromWorkspace(
-      selectedWorkspace,
-      firstTerminal.terminal.id,
-    );
-
-    expect(nextWorkspace.selectedNodeId).toBeNull();
-  });
-
   it('removes markdown nodes', () => {
     const workspace = addMarkdownToWorkspace(createDefaultWorkspace());
     const markdownId = workspace.markdown[0]?.id;
@@ -97,25 +76,6 @@ describe('workspace actions', () => {
     );
 
     expect(nextWorkspace.markdown).toHaveLength(0);
-  });
-
-  it('stores selectedNodeId when the target node exists', () => {
-    const nextState = addTerminalToWorkspace(createDefaultWorkspace(), {
-      label: 'Build worker',
-    });
-    const nextWorkspace = setWorkspaceSelectedNode(
-      nextState.workspace,
-      nextState.terminal.id,
-    );
-
-    expect(nextWorkspace.selectedNodeId).toBe(nextState.terminal.id);
-  });
-
-  it('drops selectedNodeId when the target node does not exist', () => {
-    const workspace = createDefaultWorkspace();
-    const nextWorkspace = setWorkspaceSelectedNode(workspace, 'missing-node');
-
-    expect(nextWorkspace.selectedNodeId).toBeNull();
   });
 
   it('applies and saves camera presets', () => {

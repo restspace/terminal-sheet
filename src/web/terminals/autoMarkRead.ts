@@ -1,4 +1,4 @@
-import type { TerminalPresentationMode } from './presentationMode';
+import type { TerminalPresentationMode } from './terminalSurfaceModel';
 
 export function shouldAutoMarkRead(
   selected: boolean,

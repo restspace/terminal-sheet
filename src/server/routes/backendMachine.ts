@@ -7,6 +7,7 @@ import type { AttentionService } from '../integrations/attentionService';
 import { rotateServerIdentityToken } from '../persistence/serverIdentityStore';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { PtySessionManager } from '../pty/ptySessionManager';
+import { WorkspaceCommitService } from '../workspace/workspaceCommitService';
 import { readMachineToken } from './machineAuth';
 
 interface BackendMachineRouteOptions {
@@ -16,6 +17,7 @@ interface BackendMachineRouteOptions {
   serverIdentityFilePath: string;
   localBackendId: string;
   workspaceService: WorkspaceService;
+  workspaceCommitService: WorkspaceCommitService;
   ptySessionManager: PtySessionManager;
   attentionService: AttentionService;
   onTokenRotated?: (newToken: string) => void;
@@ -92,7 +94,7 @@ export async function registerBackendMachineRoutes(
       ...workspace,
       terminals: [...workspace.terminals, terminal],
     };
-    const savedWorkspace = await options.workspaceService.saveWorkspace(nextWorkspace);
+    const savedWorkspace = await options.workspaceCommitService.commitWorkspace(nextWorkspace);
 
     return {
       terminal,

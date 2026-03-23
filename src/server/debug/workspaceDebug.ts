@@ -56,7 +56,6 @@ export function summarizeWorkspaceForDebug(
     id: workspace.id,
     updatedAt: workspace.updatedAt,
     layoutMode: workspace.layoutMode,
-    selectedNodeId: workspace.selectedNodeId,
     viewport: {
       x: roundForDebug(workspace.currentViewport.x),
       y: roundForDebug(workspace.currentViewport.y),
@@ -81,10 +80,6 @@ export function summarizeWorkspaceDiffForDebug(
     layoutMode: {
       from: previousWorkspace?.layoutMode ?? null,
       to: nextWorkspace?.layoutMode ?? null,
-    },
-    selectedNodeId: {
-      from: previousWorkspace?.selectedNodeId ?? null,
-      to: nextWorkspace?.selectedNodeId ?? null,
     },
     viewportChanged: !sameViewportOrNull(
       previousWorkspace?.currentViewport ?? null,

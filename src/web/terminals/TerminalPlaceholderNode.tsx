@@ -21,7 +21,8 @@ import type { TerminalFlowNode } from './types';
 
 function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
   const { data, selected } = props;
-  const mode = data.presentationMode;
+  const surfaceModel = data.surfaceModel;
+  const mode = surfaceModel.presentationMode;
   const terminal = data.terminal;
   const session = data.session;
   const {
@@ -33,9 +34,8 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     onTerminalChange,
     onRemove,
   } = data;
-  const canMountLivePreview = data.mountLivePreview && session !== null;
-  const canRenderLiveTerminal =
-    session !== null && (canMountLivePreview || mode === 'focus');
+  const surfaceKind = surfaceModel.surfaceKind;
+  const showsLiveTerminal = surfaceKind !== 'summary' && session !== null;
   const previewLines = session?.previewLines ?? [];
   const status = getTerminalDisplayStatus(terminal, session);
   const unreadCount = session?.unreadCount ?? 0;
@@ -60,7 +60,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     session,
   );
   const hideRedundantMetadata = selected && mode !== 'overview';
-  const hideReadOnlyStatusRows = canRenderLiveTerminal;
+  const hideReadOnlyStatusRows = showsLiveTerminal;
   const previewScrollResetKey = `${mode}:${selected}`;
   const lastAutoMarkedUnreadCountRef = useRef<number>(0);
   const markdownLink = data.activeMarkdownLink;
@@ -260,7 +260,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
         ) : null}
 
         {mode !== 'overview' ? (
-          canRenderLiveTerminal ? (
+          showsLiveTerminal && session ? (
             <div className="canvas-node-summary terminal-live-preview-card">
               {mode === 'inspect' && !session.connected ? (
                 <div className="terminal-preview-actions">
@@ -283,11 +283,12 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 }
                 sessionId={terminal.id}
                 scrollback={session.scrollback}
-                readOnly={mode !== 'focus'}
-                syncPtySize={canMountLivePreview}
-                ptyCols={mode === 'focus' ? undefined : session.cols}
+                interactionMode={surfaceModel.interactionMode}
+                sizeSource={surfaceModel.sizeSource}
+                resizeAuthority={surfaceModel.resizeAuthority}
+                snapshotCols={session.cols}
                 scrollResetKey={previewScrollResetKey}
-                autoFocusAtMs={mode === 'focus' ? data.autoFocusAtMs : null}
+                autoFocusAtMs={surfaceKind === 'interactive' ? data.autoFocusAtMs : null}
                 onInput={onInput}
                 onResize={onResize}
               />
@@ -358,8 +359,7 @@ function areTerminalNodePropsEqual(
     previousData.terminal === nextData.terminal &&
     previousData.session === nextData.session &&
     previousData.backendAccent === nextData.backendAccent &&
-    previousData.presentationMode === nextData.presentationMode &&
-    previousData.mountLivePreview === nextData.mountLivePreview &&
+    previousData.surfaceModel === nextData.surfaceModel &&
     previousData.autoFocusAtMs === nextData.autoFocusAtMs &&
     previousData.socketState === nextData.socketState &&
     previousData.activeMarkdownLink === nextData.activeMarkdownLink &&

@@ -13,10 +13,12 @@ import {
 } from '../../shared/workspace';
 import { getMarkdownLabel, type MarkdownService } from '../markdown/markdownService';
 import type { WorkspaceService } from '../persistence/workspaceService';
+import { WorkspaceCommitService } from '../workspace/workspaceCommitService';
 
 interface MarkdownRouteOptions {
   markdownService: MarkdownService;
   workspaceService: WorkspaceService;
+  workspaceCommitService: WorkspaceCommitService;
 }
 
 export async function registerMarkdownRoutes(
@@ -59,7 +61,7 @@ export async function registerMarkdownRoutes(
       ...workspace,
       markdown: [...workspace.markdown, node],
     };
-    const savedWorkspace = await options.workspaceService.saveWorkspace(nextWorkspace);
+    const savedWorkspace = await options.workspaceCommitService.commitWorkspace(nextWorkspace);
     await options.markdownService.syncWithWorkspace(savedWorkspace);
 
     return {
@@ -104,7 +106,7 @@ export async function registerMarkdownRoutes(
       ...workspace,
       markdown: [...workspace.markdown, node],
     };
-    const savedWorkspace = await options.workspaceService.saveWorkspace(nextWorkspace);
+    const savedWorkspace = await options.workspaceCommitService.commitWorkspace(nextWorkspace);
     await options.markdownService.syncWithWorkspace(savedWorkspace);
 
     return {

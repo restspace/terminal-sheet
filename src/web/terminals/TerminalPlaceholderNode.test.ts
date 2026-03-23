@@ -33,7 +33,7 @@ vi.mock('./TerminalFocusSurface', () => ({
     className?: string;
     sessionId: string;
     scrollback: string;
-    readOnly?: boolean;
+    interactionMode?: 'interactive' | 'read-only';
     autoFocusAtMs?: number | null;
   }) => {
     useEffect(() => {
@@ -48,7 +48,7 @@ vi.mock('./TerminalFocusSurface', () => ({
       'data-testid': 'terminal-surface',
       'data-session-id': props.sessionId,
       'data-scrollback': props.scrollback,
-      'data-read-only': String(Boolean(props.readOnly)),
+      'data-read-only': String(props.interactionMode === 'read-only'),
       'data-auto-focus': String(props.autoFocusAtMs ?? ''),
       className: props.className,
     });
@@ -58,6 +58,7 @@ vi.mock('./TerminalFocusSurface', () => ({
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import { createPlaceholderTerminal } from '../../shared/workspace';
 import { TerminalPlaceholderNode } from './TerminalPlaceholderNode';
+import type { TerminalSurfaceModel } from './terminalSurfaceModel';
 import type { TerminalFlowNode } from './types';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -100,7 +101,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'inspect',
-            mountLivePreview: true,
+            surfaceKind: 'live-preview',
           }),
         ),
       );
@@ -130,7 +131,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'inspect',
-            mountLivePreview: false,
+            surfaceKind: 'summary',
           }),
         ),
       );
@@ -155,7 +156,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'inspect',
-            mountLivePreview: true,
+            surfaceKind: 'live-preview',
           }),
         ),
       );
@@ -175,7 +176,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'focus',
-            mountLivePreview: false,
+            surfaceKind: 'interactive',
             selected: true,
             autoFocusAtMs: 123,
           }),
@@ -190,13 +191,69 @@ describe('TerminalPlaceholderNode', () => {
     expect(mockSurfaceState.mountCount).toBe(1);
     expect(mockSurfaceState.unmountCount).toBe(0);
   });
+
+  it('renders remote sessions through the same live preview path as local sessions', () => {
+    const localTerminal = createPlaceholderTerminal(0);
+    const remoteTerminal = {
+      ...localTerminal,
+      backendId: 'remote-1',
+    };
+    const session = createSessionSnapshot(remoteTerminal.id, {
+      backendId: 'remote-1',
+      scrollback: 'line 1\r\nline 2',
+    });
+
+    act(() => {
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal: localTerminal,
+            session,
+            presentationMode: 'inspect',
+            surfaceKind: 'live-preview',
+          }),
+        ),
+      );
+    });
+
+    const localPreview = container.querySelector('[data-testid="terminal-surface"]');
+
+    expect(localPreview?.getAttribute('data-session-id')).toBe(localTerminal.id);
+    expect(localPreview?.getAttribute('data-scrollback')).toBe('line 1\r\nline 2');
+    expect(localPreview?.getAttribute('data-read-only')).toBe('true');
+    expect(mockSurfaceState.mountCount).toBe(1);
+    expect(mockSurfaceState.unmountCount).toBe(0);
+
+    act(() => {
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal: remoteTerminal,
+            session,
+            presentationMode: 'inspect',
+            surfaceKind: 'live-preview',
+          }),
+        ),
+      );
+    });
+
+    const remotePreview = container.querySelector('[data-testid="terminal-surface"]');
+
+    expect(remotePreview?.getAttribute('data-session-id')).toBe(remoteTerminal.id);
+    expect(remotePreview?.getAttribute('data-scrollback')).toBe('line 1\r\nline 2');
+    expect(remotePreview?.getAttribute('data-read-only')).toBe('true');
+    expect(mockSurfaceState.mountCount).toBe(1);
+    expect(mockSurfaceState.unmountCount).toBe(0);
+  });
 });
 
 function createNodeProps(options: {
   terminal: ReturnType<typeof createPlaceholderTerminal>;
   session: TerminalSessionSnapshot | null;
   presentationMode: 'overview' | 'inspect' | 'focus';
-  mountLivePreview: boolean;
+  surfaceKind: TerminalSurfaceModel['surfaceKind'];
   selected?: boolean;
   autoFocusAtMs?: number | null;
 }): ComponentProps<typeof TerminalPlaceholderNode> {
@@ -205,8 +262,16 @@ function createNodeProps(options: {
     data: {
       terminal: options.terminal,
       session: options.session,
-      presentationMode: options.presentationMode,
-      mountLivePreview: options.mountLivePreview,
+      surfaceModel: {
+        presentationMode: options.presentationMode,
+        surfaceKind: options.surfaceKind,
+        interactionMode:
+          options.surfaceKind === 'interactive' ? 'interactive' : 'read-only',
+        sizeSource:
+          options.surfaceKind === 'interactive' ? 'measured' : 'snapshot',
+        resizeAuthority:
+          options.surfaceKind === 'interactive' ? 'owner' : 'none',
+      },
       autoFocusAtMs: options.autoFocusAtMs ?? null,
       socketState: 'open' as const,
       onSelect: vi.fn(),
@@ -240,7 +305,7 @@ function createSessionSnapshot(
 ): TerminalSessionSnapshot {
   return {
     sessionId,
-    backendId: 'local',
+    backendId: overrides.backendId ?? 'local',
     pid: 123,
     status: 'active-output',
     commandState: 'running-command',

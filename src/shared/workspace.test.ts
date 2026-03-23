@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  MAX_LIVE_TERMINAL_SURFACES,
-  MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
   createDefaultWorkspace,
   createPlaceholderMarkdown,
   createPlaceholderTerminal,
   createWorkspaceMarkdownNode,
-  getReadOnlyPreviewTerminalIds,
   getSemanticZoomMode,
   updateTerminalNode,
   workspaceSchema,
@@ -21,21 +18,20 @@ describe('workspace schema', () => {
     expect(workspace.name).toBe('Terminal Canvas');
     expect(workspace.version).toBe(2);
     expect(workspace.layoutMode).toBe('free');
-    expect(workspace.selectedNodeId).toBeNull();
     expect(workspace.cameraPresets).toHaveLength(3);
     expect(workspace.currentViewport.zoom).toBeGreaterThan(0);
   });
 
-  it('defaults layoutMode and selectedNodeId for legacy workspaces', () => {
+  it('defaults layoutMode and ignores legacy selection fields', () => {
     const parsed = workspaceSchema.parse({
       ...createDefaultWorkspace(),
       // Simulate persisted workspaces from before layoutMode existed.
       layoutMode: undefined,
-      selectedNodeId: undefined,
+      selectedNodeId: 'terminal-legacy-selection',
     });
 
     expect(parsed.layoutMode).toBe('free');
-    expect(parsed.selectedNodeId).toBeNull();
+    expect('selectedNodeId' in parsed).toBe(false);
   });
 
   it('creates valid placeholder nodes', () => {
@@ -93,42 +89,6 @@ describe('workspace schema', () => {
 
     expect(nextWorkspace.terminals[0]?.label).toBe(terminal.label);
     expect(nextWorkspace.terminals[0]?.cwd).toBe(terminal.cwd);
-  });
-
-  it('limits inspect mode live previews to the selected terminal plus nearest neighbors', () => {
-    const terminals = Array.from({ length: 10 }, (_, index) =>
-      createPlaceholderTerminal(index),
-    );
-    const selectedTerminal = terminals[5];
-
-    expect(selectedTerminal).toBeTruthy();
-
-    const previewIds = getReadOnlyPreviewTerminalIds(
-      terminals,
-      selectedTerminal?.id ?? null,
-      'inspect',
-    );
-
-    expect(previewIds).toHaveLength(MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS);
-    expect(previewIds[0]).toBe(selectedTerminal?.id);
-  });
-
-  it('caps focus mode to eight total live terminal surfaces', () => {
-    const terminals = Array.from({ length: 9 }, (_, index) =>
-      createPlaceholderTerminal(index),
-    );
-    const focusedTerminal = terminals[0];
-
-    expect(focusedTerminal).toBeTruthy();
-
-    const previewIds = getReadOnlyPreviewTerminalIds(
-      terminals,
-      focusedTerminal?.id ?? null,
-      'focus',
-    );
-
-    expect(previewIds).toHaveLength(MAX_LIVE_TERMINAL_SURFACES - 1);
-    expect(previewIds).not.toContain(focusedTerminal?.id);
   });
 
   it('positions new markdown beside the node nearest the current viewport center', () => {

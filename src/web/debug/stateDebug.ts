@@ -139,7 +139,6 @@ export function summarizeWorkspaceForDebug(
     id: workspace.id,
     updatedAt: workspace.updatedAt,
     layoutMode: workspace.layoutMode,
-    selectedNodeId: workspace.selectedNodeId,
     viewport: summarizeViewportForDebug(workspace.currentViewport),
     terminalIds: workspace.terminals.map((terminal) => terminal.id),
     markdownIds: workspace.markdown.map((node) => node.id),
@@ -160,10 +159,6 @@ export function summarizeWorkspaceDiffForDebug(
     layoutMode: describeChange(
       previousWorkspace?.layoutMode ?? null,
       nextWorkspace?.layoutMode ?? null,
-    ),
-    selectedNodeId: describeChange(
-      previousWorkspace?.selectedNodeId ?? null,
-      nextWorkspace?.selectedNodeId ?? null,
     ),
     viewportChanged: !sameViewportOrNull(
       previousWorkspace?.currentViewport ?? null,

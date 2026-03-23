@@ -1,11 +1,7 @@
 import type { Workspace } from '../../shared/workspace';
 import { loadOrCreateWorkspace, saveWorkspace } from './workspaceStore';
 
-type WorkspaceListener = (workspace: Workspace) => void | Promise<void>;
-
 export class WorkspaceService {
-  private readonly listeners = new Set<WorkspaceListener>();
-
   private constructor(
     private readonly workspaceFilePath: string,
     private workspace: Workspace,
@@ -21,21 +17,12 @@ export class WorkspaceService {
   }
 
   async saveWorkspace(nextWorkspace: Workspace): Promise<Workspace> {
-    const savedWorkspace = await saveWorkspace(this.workspaceFilePath, nextWorkspace);
+    const savedWorkspace = await saveWorkspace(
+      this.workspaceFilePath,
+      nextWorkspace,
+    );
     this.workspace = savedWorkspace;
 
-    await Promise.all(
-      [...this.listeners].map((listener) => listener(savedWorkspace)),
-    );
-
     return savedWorkspace;
-  }
-
-  subscribe(listener: WorkspaceListener): () => void {
-    this.listeners.add(listener);
-
-    return () => {
-      this.listeners.delete(listener);
-    };
   }
 }

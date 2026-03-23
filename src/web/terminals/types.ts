@@ -8,14 +8,13 @@ import type { SemanticZoomMode } from '../../shared/workspace';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { MarkdownNode, TerminalNode } from '../../shared/workspace';
 import type { BackendAccent } from '../canvas/backendAccents';
-import type { TerminalPresentationMode } from './presentationMode';
+import type { TerminalSurfaceModel } from './terminalSurfaceModel';
 
 export interface TerminalNodeData extends Record<string, unknown> {
   terminal: TerminalNode;
   backendAccent: BackendAccent | null;
   session: TerminalSessionSnapshot | null;
-  presentationMode: TerminalPresentationMode;
-  mountLivePreview: boolean;
+  surfaceModel: TerminalSurfaceModel;
   autoFocusAtMs: number | null;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onSelect: (nodeId: string) => void;

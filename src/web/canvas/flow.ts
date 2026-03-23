@@ -8,7 +8,7 @@ import type {
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { SemanticZoomMode, Workspace } from '../../shared/workspace';
 import type { BackendAccent } from './backendAccents';
-import type { TerminalPresentationMode } from '../terminals/presentationMode';
+import type { TerminalSurfaceModel } from '../terminals/terminalSurfaceModel';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
 
 export type CanvasNode = TerminalFlowNode | MarkdownFlowNode;
@@ -45,11 +45,10 @@ interface BuildCanvasNodesOptions {
   >;
   nodesDraggable: boolean;
   nodesResizable: boolean;
-  livePreviewTerminalIds: ReadonlySet<string>;
   focusAutoFocusAtMs: number | null;
   viewportZoom: number;
   semanticZoomMode: SemanticZoomMode;
-  terminalPresentationById: ReadonlyMap<string, TerminalPresentationMode>;
+  terminalSurfaceModelById: ReadonlyMap<string, TerminalSurfaceModel>;
   sessions: Record<string, TerminalSessionSnapshot>;
   markdownDocuments: Record<string, MarkdownDocumentState>;
   activeMarkdownLinkByTerminalId: ReadonlyMap<string, MarkdownLinkState>;
@@ -89,11 +88,10 @@ export function buildCanvasNodes({
   renderedBoundsByNodeId,
   nodesDraggable,
   nodesResizable,
-  livePreviewTerminalIds,
   focusAutoFocusAtMs,
   viewportZoom,
   semanticZoomMode,
-  terminalPresentationById,
+  terminalSurfaceModelById,
   sessions,
   markdownDocuments,
   activeMarkdownLinkByTerminalId,
@@ -117,9 +115,14 @@ export function buildCanvasNodes({
   onResolveConflict,
 }: BuildCanvasNodesOptions): CanvasNode[] {
   const terminals = workspace.terminals.map((terminal) => {
-    const presentationMode =
-      terminalPresentationById.get(terminal.id) ?? 'overview';
-    const isFocusTarget = presentationMode === 'focus';
+    const surfaceModel = terminalSurfaceModelById.get(terminal.id) ?? {
+      presentationMode: 'overview',
+      surfaceKind: 'summary',
+      interactionMode: 'read-only',
+      sizeSource: 'snapshot',
+      resizeAuthority: 'none',
+    };
+    const isFocusTarget = surfaceModel.presentationMode === 'focus';
     const renderedBounds = renderedBoundsByNodeId.get(terminal.id) ?? terminal.bounds;
 
     return {
@@ -135,9 +138,11 @@ export function buildCanvasNodes({
         terminal,
         backendAccent: backendAccents.get(terminal.backendId ?? '') ?? null,
         session: sessions[terminal.id] ?? null,
-        presentationMode,
-        mountLivePreview: livePreviewTerminalIds.has(terminal.id),
-        autoFocusAtMs: isFocusTarget ? focusAutoFocusAtMs : null,
+        surfaceModel,
+        autoFocusAtMs:
+          surfaceModel.surfaceKind === 'interactive'
+            ? focusAutoFocusAtMs
+            : null,
         socketState,
         onSelect,
         onBoundsChange,

@@ -13,12 +13,14 @@ import {
 import type { MarkdownService } from '../markdown/markdownService';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
+import { WorkspaceCommitPublisher } from '../workspace/workspaceCommitPublisher';
 import { sendJson } from './sendJson';
 
 interface WorkspaceSocketOptions {
   runtimeManager: BackendRuntimeManager;
   markdownService: MarkdownService;
   workspaceService: WorkspaceService;
+  workspaceCommitPublisher: WorkspaceCommitPublisher;
 }
 
 export async function registerWorkspaceSocket(
@@ -90,7 +92,7 @@ export async function registerWorkspaceSocket(
         links,
       });
     });
-    const unsubscribeWorkspace = options.workspaceService.subscribe((workspace) => {
+    const unsubscribeWorkspace = options.workspaceCommitPublisher.subscribe((workspace) => {
       logWorkspaceDebug(
         app.log,
         debugSessionId,

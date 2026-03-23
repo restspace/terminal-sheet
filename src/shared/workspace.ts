@@ -75,7 +75,6 @@ export const workspaceSchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   layoutMode: workspaceLayoutModeSchema.default('free'),
-  selectedNodeId: z.string().nullable().default(null),
   currentViewport: cameraViewportSchema,
   terminals: z.array(terminalNodeSchema),
   markdown: z.array(markdownNodeSchema),
@@ -150,65 +149,6 @@ export function getSemanticZoomMode(zoom: number): SemanticZoomMode {
   return 'focus';
 }
 
-export function getReadOnlyPreviewTerminalIds(
-  terminals: readonly TerminalNode[],
-  selectedNodeId: string | null,
-  mode: SemanticZoomMode,
-  maxPreviews = MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
-): string[] {
-  if (mode === 'overview' || maxPreviews <= 0) {
-    return [];
-  }
-
-  const selectedTerminal =
-    selectedNodeId === null
-      ? null
-      : (terminals.find((terminal) => terminal.id === selectedNodeId) ?? null);
-  const orderedCandidates = terminals.filter((terminal) =>
-    mode === 'focus' && selectedTerminal
-      ? terminal.id !== selectedTerminal.id
-      : true,
-  );
-  const previewBudget =
-    mode === 'focus' && selectedTerminal
-      ? Math.max(0, maxPreviews - 1)
-      : maxPreviews;
-
-  if (!selectedTerminal) {
-    return orderedCandidates
-      .slice(0, previewBudget)
-      .map((terminal) => terminal.id);
-  }
-
-  const terminalOrder = new Map(
-    terminals.map((terminal, index) => [terminal.id, index] as const),
-  );
-  const selectedCenter = getNodeCenter(selectedTerminal.bounds);
-
-  return [...orderedCandidates]
-    .sort((left, right) => {
-      const leftDistance = distanceBetweenCenters(
-        getNodeCenter(left.bounds),
-        selectedCenter,
-      );
-      const rightDistance = distanceBetweenCenters(
-        getNodeCenter(right.bounds),
-        selectedCenter,
-      );
-
-      if (leftDistance !== rightDistance) {
-        return leftDistance - rightDistance;
-      }
-
-      return (
-        (terminalOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-        (terminalOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-      );
-    })
-    .slice(0, previewBudget)
-    .map((terminal) => terminal.id);
-}
-
 export function createDefaultWorkspace(): Workspace {
   const timestamp = new Date().toISOString();
 
@@ -219,7 +159,6 @@ export function createDefaultWorkspace(): Workspace {
     createdAt: timestamp,
     updatedAt: timestamp,
     layoutMode: 'free',
-    selectedNodeId: null,
     currentViewport: { x: 0, y: 0, zoom: 0.72 },
     terminals: [],
     markdown: [],

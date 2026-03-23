@@ -1,31 +1,25 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 
+import { LOCAL_BACKEND_ID } from '../../shared/backends';
+import { getDefaultShell } from '../../shared/platform';
 import {
+  createTerminalNode,
+  touchWorkspace,
+  type CameraViewport,
   type CreateTerminalNodeInput,
   type TerminalNode,
   type TerminalNodePatch,
-  touchWorkspace,
-  type CameraViewport,
   type Workspace,
   type WorkspaceLayoutMode,
 } from '../../shared/workspace';
 import {
+  applyWorkspaceCommands as applyWorkspaceCommandsToState,
+} from '../../shared/workspaceCommands';
+import {
   fetchWorkspace,
-  persistWorkspace,
+  sendWorkspaceCommands,
   WorkspaceConflictError,
 } from './workspaceClient';
-import {
-  addMarkdownToWorkspace,
-  addTerminalToWorkspace,
-  applyWorkspaceCameraPreset,
-  removeMarkdownFromWorkspace,
-  removeTerminalFromWorkspace,
-  saveWorkspaceViewportToPreset,
-  setWorkspaceLayoutMode,
-  setWorkspaceSelectedNode,
-  setWorkspaceViewport,
-  updateWorkspaceTerminal,
-} from './workspaceActions';
 import {
   logStateDebug,
   summarizeWorkspaceDiffForDebug,
@@ -34,13 +28,16 @@ import {
 import { waitForRetry } from '../utils/retry';
 import { isStaleWorkspaceSnapshot } from './workspaceFreshness';
 
+type WorkspaceCommand = Parameters<
+  typeof applyWorkspaceCommandsToState
+>[1][number];
+
 export interface WorkspacePersistenceState {
   phase: 'loading' | 'saving' | 'saved' | 'error';
   error: string | null;
   lastSavedAt: string | null;
 }
 
-type WorkspaceUpdater = (workspace: Workspace) => Workspace;
 interface UpdateWorkspaceOptions {
   persistImmediately?: boolean;
   debugSource?: string;
@@ -56,9 +53,8 @@ export function useWorkspace() {
   const hasLoadedRef = useRef(false);
   const workspaceRef = useRef<Workspace | null>(null);
   const autosaveTimerRef = useRef<number | null>(null);
-  const localRevisionRef = useRef(0);
-  const lastSavedRevisionRef = useRef(0);
-  const inFlightRevisionRef = useRef<number | null>(null);
+  const pendingCommandsRef = useRef<WorkspaceCommand[]>([]);
+  const inFlightCommandsRef = useRef<WorkspaceCommand[] | null>(null);
   const refreshInFlightRef = useRef(false);
   const pendingExternalWorkspaceRef = useRef<Workspace | null>(null);
   const pendingServerRefreshRef = useRef(false);
@@ -66,11 +62,11 @@ export function useWorkspace() {
 
   const applyLoadedWorkspace = useCallback((nextWorkspace: Workspace) => {
     hasLoadedRef.current = true;
+    clearAutosaveTimer(autosaveTimerRef);
     workspaceRef.current = nextWorkspace;
     lastSyncedUpdatedAtRef.current = nextWorkspace.updatedAt;
-    localRevisionRef.current = 0;
-    lastSavedRevisionRef.current = 0;
-    inFlightRevisionRef.current = null;
+    pendingCommandsRef.current = [];
+    inFlightCommandsRef.current = null;
     pendingExternalWorkspaceRef.current = null;
     pendingServerRefreshRef.current = false;
 
@@ -139,139 +135,150 @@ export function useWorkspace() {
     return () => {
       cancelled = true;
       clearAutosaveTimer(autosaveTimerRef);
-    }
+    };
   }, [applyLoadedWorkspace]);
 
-  const refreshWorkspaceFromServer = useCallback(async (
-    nextWorkspace?: Workspace | null,
-  ): Promise<boolean> => {
-    const candidateWorkspace = nextWorkspace ?? null;
-    const currentWorkspace = workspaceRef.current;
-
-    if (candidateWorkspace && isStaleWorkspaceSnapshot(candidateWorkspace, currentWorkspace)) {
-      logStateDebug('workspace', 'refreshSkippedStaleCandidate', {
-        currentWorkspace: summarizeWorkspaceForDebug(currentWorkspace),
-        candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
-      });
-      return true;
-    }
-
-    if (
-      inFlightRevisionRef.current !== null ||
-      localRevisionRef.current > lastSavedRevisionRef.current
-    ) {
-      logStateDebug('workspace', 'refreshDeferred', {
-        candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
-        inFlightRevision: inFlightRevisionRef.current,
-        localRevision: localRevisionRef.current,
-        lastSavedRevision: lastSavedRevisionRef.current,
-      });
-      if (candidateWorkspace) {
-        pendingExternalWorkspaceRef.current = candidateWorkspace;
-      } else {
-        pendingServerRefreshRef.current = true;
-      }
-      return false;
-    }
-
-    if (
-      candidateWorkspace &&
-      currentWorkspace &&
-      candidateWorkspace.updatedAt === currentWorkspace.updatedAt
-    ) {
-      logStateDebug('workspace', 'refreshSkippedSameUpdatedAt', {
-        workspace: summarizeWorkspaceForDebug(candidateWorkspace),
-      });
-      return true;
-    }
-
-    if (refreshInFlightRef.current) {
-      logStateDebug('workspace', 'refreshSkippedInFlight', {
-        candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
-      });
-      if (candidateWorkspace) {
-        pendingExternalWorkspaceRef.current = candidateWorkspace;
-      } else {
-        pendingServerRefreshRef.current = true;
-      }
-      return false;
-    }
-
-    refreshInFlightRef.current = true;
-
-    try {
-      logStateDebug('workspace', 'refreshStart', {
-        hasCandidateWorkspace: Boolean(candidateWorkspace),
-        candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
-      });
-      const loadedWorkspace = candidateWorkspace ?? (await fetchWorkspace());
-      const latestWorkspace = workspaceRef.current;
+  const refreshWorkspaceFromServer = useCallback(
+    async (nextWorkspace?: Workspace | null): Promise<boolean> => {
+      const candidateWorkspace = nextWorkspace ?? null;
+      const currentWorkspace = workspaceRef.current;
 
       if (
-        latestWorkspace &&
-        latestWorkspace.updatedAt === loadedWorkspace.updatedAt
+        candidateWorkspace &&
+        isStaleWorkspaceSnapshot(candidateWorkspace, currentWorkspace)
       ) {
-        pendingExternalWorkspaceRef.current = null;
-        logStateDebug('workspace', 'refreshNoopSameUpdatedAt', {
-          workspace: summarizeWorkspaceForDebug(loadedWorkspace),
+        logStateDebug('workspace', 'refreshSkippedStaleCandidate', {
+          currentWorkspace: summarizeWorkspaceForDebug(currentWorkspace),
+          candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
         });
         return true;
       }
 
-      logStateDebug('workspace', 'refreshApply', {
-        previousWorkspace: summarizeWorkspaceForDebug(latestWorkspace),
-        nextWorkspace: summarizeWorkspaceForDebug(loadedWorkspace),
-        diff: summarizeWorkspaceDiffForDebug(latestWorkspace, loadedWorkspace),
-      });
-      applyLoadedWorkspace(loadedWorkspace);
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      setPersistence((current) => ({
-        phase: current.phase,
-        error: message,
-        lastSavedAt: current.lastSavedAt,
-      }));
-      logStateDebug('workspace', 'refreshError', {
-        error: message,
-      });
-      return false;
-    } finally {
-      refreshInFlightRef.current = false;
+      if (
+        inFlightCommandsRef.current !== null ||
+        pendingCommandsRef.current.length > 0
+      ) {
+        logStateDebug('workspace', 'refreshDeferred', {
+          candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
+          inFlightCommandTypes:
+            inFlightCommandsRef.current?.map((command) => command.type) ?? [],
+          pendingCommandTypes: pendingCommandsRef.current.map(
+            (command) => command.type,
+          ),
+        });
+        if (candidateWorkspace) {
+          pendingExternalWorkspaceRef.current = candidateWorkspace;
+        } else {
+          pendingServerRefreshRef.current = true;
+        }
+        return false;
+      }
 
       if (
-        inFlightRevisionRef.current === null &&
-        localRevisionRef.current <= lastSavedRevisionRef.current &&
-        (pendingExternalWorkspaceRef.current || pendingServerRefreshRef.current)
+        candidateWorkspace &&
+        currentWorkspace &&
+        candidateWorkspace.updatedAt === currentWorkspace.updatedAt
       ) {
-        const pendingWorkspace = pendingExternalWorkspaceRef.current;
-        const shouldFetchServer = pendingServerRefreshRef.current;
-        pendingExternalWorkspaceRef.current = null;
-        pendingServerRefreshRef.current = false;
+        logStateDebug('workspace', 'refreshSkippedSameUpdatedAt', {
+          workspace: summarizeWorkspaceForDebug(candidateWorkspace),
+        });
+        return true;
+      }
 
-        if (pendingWorkspace) {
-          void refreshWorkspaceFromServer(pendingWorkspace);
-        } else if (shouldFetchServer) {
-          void refreshWorkspaceFromServer();
+      if (refreshInFlightRef.current) {
+        logStateDebug('workspace', 'refreshSkippedInFlight', {
+          candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
+        });
+        if (candidateWorkspace) {
+          pendingExternalWorkspaceRef.current = candidateWorkspace;
+        } else {
+          pendingServerRefreshRef.current = true;
+        }
+        return false;
+      }
+
+      refreshInFlightRef.current = true;
+
+      try {
+        logStateDebug('workspace', 'refreshStart', {
+          hasCandidateWorkspace: Boolean(candidateWorkspace),
+          candidateWorkspace: summarizeWorkspaceForDebug(candidateWorkspace),
+        });
+        const loadedWorkspace = candidateWorkspace ?? (await fetchWorkspace());
+        const latestWorkspace = workspaceRef.current;
+
+        if (
+          latestWorkspace &&
+          latestWorkspace.updatedAt === loadedWorkspace.updatedAt
+        ) {
+          pendingExternalWorkspaceRef.current = null;
+          logStateDebug('workspace', 'refreshNoopSameUpdatedAt', {
+            workspace: summarizeWorkspaceForDebug(loadedWorkspace),
+          });
+          return true;
+        }
+
+        logStateDebug('workspace', 'refreshApply', {
+          previousWorkspace: summarizeWorkspaceForDebug(latestWorkspace),
+          nextWorkspace: summarizeWorkspaceForDebug(loadedWorkspace),
+          diff: summarizeWorkspaceDiffForDebug(
+            latestWorkspace,
+            loadedWorkspace,
+          ),
+        });
+        applyLoadedWorkspace(loadedWorkspace);
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        setPersistence((current) => ({
+          phase: current.phase,
+          error: message,
+          lastSavedAt: current.lastSavedAt,
+        }));
+        logStateDebug('workspace', 'refreshError', {
+          error: message,
+        });
+        return false;
+      } finally {
+        refreshInFlightRef.current = false;
+
+        if (
+          inFlightCommandsRef.current === null &&
+          pendingCommandsRef.current.length === 0 &&
+          (pendingExternalWorkspaceRef.current || pendingServerRefreshRef.current)
+        ) {
+          const pendingWorkspace = pendingExternalWorkspaceRef.current;
+          const shouldFetchServer = pendingServerRefreshRef.current;
+          pendingExternalWorkspaceRef.current = null;
+          pendingServerRefreshRef.current = false;
+
+          if (pendingWorkspace) {
+            void refreshWorkspaceFromServer(pendingWorkspace);
+          } else if (shouldFetchServer) {
+            void refreshWorkspaceFromServer();
+          }
         }
       }
-    }
-  }, [applyLoadedWorkspace]);
+    },
+    [applyLoadedWorkspace],
+  );
 
-  const persistCurrentWorkspace = useCallback(async () => {
+  const persistPendingCommands = useCallback(async () => {
     const nextWorkspace = workspaceRef.current;
+    const pendingCommands = pendingCommandsRef.current;
 
     if (
       !hasLoadedRef.current ||
       !nextWorkspace ||
-      inFlightRevisionRef.current !== null ||
-      localRevisionRef.current <= lastSavedRevisionRef.current
+      inFlightCommandsRef.current !== null ||
+      !pendingCommands.length
     ) {
       return;
     }
 
-    const revision = localRevisionRef.current;
-    inFlightRevisionRef.current = revision;
+    const commands = [...pendingCommands];
+    pendingCommandsRef.current = [];
+    inFlightCommandsRef.current = commands;
     const baseUpdatedAt = lastSyncedUpdatedAtRef.current;
 
     setPersistence((current) => ({
@@ -280,23 +287,19 @@ export function useWorkspace() {
       error: null,
     }));
 
-    logStateDebug('workspace', 'persistStart', {
-      revision,
+    logStateDebug('workspace', 'persistCommandsStart', {
       baseUpdatedAt,
+      commandTypes: commands.map((command) => command.type),
       workspace: summarizeWorkspaceForDebug(nextWorkspace),
     });
 
     try {
-      const savedWorkspace = await persistWorkspace(nextWorkspace, {
+      const savedWorkspace = await sendWorkspaceCommands(commands, {
         baseUpdatedAt,
       });
-      lastSavedRevisionRef.current = Math.max(
-        lastSavedRevisionRef.current,
-        revision,
-      );
       lastSyncedUpdatedAtRef.current = savedWorkspace.updatedAt;
 
-      if (revision === localRevisionRef.current) {
+      if (pendingCommandsRef.current.length === 0) {
         workspaceRef.current = savedWorkspace;
 
         startTransition(() => {
@@ -309,6 +312,18 @@ export function useWorkspace() {
           lastSavedAt: savedWorkspace.updatedAt,
         });
       } else {
+        const optimisticWorkspace = touchWorkspace(
+          applyWorkspaceCommandsToState(
+            savedWorkspace,
+            pendingCommandsRef.current,
+          ),
+        );
+        workspaceRef.current = optimisticWorkspace;
+
+        startTransition(() => {
+          setWorkspace(optimisticWorkspace);
+        });
+
         setPersistence((current) => ({
           phase: 'saving',
           error: null,
@@ -316,16 +331,16 @@ export function useWorkspace() {
         }));
       }
 
-      logStateDebug('workspace', 'persistSuccess', {
-        revision,
+      logStateDebug('workspace', 'persistCommandsSuccess', {
         baseUpdatedAt,
+        commandTypes: commands.map((command) => command.type),
         savedWorkspace: summarizeWorkspaceForDebug(savedWorkspace),
       });
     } catch (error) {
       if (error instanceof WorkspaceConflictError) {
-        logStateDebug('workspace', 'persistConflict', {
-          revision,
+        logStateDebug('workspace', 'persistCommandsConflict', {
           baseUpdatedAt,
+          commandTypes: commands.map((command) => command.type),
           localWorkspace: summarizeWorkspaceForDebug(nextWorkspace),
           serverWorkspace: summarizeWorkspaceForDebug(error.workspace),
         });
@@ -333,23 +348,24 @@ export function useWorkspace() {
         return;
       }
 
+      pendingCommandsRef.current = [...commands, ...pendingCommandsRef.current];
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPersistence((current) => ({
         phase: 'error',
         error: message,
         lastSavedAt: current.lastSavedAt,
       }));
-      logStateDebug('workspace', 'persistError', {
-        revision,
+      logStateDebug('workspace', 'persistCommandsError', {
         baseUpdatedAt,
+        commandTypes: commands.map((command) => command.type),
         error: message,
         workspace: summarizeWorkspaceForDebug(nextWorkspace),
       });
     } finally {
-      inFlightRevisionRef.current = null;
+      inFlightCommandsRef.current = null;
 
-      if (localRevisionRef.current > lastSavedRevisionRef.current) {
-        schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
+      if (pendingCommandsRef.current.length > 0) {
+        schedulePersist(autosaveTimerRef, persistPendingCommands, 0);
       } else if (
         pendingExternalWorkspaceRef.current ||
         pendingServerRefreshRef.current
@@ -368,51 +384,64 @@ export function useWorkspace() {
     }
   }, [applyLoadedWorkspace, refreshWorkspaceFromServer]);
 
-  const updateWorkspace = useCallback((
-    updater: WorkspaceUpdater,
-    options?: UpdateWorkspaceOptions,
-  ): Workspace | null => {
-    const currentWorkspace = workspaceRef.current;
+  const applyCommands = useCallback(
+    (
+      commands: readonly WorkspaceCommand[],
+      options?: UpdateWorkspaceOptions,
+    ): Workspace | null => {
+      const currentWorkspace = workspaceRef.current;
 
-    if (!currentWorkspace) {
-      return null;
-    }
+      if (!currentWorkspace || !commands.length) {
+        return null;
+      }
 
-    const nextWorkspace = updater(currentWorkspace);
+      const nextWorkspace = applyWorkspaceCommandsToState(
+        currentWorkspace,
+        commands,
+      );
 
-    if (nextWorkspace === currentWorkspace) {
-      return currentWorkspace;
-    }
+      if (nextWorkspace === currentWorkspace) {
+        return currentWorkspace;
+      }
 
-    const touchedWorkspace = touchWorkspace(nextWorkspace);
-    workspaceRef.current = touchedWorkspace;
-    localRevisionRef.current += 1;
-    const revision = localRevisionRef.current;
+      const touchedWorkspace = touchWorkspace(nextWorkspace);
+      workspaceRef.current = touchedWorkspace;
+      pendingCommandsRef.current = [...pendingCommandsRef.current, ...commands];
 
-    startTransition(() => {
-      setWorkspace(touchedWorkspace);
-    });
+      startTransition(() => {
+        setWorkspace(touchedWorkspace);
+      });
 
-    logStateDebug('workspace', 'localUpdate', {
-      source: options?.debugSource ?? 'unknown',
-      revision,
-      persistDelayMs: options?.persistImmediately ? 0 : 450,
-      previousWorkspace: summarizeWorkspaceForDebug(currentWorkspace),
-      nextWorkspace: summarizeWorkspaceForDebug(touchedWorkspace),
-      diff: summarizeWorkspaceDiffForDebug(currentWorkspace, touchedWorkspace),
-    });
+      setPersistence((current) => ({
+        phase: current.phase === 'loading' ? 'loading' : current.phase,
+        error: null,
+        lastSavedAt: current.lastSavedAt,
+      }));
 
-    if (options?.persistImmediately) {
-      schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 0);
-    } else {
-      schedulePersist(autosaveTimerRef, persistCurrentWorkspace, 450);
-    }
+      logStateDebug('workspace', 'localCommandsApplied', {
+        source: options?.debugSource ?? 'unknown',
+        commandTypes: commands.map((command) => command.type),
+        persistDelayMs: options?.persistImmediately ? 0 : 450,
+        previousWorkspace: summarizeWorkspaceForDebug(currentWorkspace),
+        nextWorkspace: summarizeWorkspaceForDebug(touchedWorkspace),
+        diff: summarizeWorkspaceDiffForDebug(
+          currentWorkspace,
+          touchedWorkspace,
+        ),
+      });
 
-    return touchedWorkspace;
-  }, [persistCurrentWorkspace]);
+      schedulePersist(
+        autosaveTimerRef,
+        persistPendingCommands,
+        options?.persistImmediately ? 0 : 450,
+      );
+
+      return touchedWorkspace;
+    },
+    [persistPendingCommands],
+  );
 
   const replaceWorkspace = useCallback((nextWorkspace: Workspace) => {
-    clearAutosaveTimer(autosaveTimerRef);
     logStateDebug('workspace', 'replaceWorkspace', {
       workspace: summarizeWorkspaceForDebug(nextWorkspace),
     });
@@ -423,57 +452,114 @@ export function useWorkspace() {
     input?: Partial<CreateTerminalNodeInput>,
     options?: UpdateWorkspaceOptions,
   ): TerminalNode | null => {
-    let createdTerminal: TerminalNode | null = null;
+    const currentWorkspace = workspaceRef.current;
 
-    updateWorkspace((current) => {
-      const nextState = addTerminalToWorkspace(current, input);
-      createdTerminal = nextState.terminal;
-      return nextState.workspace;
-    }, {
-      ...options,
-      debugSource: options?.debugSource ?? 'addTerminal',
-    });
+    if (!currentWorkspace) {
+      return null;
+    }
 
-    return createdTerminal;
-  }, [updateWorkspace]);
+      const terminal = createTerminalNode(
+        {
+        label: input?.label?.trim() || `Shell ${currentWorkspace.terminals.length + 1}`,
+        shell: input?.shell?.trim() || getDefaultShell(),
+        cwd: input?.cwd?.trim() || '.',
+        agentType: input?.agentType ?? 'shell',
+        backendId: input?.backendId,
+        repoLabel: input?.repoLabel?.trim() || 'local workspace',
+        taskLabel: input?.taskLabel?.trim() || 'live terminal session',
+        tags: input?.tags ?? [],
+      },
+        currentWorkspace.terminals.length,
+        currentWorkspace.currentViewport,
+      );
+      const command: WorkspaceCommand = {
+        type: 'add-terminal',
+        terminal: {
+          ...terminal,
+          backendId: terminal.backendId ?? LOCAL_BACKEND_ID,
+        },
+      };
+
+      applyCommands(
+        [command],
+        {
+          ...options,
+          debugSource: options?.debugSource ?? 'addTerminal',
+        persistImmediately: options?.persistImmediately ?? true,
+      },
+    );
+
+    return terminal;
+  }, [applyCommands]);
 
   const addMarkdown = useCallback(() => {
-    updateWorkspace(addMarkdownToWorkspace, {
-      debugSource: 'addMarkdown',
-    });
-  }, [updateWorkspace]);
+    applyCommands(
+      [
+        {
+          type: 'add-markdown',
+          input: {},
+        },
+      ],
+      {
+        debugSource: 'addMarkdown',
+        persistImmediately: true,
+      },
+    );
+  }, [applyCommands]);
 
   const updateTerminal = useCallback((terminalId: string, patch: TerminalNodePatch) => {
-    updateWorkspace((current) => updateWorkspaceTerminal(current, terminalId, patch), {
-      debugSource: 'updateTerminal',
-    });
-  }, [updateWorkspace]);
+    applyCommands(
+      [
+        {
+          type: 'update-terminal',
+          terminalId,
+          patch,
+        },
+      ],
+      {
+        debugSource: 'updateTerminal',
+        persistImmediately: true,
+      },
+    );
+  }, [applyCommands]);
 
   const removeTerminal = useCallback((
     terminalId: string,
     options?: UpdateWorkspaceOptions,
   ) => {
-    updateWorkspace(
-      (current) => removeTerminalFromWorkspace(current, terminalId),
+    applyCommands(
+      [
+        {
+          type: 'remove-node',
+          nodeId: terminalId,
+        },
+      ],
       {
         ...options,
         debugSource: options?.debugSource ?? 'removeTerminal',
+        persistImmediately: options?.persistImmediately ?? true,
       },
     );
-  }, [updateWorkspace]);
+  }, [applyCommands]);
 
   const removeMarkdown = useCallback((
     markdownId: string,
     options?: UpdateWorkspaceOptions,
   ) => {
-    updateWorkspace(
-      (current) => removeMarkdownFromWorkspace(current, markdownId),
+    applyCommands(
+      [
+        {
+          type: 'remove-node',
+          nodeId: markdownId,
+        },
+      ],
       {
         ...options,
         debugSource: options?.debugSource ?? 'removeMarkdown',
+        persistImmediately: options?.persistImmediately ?? true,
       },
     );
-  }, [updateWorkspace]);
+  }, [applyCommands]);
 
   const setViewport = useCallback((
     viewport: CameraViewport,
@@ -484,54 +570,109 @@ export function useWorkspace() {
       viewport,
       currentViewport: workspaceRef.current?.currentViewport ?? null,
     });
-    updateWorkspace((current) => setWorkspaceViewport(current, viewport), {
-      ...options,
-      debugSource: options?.debugSource ?? 'setViewport',
-    });
-  }, [updateWorkspace]);
+    applyCommands(
+      [
+        {
+          type: 'set-viewport',
+          viewport,
+        },
+      ],
+      {
+        ...options,
+        debugSource: options?.debugSource ?? 'setViewport',
+      },
+    );
+  }, [applyCommands]);
+
+  const setNodeBounds = useCallback((
+    nodeId: string,
+    bounds: Workspace['terminals'][number]['bounds'],
+    options?: UpdateWorkspaceOptions,
+  ) => {
+    applyCommands(
+      [
+        {
+          type: 'set-node-bounds',
+          nodeId,
+          bounds,
+        },
+      ],
+      {
+        ...options,
+        debugSource: options?.debugSource ?? 'setNodeBounds',
+        persistImmediately: options?.persistImmediately ?? true,
+      },
+    );
+  }, [applyCommands]);
 
   const applyCameraPreset = useCallback((presetId: string) => {
-    updateWorkspace((current) => applyWorkspaceCameraPreset(current, presetId), {
-      debugSource: 'applyCameraPreset',
-    });
-  }, [updateWorkspace]);
+    const preset = workspaceRef.current?.cameraPresets.find(
+      (candidate) => candidate.id === presetId,
+    );
+
+    if (!preset) {
+      return;
+    }
+
+    applyCommands(
+      [
+        {
+          type: 'set-viewport',
+          viewport: preset.viewport,
+        },
+      ],
+      {
+        debugSource: 'applyCameraPreset',
+      },
+    );
+  }, [applyCommands]);
 
   const saveViewportToPreset = useCallback((presetId: string) => {
-    updateWorkspace((current) => saveWorkspaceViewportToPreset(current, presetId), {
-      debugSource: 'saveViewportToPreset',
-    });
-  }, [updateWorkspace]);
+    applyCommands(
+      [
+        {
+          type: 'save-viewport-to-preset',
+          presetId,
+        },
+      ],
+      {
+        debugSource: 'saveViewportToPreset',
+        persistImmediately: true,
+      },
+    );
+  }, [applyCommands]);
 
   const setLayoutMode = useCallback((layoutMode: WorkspaceLayoutMode) => {
-    updateWorkspace((current) => setWorkspaceLayoutMode(current, layoutMode), {
-      debugSource: 'setLayoutMode',
-      persistImmediately: true,
-    });
-  }, [updateWorkspace]);
-
-  const setSelectedNodeId = useCallback((selectedNodeId: string | null) => {
-    updateWorkspace((current) => setWorkspaceSelectedNode(current, selectedNodeId), {
-      debugSource: 'setSelectedNodeId',
-      persistImmediately: true,
-    });
-  }, [updateWorkspace]);
+    applyCommands(
+      [
+        {
+          type: 'set-layout-mode',
+          layoutMode,
+        },
+      ],
+      {
+        debugSource: 'setLayoutMode',
+        persistImmediately: true,
+      },
+    );
+  }, [applyCommands]);
 
   return {
     workspace,
     persistence,
-    updateWorkspace,
     replaceWorkspace,
     refreshWorkspaceFromServer,
+    applyCommands,
     addTerminal,
     addMarkdown,
     updateTerminal,
     removeTerminal,
     removeMarkdown,
     setViewport,
+    setNodeBounds,
     applyCameraPreset,
     saveViewportToPreset,
     setLayoutMode,
-    setSelectedNodeId,
   };
 }
 

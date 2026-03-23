@@ -115,6 +115,39 @@ describe('useTerminalSessions helpers', () => {
     });
   });
 
+  it('merges remote incremental output through the same session path as local output', () => {
+    const currentSession = createSessionSnapshot({
+      sessionId: 'terminal-remote',
+      backendId: 'remote-1',
+      scrollback: 'hello',
+      unreadCount: 1,
+      summary: 'hello',
+    });
+
+    const next = applyServerMessage(
+      { 'terminal-remote': currentSession },
+      {
+        type: 'session.output',
+        sessionId: 'terminal-remote',
+        backendId: 'remote-1',
+        data: ' world',
+        state: {
+          ...toOutputState(currentSession),
+          unreadCount: 2,
+          summary: 'hello world',
+        },
+      },
+    );
+
+    expect(next['terminal-remote']).toMatchObject({
+      sessionId: 'terminal-remote',
+      backendId: 'remote-1',
+      scrollback: 'hello world',
+      unreadCount: 2,
+      summary: 'hello world',
+    });
+  });
+
   it('reuses identical snapshots during full-session polling merges', () => {
     const currentSession = createSessionSnapshot({
       sessionId: 'terminal-1',

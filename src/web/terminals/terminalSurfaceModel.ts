@@ -2,23 +2,37 @@ import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import {
   MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS,
   type TerminalNode,
+  type WorkspaceLayoutMode,
 } from '../../shared/workspace';
 
 export type TerminalPresentationMode = 'overview' | 'inspect' | 'focus';
+export type TerminalSurfaceKind = 'interactive' | 'live-preview' | 'summary';
+export type TerminalInteractionMode = 'interactive' | 'read-only';
+export type TerminalSizeSource = 'measured' | 'snapshot';
+export type TerminalResizeAuthority = 'owner' | 'none';
 
-export interface TerminalPresentationState {
+export interface TerminalSurfaceModel {
+  presentationMode: TerminalPresentationMode;
+  surfaceKind: TerminalSurfaceKind;
+  interactionMode: TerminalInteractionMode;
+  sizeSource: TerminalSizeSource;
+  resizeAuthority: TerminalResizeAuthority;
+}
+
+export interface TerminalSurfaceModelState {
   focusedTerminalId: string | null;
   inspectTerminalIds: string[];
   overviewTerminalIds: string[];
-  presentationById: Map<string, TerminalPresentationMode>;
+  modelById: Map<string, TerminalSurfaceModel>;
 }
 
-export function deriveTerminalPresentationState(options: {
+export function deriveTerminalSurfaceModelState(options: {
   terminals: readonly TerminalNode[];
   selectedNodeId: string | null;
   sessions: Readonly<Record<string, TerminalSessionSnapshot>>;
   interactionAtByTerminalId: Readonly<Record<string, number>>;
-}): TerminalPresentationState {
+  layoutMode: WorkspaceLayoutMode;
+}): TerminalSurfaceModelState {
   const {
     terminals,
     selectedNodeId,
@@ -62,21 +76,39 @@ export function deriveTerminalPresentationState(options: {
     .slice(0, inspectPreviewBudget)
     .map((terminal) => terminal.id);
   const inspectTerminalIdSet = new Set(inspectTerminalIds);
-  const presentationById = new Map<string, TerminalPresentationMode>();
+  const modelById = new Map<string, TerminalSurfaceModel>();
   const overviewTerminalIds: string[] = [];
 
   for (const terminal of terminals) {
     if (terminal.id === focusedTerminalId) {
-      presentationById.set(terminal.id, 'focus');
+      modelById.set(terminal.id, {
+        presentationMode: 'focus',
+        surfaceKind: sessions[terminal.id] ? 'interactive' : 'summary',
+        interactionMode: 'interactive',
+        sizeSource: 'measured',
+        resizeAuthority: 'owner',
+      });
       continue;
     }
 
     if (inspectTerminalIdSet.has(terminal.id)) {
-      presentationById.set(terminal.id, 'inspect');
+      modelById.set(terminal.id, {
+        presentationMode: 'inspect',
+        surfaceKind: sessions[terminal.id] ? 'live-preview' : 'summary',
+        interactionMode: 'read-only',
+        sizeSource: 'snapshot',
+        resizeAuthority: 'none',
+      });
       continue;
     }
 
-    presentationById.set(terminal.id, 'overview');
+    modelById.set(terminal.id, {
+      presentationMode: 'overview',
+      surfaceKind: 'summary',
+      interactionMode: 'read-only',
+      sizeSource: 'snapshot',
+      resizeAuthority: 'none',
+    });
     overviewTerminalIds.push(terminal.id);
   }
 
@@ -84,7 +116,7 @@ export function deriveTerminalPresentationState(options: {
     focusedTerminalId,
     inspectTerminalIds,
     overviewTerminalIds,
-    presentationById,
+    modelById,
   };
 }
 

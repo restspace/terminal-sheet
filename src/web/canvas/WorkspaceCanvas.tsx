@@ -24,19 +24,18 @@ import type {
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import { isAttentionRequiredStatus } from '../../shared/events';
 import { MarkdownPlaceholderNode } from '../markdown/MarkdownPlaceholderNode';
-import { deriveTerminalPresentationState } from '../terminals/presentationMode';
+import { deriveTerminalSurfaceModelState } from '../terminals/terminalSurfaceModel';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
 import { getTerminalDisplayStatus } from '../terminals/presentation';
 import { buildBackendAccentsMap } from './backendAccents';
 import { getLayoutStrategy } from './layout/strategyRegistry';
 import type { NodeBounds } from './layout/types';
 import { logStateDebug } from '../debug/stateDebug';
+import { useCanvasViewportController } from './useCanvasViewportController';
 import {
-  applyNodeChangesToWorkspace,
   buildCanvasEdges,
   buildCanvasNodes,
   getSelectedNodeIdFromChanges,
-  updateNodeBounds,
 } from './flow';
 
 interface WorkspaceCanvasProps {
@@ -62,8 +61,12 @@ interface WorkspaceCanvasProps {
   onMarkdownRemove: (nodeId: string) => void;
   onSelectedNodeChange: (nodeId: string | null) => void;
   onTerminalFocusRequest: (terminalId: string) => void;
-  onWorkspaceChange: (updater: (workspace: Workspace) => Workspace) => void;
+  onNodeBoundsChange: (
+    nodeId: string,
+    bounds: Workspace['terminals'][number]['bounds'],
+  ) => void;
   onViewportChange: (viewport: CameraViewport) => void;
+  onViewportSizeChange: (size: { width: number; height: number }) => void;
   focusAutoFocusAtMs: number | null;
   onDocumentLoad: (nodeId: string) => void;
   onDocumentChange: (nodeId: string, content: string) => void;
@@ -100,8 +103,9 @@ export function WorkspaceCanvas({
   onMarkdownRemove,
   onSelectedNodeChange,
   onTerminalFocusRequest,
-  onWorkspaceChange,
+  onNodeBoundsChange,
   onViewportChange,
+  onViewportSizeChange,
   focusAutoFocusAtMs,
   onDocumentLoad,
   onDocumentChange,
@@ -114,25 +118,9 @@ export function WorkspaceCanvas({
     Partial<Record<WorkspaceLayoutMode, unknown>>
   >({});
   const previousLayoutModeRef = useRef<WorkspaceLayoutMode | null>(null);
-  const previousRenderedLayoutModeRef = useRef<WorkspaceLayoutMode>(
-    workspace.layoutMode,
-  );
   const [layoutAnimationClassName, setLayoutAnimationClassName] = useState('');
   const layoutAnimationTimerRef = useRef<number | null>(null);
   const lastLayoutAnimationKeyRef = useRef<string | null>(null);
-  const pendingViewportCommitRef = useRef<CameraViewport | null>(null);
-  const [lastCommittedViewport, setLastCommittedViewport] = useState<CameraViewport>(
-    workspace.currentViewport,
-  );
-  const [isAwaitingViewportCommit, setIsAwaitingViewportCommit] = useState(false);
-  const lastFocusTilesBoundsRef = useRef<Map<string, NodeBounds>>(new Map());
-  const [canvasViewport, setCanvasViewport] = useState<CameraViewport>(
-    workspace.currentViewport,
-  );
-  const previousObservedWorkspaceViewportRef = useRef<CameraViewport>(
-    workspace.currentViewport,
-  );
-  const [isViewportInteracting, setIsViewportInteracting] = useState(false);
   const [renderedBoundsByNodeId, setRenderedBoundsByNodeId] = useState<
     Map<string, NodeBounds>
   >(() => createInitialRenderedBoundsByNodeId(workspace));
@@ -140,14 +128,16 @@ export function WorkspaceCanvas({
     nodesDraggable: true,
     nodesResizable: true,
   });
-  const hasPendingViewportCommit =
-    isAwaitingViewportCommit &&
-    !sameViewport(workspace.currentViewport, lastCommittedViewport);
-  const shouldUseCanvasViewport =
-    isViewportInteracting || hasPendingViewportCommit;
-  const activeViewport = shouldUseCanvasViewport
-    ? canvasViewport
-    : workspace.currentViewport;
+  const {
+    activeViewport,
+    isViewportInteracting,
+    onMoveStart,
+    onMoveEnd,
+    onReactFlowViewportChange,
+  } = useCanvasViewportController({
+    workspaceViewport: workspace.currentViewport,
+    onViewportCommit: onViewportChange,
+  });
   const focusedTerminalId = useMemo(
     () =>
       selectedNodeId && workspace.terminals.some((terminal) => terminal.id === selectedNodeId)
@@ -159,45 +149,6 @@ export function WorkspaceCanvas({
     workspace.layoutMode === 'focus-tiles'
       ? activeViewport
       : workspace.currentViewport;
-
-  useEffect(() => {
-    if (
-      !isAwaitingViewportCommit ||
-      !sameViewport(workspace.currentViewport, lastCommittedViewport)
-    ) {
-      return;
-    }
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsAwaitingViewportCommit(false);
-  }, [isAwaitingViewportCommit, lastCommittedViewport, workspace.currentViewport]);
-
-  useEffect(() => {
-    if (
-      sameViewport(
-        previousObservedWorkspaceViewportRef.current,
-        workspace.currentViewport,
-      )
-    ) {
-      return;
-    }
-
-    logStateDebug('canvas', 'workspaceViewportObserved', {
-      previousViewport: previousObservedWorkspaceViewportRef.current,
-      nextViewport: workspace.currentViewport,
-      canvasViewport,
-      lastCommittedViewport,
-      isViewportInteracting,
-      hasPendingViewportCommit,
-    });
-    previousObservedWorkspaceViewportRef.current = workspace.currentViewport;
-  }, [
-    canvasViewport,
-    hasPendingViewportCommit,
-    isViewportInteracting,
-    lastCommittedViewport,
-    workspace.currentViewport,
-  ]);
 
   useEffect(() => {
     const container = canvasFrameRef.current;
@@ -233,6 +184,14 @@ export function WorkspaceCanvas({
       resizeObserver.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return;
+    }
+
+    onViewportSizeChange(viewportSize);
+  }, [onViewportSizeChange, viewportSize]);
 
   useEffect(() => {
     const layoutStrategy = getLayoutStrategy(workspace.layoutMode);
@@ -275,24 +234,7 @@ export function WorkspaceCanvas({
       });
     }
 
-    if (workspace.layoutMode === 'focus-tiles') {
-      lastFocusTilesBoundsRef.current = new Map(layoutResult.boundsByNodeId);
-    }
-
-    let nextBoundsByNodeId = new Map(layoutResult.boundsByNodeId);
-
-    if (
-      workspace.layoutMode === 'free' &&
-      previousRenderedLayoutModeRef.current === 'focus-tiles' &&
-      lastFocusTilesBoundsRef.current.size > 0
-    ) {
-      nextBoundsByNodeId = new Map(lastFocusTilesBoundsRef.current);
-      onWorkspaceChange((current) =>
-        applyRenderedBoundsToWorkspace(current, nextBoundsByNodeId),
-      );
-    }
-
-    previousRenderedLayoutModeRef.current = workspace.layoutMode;
+    const nextBoundsByNodeId = new Map(layoutResult.boundsByNodeId);
 
     setRenderedBoundsByNodeId((current) =>
       sameBoundsByNodeId(current, nextBoundsByNodeId) ? current : nextBoundsByNodeId,
@@ -330,7 +272,6 @@ export function WorkspaceCanvas({
   }, [
     focusedTerminalId,
     nodeInteractionAtMs,
-    onWorkspaceChange,
     selectedNodeId,
     viewportSize,
     layoutViewport,
@@ -351,23 +292,26 @@ export function WorkspaceCanvas({
     () => buildBackendAccentsMap(workspace.backends),
     [workspace.backends],
   );
-  const terminalPresentationState = useMemo(
+  const terminalSurfaceModelState = useMemo(
     () =>
-      deriveTerminalPresentationState({
+      deriveTerminalSurfaceModelState({
         terminals: workspace.terminals,
         selectedNodeId,
         sessions,
         interactionAtByTerminalId: nodeInteractionAtMs,
+        layoutMode: workspace.layoutMode,
       }),
-    [selectedNodeId, sessions, nodeInteractionAtMs, workspace.terminals],
+    [
+      nodeInteractionAtMs,
+      selectedNodeId,
+      sessions,
+      workspace.layoutMode,
+      workspace.terminals,
+    ],
   );
   const semanticZoomMode = useMemo(
     () => getSemanticZoomMode(activeViewport.zoom),
     [activeViewport.zoom],
-  );
-  const livePreviewTerminalIds = useMemo(
-    () => new Set(terminalPresentationState.inspectTerminalIds),
-    [terminalPresentationState.inspectTerminalIds],
   );
   const activeMarkdownLinkByTerminalId = useMemo(() => {
     const linksByTerminalId = new Map<string, MarkdownLinkState>();
@@ -414,11 +358,10 @@ export function WorkspaceCanvas({
         renderedBoundsByNodeId,
         nodesDraggable: interactionPolicy.nodesDraggable,
         nodesResizable: interactionPolicy.nodesResizable,
-        livePreviewTerminalIds,
         focusAutoFocusAtMs,
         viewportZoom: activeViewport.zoom,
         semanticZoomMode,
-        terminalPresentationById: terminalPresentationState.presentationById,
+        terminalSurfaceModelById: terminalSurfaceModelState.modelById,
         sessions,
         markdownDocuments,
         activeMarkdownLinkByTerminalId,
@@ -426,7 +369,21 @@ export function WorkspaceCanvas({
         socketState,
         onSelect: onSelectedNodeChange,
         onBoundsChange: (nodeId, bounds) => {
-          onWorkspaceChange((current) => updateNodeBounds(current, nodeId, bounds));
+          const nextBounds = resolveNextRenderedBounds(
+            renderedBoundsByNodeId,
+            workspace,
+            nodeId,
+            bounds,
+          );
+
+          if (!nextBounds) {
+            return;
+          }
+
+          setRenderedBoundsByNodeId((current) =>
+            applyRenderedBoundsUpdate(current, workspace, nodeId, bounds),
+          );
+          onNodeBoundsChange(nodeId, nextBounds);
         },
         onTerminalChange,
         onPathSelectRequest,
@@ -445,7 +402,6 @@ export function WorkspaceCanvas({
       }),
     [
       backendAccents,
-      livePreviewTerminalIds,
       activeViewport.zoom,
       focusAutoFocusAtMs,
       onMarkTerminalRead,
@@ -462,7 +418,7 @@ export function WorkspaceCanvas({
       onTerminalRemove,
       onTerminalResize,
       onTerminalRestart,
-      onWorkspaceChange,
+      onNodeBoundsChange,
       selectedNodeId,
       renderedBoundsByNodeId,
       interactionPolicy.nodesDraggable,
@@ -473,7 +429,7 @@ export function WorkspaceCanvas({
       activeMarkdownLinksByNodeId,
       socketState,
       semanticZoomMode,
-      terminalPresentationState.presentationById,
+      terminalSurfaceModelState.modelById,
       workspace,
       onResolveConflict,
     ],
@@ -502,108 +458,12 @@ export function WorkspaceCanvas({
           edges={edges}
           nodeTypes={nodeTypes}
           viewport={activeViewport}
-          onViewportChange={(nextViewport) => {
-            logStateDebug('canvas', 'reactFlowViewportChange', {
-              nextViewport,
-              activeViewport,
-              workspaceViewport: workspace.currentViewport,
-              canvasViewport,
-              lastCommittedViewport,
-              isViewportInteracting,
-              hasPendingViewportCommit,
-            });
-
-            if (!isViewportInteracting && !hasPendingViewportCommit) {
-              logStateDebug('canvas', 'reactFlowViewportChangeIgnored', {
-                nextViewport,
-                reason: 'not-interacting-and-no-pending-commit',
-              });
-              return;
-            }
-
-            setCanvasViewport((current) =>
-              sameViewport(current, nextViewport) ? current : nextViewport,
-            );
-            pendingViewportCommitRef.current = nextViewport;
-          }}
-          onMoveStart={(event) => {
-            logStateDebug('canvas', 'reactFlowMoveStart', {
-              event: summarizeMoveEvent(event),
-              workspaceViewport: workspace.currentViewport,
-              canvasViewport,
-              lastCommittedViewport,
-              activeViewport,
-            });
-
-            if (!isUserViewportEvent(event)) {
-              logStateDebug('canvas', 'reactFlowMoveStartIgnored', {
-                reason: 'non-user-event',
-                event: summarizeMoveEvent(event),
-              });
-              return;
-            }
-
-            pendingViewportCommitRef.current = null;
-            setCanvasViewport((current) =>
-              sameViewport(current, workspace.currentViewport)
-                ? current
-                : workspace.currentViewport,
-            );
-            setLastCommittedViewport(workspace.currentViewport);
-            setIsAwaitingViewportCommit(false);
-            setIsViewportInteracting(true);
-          }}
-          onMoveEnd={(event, maybeViewport) => {
-            logStateDebug('canvas', 'reactFlowMoveEnd', {
-              event: summarizeMoveEvent(event),
-              maybeViewport: isCameraViewport(maybeViewport) ? maybeViewport : null,
-              pendingViewport: pendingViewportCommitRef.current,
-              canvasViewport,
-              lastCommittedViewport,
-              workspaceViewport: workspace.currentViewport,
-            });
-
-            if (!isUserViewportEvent(event)) {
-              logStateDebug('canvas', 'reactFlowMoveEndIgnored', {
-                reason: 'non-user-event',
-                event: summarizeMoveEvent(event),
-              });
-              return;
-            }
-
-            setIsViewportInteracting(false);
-
-            const finalViewport = isCameraViewport(maybeViewport)
-              ? maybeViewport
-              : (pendingViewportCommitRef.current ?? canvasViewport);
-            pendingViewportCommitRef.current = null;
-
-            if (!finalViewport) {
-              return;
-            }
-
-            setCanvasViewport((current) =>
-              sameViewport(current, finalViewport) ? current : finalViewport,
-            );
-            if (!sameViewport(lastCommittedViewport, finalViewport)) {
-              logStateDebug('canvas', 'reactFlowViewportCommit', {
-                previousViewport: lastCommittedViewport,
-                nextViewport: finalViewport,
-              });
-              setIsAwaitingViewportCommit(true);
-              setLastCommittedViewport(finalViewport);
-              onViewportChange(finalViewport);
-            } else {
-              logStateDebug('canvas', 'reactFlowViewportCommitSkipped', {
-                reason: 'same-as-last-committed',
-                viewport: finalViewport,
-              });
-            }
-          }}
+          onViewportChange={onReactFlowViewportChange}
+          onMoveStart={onMoveStart}
+          onMoveEnd={onMoveEnd}
           onNodesChange={(changes) => {
             logStateDebug('canvas', 'reactFlowNodesChange', {
               isViewportInteracting,
-              hasPendingViewportCommit,
               changes: summarizeNodeChangesForDebug(changes),
             });
             const nextSelectedNodeId = getSelectedNodeIdFromChanges(changes);
@@ -612,9 +472,30 @@ export function WorkspaceCanvas({
               onSelectedNodeChange(nextSelectedNodeId);
             }
 
-            onWorkspaceChange((current) =>
-              applyNodeChangesToWorkspace(current, changes),
+            const boundsChanges = getNodeBoundsChanges(changes);
+
+            if (!boundsChanges.length) {
+              return;
+            }
+
+            setRenderedBoundsByNodeId((current) =>
+              applyRenderedBoundsUpdates(current, workspace, boundsChanges),
             );
+
+            for (const boundsChange of boundsChanges) {
+              const nextBounds = resolveNextRenderedBounds(
+                renderedBoundsByNodeId,
+                workspace,
+                boundsChange.nodeId,
+                boundsChange.bounds,
+              );
+
+              if (!nextBounds) {
+                continue;
+              }
+
+              onNodeBoundsChange(boundsChange.nodeId, nextBounds);
+            }
           }}
           onPaneClick={(event) => {
             const target = event.target;
@@ -765,49 +646,6 @@ function createInitialRenderedBoundsByNodeId(
   );
 }
 
-function applyRenderedBoundsToWorkspace(
-  workspace: Workspace,
-  renderedBoundsByNodeId: ReadonlyMap<string, NodeBounds>,
-): Workspace {
-  let changed = false;
-  const terminals = workspace.terminals.map((terminal) => {
-    const renderedBounds = renderedBoundsByNodeId.get(terminal.id);
-
-    if (!renderedBounds || sameBounds(renderedBounds, terminal.bounds)) {
-      return terminal;
-    }
-
-    changed = true;
-    return {
-      ...terminal,
-      bounds: renderedBounds,
-    };
-  });
-  const markdown = workspace.markdown.map((node) => {
-    const renderedBounds = renderedBoundsByNodeId.get(node.id);
-
-    if (!renderedBounds || sameBounds(renderedBounds, node.bounds)) {
-      return node;
-    }
-
-    changed = true;
-    return {
-      ...node,
-      bounds: renderedBounds,
-    };
-  });
-
-  if (!changed) {
-    return workspace;
-  }
-
-  return {
-    ...workspace,
-    terminals,
-    markdown,
-  };
-}
-
 function sameBounds(left: NodeBounds, right: NodeBounds): boolean {
   return (
     Math.abs(left.x - right.x) < 0.5 &&
@@ -836,17 +674,120 @@ function sameBoundsByNodeId(
   return true;
 }
 
-function isCameraViewport(value: unknown): value is CameraViewport {
-  if (!value || typeof value !== 'object') {
-    return false;
+function applyRenderedBoundsUpdates(
+  current: ReadonlyMap<string, NodeBounds>,
+  workspace: Workspace,
+  changes: ReadonlyArray<{
+    nodeId: string;
+    bounds: Partial<NodeBounds>;
+  }>,
+): Map<string, NodeBounds> {
+  let next = current as Map<string, NodeBounds>;
+
+  for (const change of changes) {
+    next = applyRenderedBoundsUpdate(next, workspace, change.nodeId, change.bounds);
   }
 
-  const candidate = value as Partial<CameraViewport>;
-  return (
-    typeof candidate.x === 'number' &&
-    typeof candidate.y === 'number' &&
-    typeof candidate.zoom === 'number'
-  );
+  return next;
+}
+
+function applyRenderedBoundsUpdate(
+  current: ReadonlyMap<string, NodeBounds>,
+  workspace: Workspace,
+  nodeId: string,
+  bounds: Partial<NodeBounds>,
+): Map<string, NodeBounds> {
+  const currentBounds =
+    current.get(nodeId) ??
+    readWorkspaceNodeBounds(workspace, nodeId);
+
+  if (!currentBounds) {
+    return current as Map<string, NodeBounds>;
+  }
+
+  const nextBounds = {
+    ...currentBounds,
+    ...bounds,
+  };
+
+  if (sameBounds(currentBounds, nextBounds)) {
+    return current as Map<string, NodeBounds>;
+  }
+
+  const next = new Map(current);
+  next.set(nodeId, nextBounds);
+  return next;
+}
+
+function resolveNextRenderedBounds(
+  current: ReadonlyMap<string, NodeBounds>,
+  workspace: Workspace,
+  nodeId: string,
+  bounds: Partial<NodeBounds>,
+): NodeBounds | null {
+  const currentBounds =
+    current.get(nodeId) ??
+    readWorkspaceNodeBounds(workspace, nodeId);
+
+  if (!currentBounds) {
+    return null;
+  }
+
+  return {
+    ...currentBounds,
+    ...bounds,
+  };
+}
+
+function readWorkspaceNodeBounds(
+  workspace: Workspace,
+  nodeId: string,
+): NodeBounds | null {
+  const terminal = workspace.terminals.find((candidate) => candidate.id === nodeId);
+
+  if (terminal) {
+    return terminal.bounds;
+  }
+
+  const markdown = workspace.markdown.find((candidate) => candidate.id === nodeId);
+  return markdown?.bounds ?? null;
+}
+
+function getNodeBoundsChanges(
+  changes: NodeChange[],
+): Array<{
+  nodeId: string;
+  bounds: Partial<NodeBounds>;
+}> {
+  const next: Array<{
+    nodeId: string;
+    bounds: Partial<NodeBounds>;
+  }> = [];
+
+  for (const change of changes) {
+    if (change.type === 'position' && change.position) {
+      next.push({
+        nodeId: change.id,
+        bounds: {
+          x: change.position.x,
+          y: change.position.y,
+        },
+      });
+      continue;
+    }
+
+    if (change.type === 'dimensions' && change.dimensions) {
+      next.push({
+        nodeId: change.id,
+        bounds: {
+          width: change.dimensions.width,
+          height: change.dimensions.height,
+        },
+      });
+    }
+  }
+
+  return next;
 }
 
 function readFocusTilesDebugState(value: unknown): {
@@ -872,58 +813,6 @@ function readFocusTilesDebugState(value: unknown): {
           (nodeId): nodeId is string => typeof nodeId === 'string',
         )
       : [],
-  };
-}
-
-function summarizeMoveEvent(
-  event: unknown,
-): Record<string, unknown> | null {
-  if (!event) {
-    return null;
-  }
-
-  if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
-    return {
-      kind: 'mouse',
-      type: event.type,
-      button: event.button,
-      buttons: event.buttons,
-      clientX: roundForEventDebug(event.clientX),
-      clientY: roundForEventDebug(event.clientY),
-    };
-  }
-
-  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
-    const firstTouch = event.touches[0] ?? event.changedTouches[0] ?? null;
-
-    return {
-      kind: 'touch',
-      type: event.type,
-      touches: event.touches.length,
-      changedTouches: event.changedTouches.length,
-      clientX: firstTouch ? roundForEventDebug(firstTouch.clientX) : null,
-      clientY: firstTouch ? roundForEventDebug(firstTouch.clientY) : null,
-    };
-  }
-
-  return {
-    kind: 'unknown',
-    type:
-      typeof event === 'object' &&
-      event !== null &&
-      'type' in event &&
-      typeof event.type === 'string'
-        ? event.type
-        : null,
-    constructorName:
-      typeof event === 'object' &&
-      event !== null &&
-      'constructor' in event &&
-      typeof event.constructor === 'function' &&
-      'name' in event.constructor &&
-      typeof event.constructor.name === 'string'
-        ? event.constructor.name
-        : null,
   };
 }
 
@@ -971,36 +860,6 @@ function summarizeNodeChangesForDebug(
   });
 }
 
-function sameViewport(left: CameraViewport, right: CameraViewport): boolean {
-  return (
-    almostEqual(left.x, right.x) &&
-    almostEqual(left.y, right.y) &&
-    almostEqual(left.zoom, right.zoom)
-  );
-}
-
 function roundForEventDebug(value: number): number {
   return Number(value.toFixed(3));
-}
-
-function almostEqual(left: number, right: number): boolean {
-  return Math.abs(left - right) < 0.001;
-}
-
-function isUserViewportEvent(
-  event: unknown,
-): event is MouseEvent | TouchEvent {
-  if (!event) {
-    return false;
-  }
-
-  if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
-    return true;
-  }
-
-  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
-    return true;
-  }
-
-  return false;
 }

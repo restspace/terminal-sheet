@@ -15,6 +15,10 @@ interface MockReactFlowProps {
     id: string;
     type: 'terminal' | 'markdown';
     data: unknown;
+    position?: {
+      x: number;
+      y: number;
+    };
     selected?: boolean;
     width?: number;
     height?: number;
@@ -69,8 +73,10 @@ vi.mock('../terminals/TerminalPlaceholderNode', () => ({
     id: string;
     selected?: boolean;
     data: {
-      presentationMode: string;
-      mountLivePreview: boolean;
+      surfaceModel: {
+        presentationMode: string;
+        surfaceKind: string;
+      };
       autoFocusAtMs: number | null;
     };
   }) =>
@@ -78,8 +84,10 @@ vi.mock('../terminals/TerminalPlaceholderNode', () => ({
       'data-testid': 'terminal-node',
       'data-node-id': props.id,
       'data-selected': String(Boolean(props.selected)),
-      'data-mode': props.data.presentationMode,
-      'data-live-preview': String(props.data.mountLivePreview),
+      'data-mode': props.data.surfaceModel.presentationMode,
+      'data-live-preview': String(
+        props.data.surfaceModel.surfaceKind === 'live-preview',
+      ),
       'data-auto-focus': String(props.data.autoFocusAtMs ?? ''),
     }),
 }));
@@ -183,6 +191,87 @@ describe('WorkspaceCanvas', () => {
     expect(focusedNode?.getAttribute('data-auto-focus')).toBe('321');
     expect(inspectNode?.getAttribute('data-mode')).toBe('inspect');
     expect(container.querySelector('.focus-terminal-overlay')).toBeNull();
+  });
+
+  it('reports measured canvas viewport size to the parent', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const onViewportSizeChange = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace: {
+            ...createDefaultWorkspace(),
+            terminals: [terminal],
+          },
+          onViewportSizeChange,
+        })),
+      );
+    });
+
+    expect(onViewportSizeChange).toHaveBeenCalledWith({
+      width: 1280,
+      height: 720,
+    });
+  });
+
+  it('returns to persisted free-layout bounds after leaving focus-tiles', () => {
+    const focusedTerminal = createPlaceholderTerminal(0);
+    const sideTerminal = createPlaceholderTerminal(1);
+    const onNodeBoundsChange = vi.fn();
+    const workspace = {
+      ...createDefaultWorkspace(),
+      layoutMode: 'focus-tiles' as const,
+      currentViewport: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+      },
+      terminals: [focusedTerminal, sideTerminal],
+    };
+    const nodeInteractionAtMs = {
+      [sideTerminal.id]: 100,
+      [focusedTerminal.id]: 50,
+    };
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          selectedNodeId: focusedTerminal.id,
+          nodeInteractionAtMs,
+          onNodeBoundsChange,
+        })),
+      );
+    });
+
+    const focusTilesPosition = expectNodePosition(focusedTerminal.id);
+    expect(focusTilesPosition.x).not.toBeCloseTo(focusedTerminal.bounds.x);
+    expect(focusTilesPosition.y).not.toBeCloseTo(focusedTerminal.bounds.y);
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace: {
+            ...workspace,
+            layoutMode: 'free',
+            updatedAt: '2026-03-22T18:35:00.000Z',
+          },
+          selectedNodeId: focusedTerminal.id,
+          nodeInteractionAtMs,
+          onNodeBoundsChange,
+        })),
+      );
+    });
+
+    const restoredFocusPosition = expectNodePosition(focusedTerminal.id);
+    const restoredSidePosition = expectNodePosition(sideTerminal.id);
+
+    expect(restoredFocusPosition.x).toBeCloseTo(focusedTerminal.bounds.x);
+    expect(restoredFocusPosition.y).toBeCloseTo(focusedTerminal.bounds.y);
+    expect(restoredSidePosition.x).toBeCloseTo(sideTerminal.bounds.x);
+    expect(restoredSidePosition.y).toBeCloseTo(sideTerminal.bounds.y);
+    expect(onNodeBoundsChange).not.toHaveBeenCalled();
   });
 
   it('ignores programmatic move callbacks when syncing the controlled viewport', () => {
@@ -344,7 +433,7 @@ function createCanvasProps(
 
   return {
     workspace,
-    selectedNodeId: overrides.selectedNodeId ?? workspace.selectedNodeId,
+    selectedNodeId: overrides.selectedNodeId ?? null,
     nodeInteractionAtMs: overrides.nodeInteractionAtMs ?? {},
     sessions: overrides.sessions ?? {},
     markdownDocuments: overrides.markdownDocuments ?? {},
@@ -362,8 +451,9 @@ function createCanvasProps(
     onMarkdownRemove: overrides.onMarkdownRemove ?? vi.fn(),
     onSelectedNodeChange: overrides.onSelectedNodeChange ?? vi.fn(),
     onTerminalFocusRequest: overrides.onTerminalFocusRequest ?? vi.fn(),
-    onWorkspaceChange: overrides.onWorkspaceChange ?? vi.fn(),
+    onNodeBoundsChange: overrides.onNodeBoundsChange ?? vi.fn(),
     onViewportChange: overrides.onViewportChange ?? vi.fn(),
+    onViewportSizeChange: overrides.onViewportSizeChange ?? vi.fn(),
     focusAutoFocusAtMs: overrides.focusAutoFocusAtMs ?? null,
     onDocumentLoad: overrides.onDocumentLoad ?? vi.fn(),
     onDocumentChange: overrides.onDocumentChange ?? vi.fn(),
@@ -402,4 +492,11 @@ function createSessionSnapshot(sessionId: string): TerminalSessionSnapshot {
       updatedAt: null,
     },
   };
+}
+
+function expectNodePosition(nodeId: string): { x: number; y: number } {
+  const node = latestReactFlowProps?.nodes.find((candidate) => candidate.id === nodeId);
+
+  expect(node?.position).toBeDefined();
+  return node!.position!;
 }
