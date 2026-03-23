@@ -5,10 +5,10 @@ import type {
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
-import { useAttentionStore, applyAttentionMessage } from './useAttentionStore';
+import { useAttentionStore } from './useAttentionStore';
 import { useMarkdownRealtime } from './useMarkdownRealtime';
-import { useSessionStore, applyServerMessage, mergeSessionSnapshots } from './useSessionStore';
-import { useWorkspaceRealtime, applyWorkspaceMessage } from './useWorkspaceRealtime';
+import { useSessionStore } from './useSessionStore';
+import { useWorkspaceRealtime } from './useWorkspaceRealtime';
 import { shouldPollSnapshots, useWorkspaceSocket } from './useWorkspaceSocket';
 
 interface UseTerminalSessionsOptions {
@@ -210,11 +210,3 @@ export function useTerminalSessions({
     ),
   };
 }
-
-export {
-  applyAttentionMessage,
-  applyWorkspaceMessage,
-  applyServerMessage,
-  mergeSessionSnapshots,
-  shouldPollSnapshots,
-};

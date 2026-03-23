@@ -28,6 +28,7 @@ interface MockReactFlowProps {
   children?: ReactNode;
   onMoveStart?: (event: MouseEvent | TouchEvent | null, viewport: unknown) => void;
   onMoveEnd?: (event: MouseEvent | TouchEvent | null, viewport: unknown) => void;
+  onNodesChange?: (changes: Array<Record<string, unknown>>) => void;
 }
 
 let latestReactFlowProps: MockReactFlowProps | null = null;
@@ -344,6 +345,90 @@ describe('WorkspaceCanvas', () => {
     expect(onNodeBoundsChange).not.toHaveBeenCalled();
   });
 
+  it('ignores programmatic node bound changes while focus-tiles is active', () => {
+    const focusedTerminal = createPlaceholderTerminal(0);
+    const sideTerminal = createPlaceholderTerminal(1);
+    const onNodeBoundsChange = vi.fn();
+    const workspace = {
+      ...createDefaultWorkspace(),
+      layoutMode: 'focus-tiles' as const,
+      terminals: [focusedTerminal, sideTerminal],
+    };
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          selectedNodeId: focusedTerminal.id,
+          onNodeBoundsChange,
+        })),
+      );
+    });
+
+    act(() => {
+      latestReactFlowProps?.onNodesChange?.([
+        {
+          id: focusedTerminal.id,
+          type: 'position',
+          position: {
+            x: focusedTerminal.bounds.x + 32,
+            y: focusedTerminal.bounds.y + 24,
+          },
+        },
+        {
+          id: sideTerminal.id,
+          type: 'dimensions',
+          dimensions: {
+            width: sideTerminal.bounds.width + 80,
+            height: sideTerminal.bounds.height + 40,
+          },
+        },
+      ]);
+    });
+
+    expect(onNodeBoundsChange).not.toHaveBeenCalled();
+  });
+
+  it('commits user node bounds changes in free layout mode', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const onNodeBoundsChange = vi.fn();
+    const workspace = {
+      ...createDefaultWorkspace(),
+      layoutMode: 'free' as const,
+      terminals: [terminal],
+    };
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          onNodeBoundsChange,
+        })),
+      );
+    });
+
+    act(() => {
+      latestReactFlowProps?.onNodesChange?.([
+        {
+          id: terminal.id,
+          type: 'position',
+          position: {
+            x: terminal.bounds.x + 16,
+            y: terminal.bounds.y + 12,
+          },
+        },
+      ]);
+    });
+
+    expect(onNodeBoundsChange).toHaveBeenCalledTimes(1);
+    expect(onNodeBoundsChange).toHaveBeenCalledWith(terminal.id, {
+      x: terminal.bounds.x + 16,
+      y: terminal.bounds.y + 12,
+      width: terminal.bounds.width,
+      height: terminal.bounds.height,
+    });
+  });
+
   it('ignores programmatic move callbacks when syncing the controlled viewport', () => {
     const terminal = createPlaceholderTerminal(0);
     const onViewportChange = vi.fn();
@@ -539,6 +624,40 @@ describe('WorkspaceCanvas', () => {
       });
 
       expect(mockedGetLayoutStrategy.mock.calls.length).toBe(callsAfterInitialRender + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('defers terminal resize sync only while layout animation is active', () => {
+    vi.useFakeTimers();
+    try {
+      const focusedTerminal = createPlaceholderTerminal(0);
+      const sideTerminal = createPlaceholderTerminal(1);
+      const workspace = {
+        ...createDefaultWorkspace(),
+        layoutMode: 'focus-tiles' as const,
+        terminals: [focusedTerminal, sideTerminal],
+      };
+
+      act(() => {
+        root.render(
+          createElement(WorkspaceCanvas, createCanvasProps({
+            workspace,
+            selectedNodeId: focusedTerminal.id,
+          })),
+        );
+      });
+
+      const initialData = expectTerminalNodeData(focusedTerminal.id);
+      expect(initialData.deferResizeSync).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(1_600);
+      });
+
+      const settledData = expectTerminalNodeData(focusedTerminal.id);
+      expect(settledData.deferResizeSync).toBe(false);
     } finally {
       vi.useRealTimers();
     }

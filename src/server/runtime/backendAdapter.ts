@@ -9,11 +9,6 @@ import type { Workspace } from '../../shared/workspace';
 export type SessionListener = (message: TerminalServerSocketMessage) => void;
 export type AttentionListener = (event: AttentionEvent) => void;
 
-export interface BackendAdapterListeners {
-  onSessionMessage: SessionListener;
-  onAttentionEvent: AttentionListener;
-}
-
 export interface BackendAdapter {
   readonly backendId: string;
   syncWithWorkspace(workspace: Workspace): Promise<void>;

@@ -20,6 +20,9 @@ interface SshCommandOptions {
   sshIdentityFile?: string;
 }
 
+const SSH_COMMAND_TIMEOUT_MS = 60_000;
+const SSH_OUTPUT_LIMIT_BYTES = 256 * 1024;
+
 export class SshSetupService {
   constructor(
     private readonly logger: FastifyBaseLogger,
@@ -171,14 +174,26 @@ export class SshSetupService {
       );
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, SSH_COMMAND_TIMEOUT_MS);
 
       child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
+        const next = appendBoundedOutput(stdout, chunk, SSH_OUTPUT_LIMIT_BYTES);
+        stdout = next.value;
+        stdoutTruncated ||= next.truncated;
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
+        const next = appendBoundedOutput(stderr, chunk, SSH_OUTPUT_LIMIT_BYTES);
+        stderr = next.value;
+        stderrTruncated ||= next.truncated;
       });
       child.on('error', (error) => {
+        clearTimeout(timeout);
         reject(
           new Error(
             `SSH command failed to start: ${error instanceof Error ? error.message : String(error)}`,
@@ -186,10 +201,67 @@ export class SshSetupService {
         );
       });
       child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (timedOut) {
+          stderr = appendInfoLine(
+            stderr,
+            `SSH command timed out after ${Math.floor(SSH_COMMAND_TIMEOUT_MS / 1000)}s.`,
+            SSH_OUTPUT_LIMIT_BYTES,
+          );
+        }
+        if (stdoutTruncated) {
+          stdout = appendInfoLine(
+            stdout,
+            '[stdout truncated]',
+            SSH_OUTPUT_LIMIT_BYTES,
+          );
+        }
+        if (stderrTruncated) {
+          stderr = appendInfoLine(
+            stderr,
+            '[stderr truncated]',
+            SSH_OUTPUT_LIMIT_BYTES,
+          );
+        }
         resolve({ code, stdout, stderr });
       });
     });
   }
+}
+
+function appendBoundedOutput(
+  current: string,
+  chunk: Buffer,
+  limitBytes: number,
+): { value: string; truncated: boolean } {
+  if (Buffer.byteLength(current, 'utf8') >= limitBytes) {
+    return { value: current, truncated: true };
+  }
+
+  const remainingBytes = limitBytes - Buffer.byteLength(current, 'utf8');
+  const chunkText = chunk.toString('utf8');
+  const chunkBytes = Buffer.byteLength(chunkText, 'utf8');
+
+  if (chunkBytes <= remainingBytes) {
+    return { value: `${current}${chunkText}`, truncated: false };
+  }
+
+  const truncatedChunk = chunk.subarray(0, remainingBytes).toString('utf8');
+  return {
+    value: `${current}${truncatedChunk}`,
+    truncated: true,
+  };
+}
+
+function appendInfoLine(value: string, line: string, maxBytes: number): string {
+  const suffix = value.endsWith('\n') ? `${line}\n` : `\n${line}\n`;
+  const next = `${value}${suffix}`;
+
+  if (Buffer.byteLength(next, 'utf8') <= maxBytes) {
+    return next;
+  }
+
+  return value;
 }
 
 export function parseTokenFromText(input: string): string | null {

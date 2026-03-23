@@ -10,11 +10,9 @@ import {
   nodeBoundsSchema,
   markdownNodeSchema,
   terminalNodeSchema,
-  workspaceSchema,
   terminalStatusSchema,
   type CreateMarkdownNodeInput,
   type CreateTerminalNodeInput,
-  type TerminalNodePatch,
   type Workspace,
   type WorkspaceLayoutMode,
   updateTerminalNode,
@@ -160,12 +158,6 @@ export const workspaceMutationRequestSchema = z.union([
 
 export const workspaceCommandRequestSchema = workspaceMutationRequestSchema;
 
-export const workspaceCommandResponseSchema = z.object({
-  workspace: workspaceSchema,
-  terminal: terminalNodeSchema.optional(),
-  markdownNode: markdownNodeSchema.optional(),
-});
-
 export type WorkspaceAddTerminalCommandInput = z.infer<
   typeof workspaceAddTerminalCommandInputSchema
 >;
@@ -180,9 +172,11 @@ export type WorkspaceMutationRequest = z.infer<
   typeof workspaceMutationRequestSchema
 >;
 export type WorkspaceCommand = z.input<typeof workspaceMutationCommandSchema>;
-export type WorkspaceCommandResponse = z.infer<
-  typeof workspaceCommandResponseSchema
->;
+export interface WorkspaceCommandResponse {
+  workspace: Workspace;
+  terminal?: z.infer<typeof terminalNodeSchema>;
+  markdownNode?: z.infer<typeof markdownNodeSchema>;
+}
 
 export function applyWorkspaceCommands(
   workspace: Workspace,
@@ -197,7 +191,7 @@ export function applyWorkspaceCommands(
   return nextWorkspace;
 }
 
-export function applyWorkspaceCommand(
+function applyWorkspaceCommand(
   workspace: Workspace,
   command: WorkspaceMutationCommand,
 ): Workspace {

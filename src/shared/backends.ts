@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentTypeSchema } from './agentTypes';
 
 export const LOCAL_BACKEND_ID = 'local';
 const portSchema = z.number().int().min(1).max(65_535);
@@ -60,14 +61,12 @@ export const backendCreateRequestSchema = z.object({
   token: z.string().trim().min(1),
 });
 
-const backendTerminalAgentTypeSchema = z.enum(['claude', 'codex', 'shell']);
-
 export const backendTerminalCreateRequestSchema = z.object({
   id: z.string().trim().min(1).optional(),
   label: z.string().trim().min(1),
   shell: z.string().trim().min(1),
   cwd: z.string().trim().min(1),
-  agentType: backendTerminalAgentTypeSchema,
+  agentType: agentTypeSchema,
   repoLabel: z.string().trim().min(1).optional(),
   taskLabel: z.string().trim().min(1).optional(),
   tags: z.array(z.string()).default([]),
@@ -116,24 +115,6 @@ export const backendSshSetupRequestSchema = z.object({
   }
 });
 
-export const backendInfoSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  baseUrl: z.string(),
-  enabled: z.boolean(),
-});
-
-export const backendWorkspaceSnapshotSchema = z.object({
-  terminals: z.array(z.unknown()),
-});
-
-export const machineHealthSchema = z.object({
-  status: z.literal('ok'),
-  role: serverRoleSchema,
-  serverId: z.string(),
-  timestamp: z.iso.datetime(),
-});
-
 export type ServerRole = z.infer<typeof serverRoleSchema>;
 export type BackendConnection = z.infer<typeof backendConnectionSchema>;
 export type BackendTransport = z.infer<typeof backendTransportSchema>;
@@ -144,5 +125,3 @@ export type BackendCreateRequest = z.infer<typeof backendCreateRequestSchema>;
 export type BackendTerminalCreateRequest = z.infer<typeof backendTerminalCreateRequestSchema>;
 export type BackendSshTokenMode = z.infer<typeof backendSshTokenModeSchema>;
 export type BackendSshSetupRequest = z.infer<typeof backendSshSetupRequestSchema>;
-export type BackendInfo = z.infer<typeof backendInfoSchema>;
-export type MachineHealth = z.infer<typeof machineHealthSchema>;

@@ -6,7 +6,10 @@ import {
   createPlaceholderTerminal,
   workspaceSchema,
 } from './workspace';
-import { applyWorkspaceCommands } from './workspaceCommands';
+import {
+  applyWorkspaceCommands,
+  workspaceMutationRequestSchema,
+} from './workspaceCommands';
 
 describe('workspace commands', () => {
   it('applies terminal, viewport, layout, and node mutations in sequence', () => {
@@ -106,5 +109,82 @@ describe('workspace commands', () => {
       y: -60,
       zoom: 1.05,
     });
+  });
+
+  it('parses legacy single-command mutation requests', () => {
+    const parsed = workspaceMutationRequestSchema.parse({
+      baseUpdatedAt: '2026-03-23T12:00:00.000Z',
+      command: {
+        type: 'set-layout-mode',
+        layoutMode: 'focus-tiles',
+      },
+    });
+
+    expect(parsed.baseUpdatedAt).toBe('2026-03-23T12:00:00.000Z');
+    expect(parsed.commands).toEqual([
+      {
+        type: 'set-layout-mode',
+        layoutMode: 'focus-tiles',
+      },
+    ]);
+  });
+
+  it('supports save-camera-preset alias and remove-markdown command', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const markdown = createPlaceholderMarkdown(0);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      terminals: [terminal],
+      markdown: [markdown],
+      filters: {
+        attentionOnly: false,
+        activeMarkdownId: markdown.id,
+      },
+    };
+    const viewport = { x: 240, y: -90, zoom: 1.2 };
+
+    const nextWorkspace = applyWorkspaceCommands(
+      {
+        ...workspace,
+        currentViewport: viewport,
+      },
+      [
+        {
+          type: 'save-camera-preset',
+          presetId: 'all-sessions',
+        },
+        {
+          type: 'remove-markdown',
+          markdownId: markdown.id,
+        },
+      ],
+    );
+
+    expect(nextWorkspace.markdown).toHaveLength(0);
+    expect(nextWorkspace.filters.activeMarkdownId).toBeNull();
+    expect(
+      nextWorkspace.cameraPresets.find((preset) => preset.id === 'all-sessions')
+        ?.viewport,
+    ).toEqual(viewport);
+  });
+
+  it('supports remove-terminal command', () => {
+    const terminalA = createPlaceholderTerminal(0);
+    const terminalB = createPlaceholderTerminal(1);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      terminals: [terminalA, terminalB],
+    };
+
+    const nextWorkspace = applyWorkspaceCommands(workspace, [
+      {
+        type: 'remove-terminal',
+        terminalId: terminalA.id,
+      },
+    ]);
+
+    expect(nextWorkspace.terminals.map((terminal) => terminal.id)).toEqual([
+      terminalB.id,
+    ]);
   });
 });

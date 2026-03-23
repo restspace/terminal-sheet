@@ -16,17 +16,20 @@ export function TerminalSurface(props: TerminalSurfaceProps) {
 }
 
 export function TerminalFocusSurface(props: {
+  className?: string;
   autoFocusAtMs?: number | null;
   sessionId: string;
   scrollback: string;
   visualScale?: number;
+  snapshotCols?: number;
+  scrollResetKey?: string | number | boolean;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
 }) {
   return (
     <TerminalSurface
       {...props}
-      className="terminal-focus-surface"
+      className={`terminal-focus-surface ${props.className ?? ''}`.trim()}
       interactionMode="interactive"
       sizeSource="measured"
       resizeAuthority="owner"

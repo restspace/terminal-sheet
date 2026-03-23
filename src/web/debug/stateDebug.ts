@@ -4,6 +4,14 @@ import type {
   StateDebugEvent,
   StateDebugEventBatch,
 } from '../../shared/debugState';
+import {
+  summarizeWorkspaceDiffForDebug,
+  summarizeWorkspaceForDebug,
+} from '../../shared/workspaceDebug';
+export {
+  summarizeWorkspaceDiffForDebug,
+  summarizeWorkspaceForDebug,
+} from '../../shared/workspaceDebug';
 
 const DEBUG_QUERY_PARAM = 'debug-state';
 const DEBUG_SESSION_QUERY_PARAM = 'debugSession';
@@ -128,65 +136,6 @@ export function logStateDebug(
   console.info(`[tsheet-debug:${sessionId ?? 'no-session'}] ${scope}.${event}`, details);
 }
 
-export function summarizeWorkspaceForDebug(
-  workspace: Workspace | null | undefined,
-): Record<string, unknown> | null {
-  if (!workspace) {
-    return null;
-  }
-
-  return {
-    id: workspace.id,
-    updatedAt: workspace.updatedAt,
-    layoutMode: workspace.layoutMode,
-    viewport: summarizeViewportForDebug(workspace.currentViewport),
-    terminalIds: workspace.terminals.map((terminal) => terminal.id),
-    markdownIds: workspace.markdown.map((node) => node.id),
-    terminalCount: workspace.terminals.length,
-    markdownCount: workspace.markdown.length,
-  };
-}
-
-export function summarizeWorkspaceDiffForDebug(
-  previousWorkspace: Workspace | null | undefined,
-  nextWorkspace: Workspace | null | undefined,
-): Record<string, unknown> {
-  return {
-    updatedAtChanged:
-      previousWorkspace?.updatedAt !== nextWorkspace?.updatedAt,
-    layoutModeChanged:
-      previousWorkspace?.layoutMode !== nextWorkspace?.layoutMode,
-    layoutMode: describeChange(
-      previousWorkspace?.layoutMode ?? null,
-      nextWorkspace?.layoutMode ?? null,
-    ),
-    viewportChanged: !sameViewportOrNull(
-      previousWorkspace?.currentViewport ?? null,
-      nextWorkspace?.currentViewport ?? null,
-    ),
-    viewport: describeChange(
-      summarizeViewportForDebug(previousWorkspace?.currentViewport ?? null),
-      summarizeViewportForDebug(nextWorkspace?.currentViewport ?? null),
-    ),
-    terminalIdsChanged: !sameStringArray(
-      previousWorkspace?.terminals.map((terminal) => terminal.id) ?? [],
-      nextWorkspace?.terminals.map((terminal) => terminal.id) ?? [],
-    ),
-    markdownIdsChanged: !sameStringArray(
-      previousWorkspace?.markdown.map((node) => node.id) ?? [],
-      nextWorkspace?.markdown.map((node) => node.id) ?? [],
-    ),
-    terminalCount: describeChange(
-      previousWorkspace?.terminals.length ?? 0,
-      nextWorkspace?.terminals.length ?? 0,
-    ),
-    markdownCount: describeChange(
-      previousWorkspace?.markdown.length ?? 0,
-      nextWorkspace?.markdown.length ?? 0,
-    ),
-  };
-}
-
 function ensureStateDebugStore(sessionId: string | null): StateDebugStore {
   if (typeof window === 'undefined') {
     return {
@@ -309,56 +258,6 @@ function updatePendingCount(count: number): void {
   const store = ensureStateDebugStore(sessionId);
   store.pendingCount = count;
   window.__TSHEET_DEBUG__ = store;
-}
-
-function summarizeViewportForDebug(
-  viewport: CameraViewport | null,
-): Record<string, number> | null {
-  if (!viewport) {
-    return null;
-  }
-
-  return {
-    x: roundForDebug(viewport.x),
-    y: roundForDebug(viewport.y),
-    zoom: roundForDebug(viewport.zoom),
-  };
-}
-
-function sameViewportOrNull(
-  left: CameraViewport | null,
-  right: CameraViewport | null,
-): boolean {
-  if (!left || !right) {
-    return left === right;
-  }
-
-  return (
-    almostEqual(left.x, right.x) &&
-    almostEqual(left.y, right.y) &&
-    almostEqual(left.zoom, right.zoom)
-  );
-}
-
-function sameStringArray(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function describeChange<T>(from: T, to: T): { from: T; to: T } {
-  return { from, to };
 }
 
 function createDebugSessionId(): string {

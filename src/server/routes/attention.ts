@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { AttentionService } from '../integrations/attentionService';
 import type { PtySessionManager } from '../pty/ptySessionManager';
+import { readMachineToken } from './machineAuth';
 
 interface AttentionRouteOptions {
   attentionService: AttentionService;
@@ -19,7 +20,7 @@ export async function registerAttentionRoutes(
   }));
 
   app.post('/api/attention/:source', async (request, reply) => {
-    const token = readToken(request);
+    const token = readMachineToken(request);
 
     if (!options.attentionService.validateToken(token)) {
       return reply.code(401).send({ message: 'Invalid attention token' });
@@ -53,32 +54,6 @@ export async function registerAttentionRoutes(
       event,
     };
   });
-}
-
-function readToken(request: {
-  headers: Record<string, unknown>;
-  query: unknown;
-}): string | null {
-  const headerToken = request.headers['x-terminal-canvas-token'];
-
-  if (typeof headerToken === 'string' && headerToken.trim()) {
-    return headerToken.trim();
-  }
-
-  if (Array.isArray(headerToken) && typeof headerToken[0] === 'string') {
-    return headerToken[0];
-  }
-
-  if (
-    request.query &&
-    typeof request.query === 'object' &&
-    'token' in request.query &&
-    typeof (request.query as Record<string, unknown>).token === 'string'
-  ) {
-    return String((request.query as Record<string, unknown>).token);
-  }
-
-  return null;
 }
 
 function readSessionId(request: {

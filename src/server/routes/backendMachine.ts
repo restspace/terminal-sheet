@@ -13,7 +13,8 @@ import { readMachineToken } from './machineAuth';
 interface BackendMachineRouteOptions {
   role: ServerRole;
   serverId: string;
-  machineToken: string;
+  getMachineToken: () => string;
+  setMachineToken: (machineToken: string) => void;
   serverIdentityFilePath: string;
   localBackendId: string;
   workspaceService: WorkspaceService;
@@ -27,8 +28,6 @@ export async function registerBackendMachineRoutes(
   app: FastifyInstance,
   options: BackendMachineRouteOptions,
 ): Promise<void> {
-  const mutableOptions = options;
-
   app.addHook('preHandler', async (request, reply) => {
     if (!request.url.startsWith('/api/backend/')) {
       return;
@@ -36,7 +35,7 @@ export async function registerBackendMachineRoutes(
 
     const token = readMachineToken(request);
 
-    if (token !== mutableOptions.machineToken) {
+    if (token !== options.getMachineToken()) {
       return reply.code(401).send({ message: 'Invalid machine token' });
     }
   });
@@ -162,7 +161,7 @@ export async function registerBackendMachineRoutes(
     const newIdentity = await rotateServerIdentityToken(
       options.serverIdentityFilePath,
     );
-    mutableOptions.machineToken = newIdentity.machineToken;
+    options.setMachineToken(newIdentity.machineToken);
     options.onTokenRotated?.(newIdentity.machineToken);
     return { machineToken: newIdentity.machineToken };
   });

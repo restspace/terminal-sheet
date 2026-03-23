@@ -6,7 +6,7 @@ import { readMachineToken } from '../routes/machineAuth';
 import { sendJson } from './sendJson';
 
 interface BackendSocketOptions {
-  machineToken: string;
+  getMachineToken: () => string;
   ptySessionManager: PtySessionManager;
   attentionService: AttentionService;
 }
@@ -18,7 +18,7 @@ export async function registerBackendSocket(
   app.get('/ws/backend', { websocket: true }, (socket, request) => {
     const token = readMachineToken(request);
 
-    if (token !== options.machineToken) {
+    if (token !== options.getMachineToken()) {
       socket.close(1008, 'Invalid machine token');
       return;
     }
@@ -49,6 +49,15 @@ export async function registerBackendSocket(
     socket.on('close', () => {
       unsubscribe();
       unsubscribeAttention();
+    });
+    socket.on('error', (error: unknown) => {
+      app.log.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          url: request.url,
+        },
+        'Backend websocket error',
+      );
     });
   });
 }

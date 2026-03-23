@@ -44,6 +44,21 @@ export function useAttentionNotifications(
   }, [soundEnabled]);
 
   useEffect(() => {
+    return () => {
+      const context = audioContextRef.current;
+      audioContextRef.current = null;
+
+      if (!context) {
+        return;
+      }
+
+      void context.close().catch(() => {
+        // Ignore browser-specific close races during teardown.
+      });
+    };
+  }, []);
+
+  useEffect(() => {
     if (notifiedEventIdsRef.current.size > MAX_NOTIFIED_EVENT_IDS) {
       const retainedEventIds = new Set(attentionEvents.map((event) => event.id));
 

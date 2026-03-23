@@ -6,13 +6,10 @@ import type {
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
 import { createDefaultWorkspace } from '../../shared/workspace';
-import {
-  applyAttentionMessage,
-  applyServerMessage,
-  applyWorkspaceMessage,
-  mergeSessionSnapshots,
-  shouldPollSnapshots,
-} from './useTerminalSessions';
+import { applyAttentionMessage } from './useAttentionStore';
+import { applyServerMessage, mergeSessionSnapshots } from './useSessionStore';
+import { applyWorkspaceMessage } from './useWorkspaceRealtime';
+import { shouldPollSnapshots } from './useWorkspaceSocket';
 
 describe('useTerminalSessions helpers', () => {
   it('keeps session state unchanged for attention messages', () => {

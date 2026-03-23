@@ -17,7 +17,6 @@ export interface TerminalNodeData extends Record<string, unknown> {
   surfaceModel: TerminalSurfaceModel;
   autoFocusAtMs: number | null;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
-  onSelect: (nodeId: string) => void;
   onBoundsChange: (
     nodeId: string,
     bounds: Partial<TerminalNode['bounds']>,
@@ -34,6 +33,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
   onMarkRead: (sessionId: string) => void;
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
   activeMarkdownLink: MarkdownLinkState | null;
+  deferResizeSync: boolean;
   allowResize: boolean;
   resizeZoom: number;
 }
@@ -42,7 +42,6 @@ export interface MarkdownNodeData extends Record<string, unknown> {
   markdown: MarkdownNode;
   document: MarkdownDocumentState | null;
   activeLinks: readonly MarkdownLinkState[];
-  onSelect: (nodeId: string) => void;
   onFocusRequest: (nodeId: string) => void;
   onRemove: (nodeId: string) => void;
   onBoundsChange: (

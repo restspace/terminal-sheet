@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { getHomeUrl } from './requestOrigin';
 
 export async function registerInstallRoutes(
   app: FastifyInstance,
@@ -14,12 +15,6 @@ export async function registerInstallRoutes(
     const script = buildPowerShellInstallScript(homeUrl);
     return reply.type('text/plain').send(script);
   });
-}
-
-function getHomeUrl(request: { headers: Record<string, unknown>; hostname: string; protocol?: string }): string {
-  const host = request.headers['x-forwarded-host'] ?? request.headers.host ?? request.hostname;
-  const proto = request.headers['x-forwarded-proto'] ?? 'http';
-  return `${String(proto)}://${String(host)}`;
 }
 
 function buildBashInstallScript(homeUrl: string): string {

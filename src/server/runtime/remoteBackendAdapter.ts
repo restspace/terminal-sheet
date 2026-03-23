@@ -399,13 +399,35 @@ export class RemoteBackendAdapter implements ConnectionAwareBackendAdapter {
 
   private broadcastSession(message: TerminalServerSocketMessage): void {
     for (const listener of this.sessionListeners) {
-      listener(message);
+      try {
+        listener(message);
+      } catch (error) {
+        this.logger.warn(
+          {
+            backendId: this.connection.id,
+            messageType: message.type,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Remote backend session listener failed',
+        );
+      }
     }
   }
 
   private broadcastAttention(event: AttentionEvent): void {
     for (const listener of this.attentionListeners) {
-      listener(event);
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger.warn(
+          {
+            backendId: this.connection.id,
+            sessionId: event.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Remote backend attention listener failed',
+        );
+      }
     }
   }
 

@@ -37,6 +37,9 @@ describe('LocalBackendAdapter', () => {
       'local',
       ptySessionManager as never,
       attentionService as never,
+      {
+        warn: vi.fn(),
+      } as never,
     );
 
     await adapter.syncWithWorkspace(workspace);
@@ -49,9 +52,7 @@ describe('LocalBackendAdapter', () => {
     expect(adapter.resizeSession('terminal-1', 120, 40)).toBe(true);
     expect(adapter.restartSession('terminal-1')).toBe(true);
     expect(adapter.markRead('terminal-1')).toBe(true);
-    expect(adapter.subscribeSession(sessionListener)).toBe(unsubscribeSession);
-    expect(adapter.subscribeAttention(attentionListener)).toBe(
-      unsubscribeAttention,
-    );
+    expect(typeof adapter.subscribeSession(sessionListener)).toBe('function');
+    expect(typeof adapter.subscribeAttention(attentionListener)).toBe('function');
   });
 });

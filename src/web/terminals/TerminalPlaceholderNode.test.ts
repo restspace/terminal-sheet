@@ -28,13 +28,14 @@ vi.mock('./TerminalTitleBar', () => ({
     createElement('div', { 'data-testid': 'terminal-title-bar' }, props.sidecar),
 }));
 
-vi.mock('./TerminalFocusSurface', () => ({
-  TerminalSurface: (props: {
+vi.mock('./TerminalFocusSurface', () => {
+  const MockTerminalSurface = (props: {
     className?: string;
     sessionId: string;
     scrollback: string;
     interactionMode?: 'interactive' | 'read-only';
     autoFocusAtMs?: number | null;
+    deferResizeSync?: boolean;
   }) => {
     useEffect(() => {
       mockSurfaceState.mountCount += 1;
@@ -50,10 +51,25 @@ vi.mock('./TerminalFocusSurface', () => ({
       'data-scrollback': props.scrollback,
       'data-read-only': String(props.interactionMode === 'read-only'),
       'data-auto-focus': String(props.autoFocusAtMs ?? ''),
+      'data-defer-resize-sync': String(Boolean(props.deferResizeSync)),
       className: props.className,
     });
-  },
-}));
+  };
+
+  return {
+    TerminalSurface: MockTerminalSurface,
+    TerminalFocusSurface: (props: {
+      className?: string;
+      sessionId: string;
+      scrollback: string;
+      autoFocusAtMs?: number | null;
+    }) =>
+      MockTerminalSurface({
+        ...props,
+        interactionMode: 'interactive',
+      }),
+  };
+});
 
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import { createPlaceholderTerminal } from '../../shared/workspace';
@@ -192,6 +208,51 @@ describe('TerminalPlaceholderNode', () => {
     expect(mockSurfaceState.unmountCount).toBe(0);
   });
 
+  it('defers backend resize sync while layout animation is active', () => {
+    const terminal = createPlaceholderTerminal(0);
+    const session = createSessionSnapshot(terminal.id, {
+      scrollback: 'streaming output',
+    });
+
+    act(() => {
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal,
+            session,
+            presentationMode: 'focus',
+            surfaceKind: 'interactive',
+            selected: true,
+            deferResizeSync: true,
+          }),
+        ),
+      );
+    });
+
+    const animatedSurface = container.querySelector('[data-testid="terminal-surface"]');
+    expect(animatedSurface?.getAttribute('data-defer-resize-sync')).toBe('true');
+
+    act(() => {
+      root.render(
+        createElement(
+          TerminalPlaceholderNode,
+          createNodeProps({
+            terminal,
+            session,
+            presentationMode: 'focus',
+            surfaceKind: 'interactive',
+            selected: true,
+            deferResizeSync: false,
+          }),
+        ),
+      );
+    });
+
+    const steadySurface = container.querySelector('[data-testid="terminal-surface"]');
+    expect(steadySurface?.getAttribute('data-defer-resize-sync')).toBe('false');
+  });
+
   it('renders remote sessions through the same live preview path as local sessions', () => {
     const localTerminal = createPlaceholderTerminal(0);
     const remoteTerminal = {
@@ -256,6 +317,7 @@ function createNodeProps(options: {
   surfaceKind: TerminalSurfaceModel['surfaceKind'];
   selected?: boolean;
   autoFocusAtMs?: number | null;
+  deferResizeSync?: boolean;
 }): ComponentProps<typeof TerminalPlaceholderNode> {
   return {
     id: options.terminal.id,
@@ -274,7 +336,6 @@ function createNodeProps(options: {
       },
       autoFocusAtMs: options.autoFocusAtMs ?? null,
       socketState: 'open' as const,
-      onSelect: vi.fn(),
       onBoundsChange: vi.fn(),
       onTerminalChange: vi.fn(),
       onPathSelectRequest: vi.fn(),
@@ -286,6 +347,7 @@ function createNodeProps(options: {
       onMarkdownDrop: vi.fn(),
       backendAccent: null,
       activeMarkdownLink: null,
+      deferResizeSync: options.deferResizeSync ?? false,
       allowResize: true,
       resizeZoom: 1,
     } satisfies TerminalFlowNode['data'],

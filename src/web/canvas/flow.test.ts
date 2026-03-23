@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createDefaultWorkspace, createPlaceholderMarkdown, createPlaceholderTerminal } from '../../shared/workspace';
-import { applyNodeChangesToWorkspace, buildCanvasEdges, getSelectedNodeIdFromChanges } from './flow';
+import { buildCanvasEdges, getSelectedNodeIdFromChanges, updateNodeBounds } from './flow';
 
 describe('getSelectedNodeIdFromChanges', () => {
   it('returns the newly selected node when selection changes include a node selection', () => {
@@ -43,7 +43,7 @@ describe('getSelectedNodeIdFromChanges', () => {
       markdown: [markdown],
     };
 
-    const edges = buildCanvasEdges(workspace, [
+    const edges = buildCanvasEdges(workspace.terminals, workspace.markdown, [
       {
         markdownNodeId: markdown.id,
         terminalId: terminal.id,
@@ -57,32 +57,19 @@ describe('getSelectedNodeIdFromChanges', () => {
     expect(edges[0]?.target).toBe(terminal.id);
   });
 
-  it('ignores repeated no-op node dimension and position changes', () => {
+  it('ignores repeated no-op node bounds updates', () => {
     const terminal = createPlaceholderTerminal(0);
     const workspace = {
       ...createDefaultWorkspace(),
       terminals: [terminal],
     };
 
-    const nextWorkspace = applyNodeChangesToWorkspace(workspace, [
-      {
-        id: terminal.id,
-        type: 'dimensions',
-        dimensions: {
-          width: terminal.bounds.width,
-          height: terminal.bounds.height,
-        },
-      },
-      {
-        id: terminal.id,
-        type: 'position',
-        position: {
-          x: terminal.bounds.x,
-          y: terminal.bounds.y,
-        },
-        dragging: false,
-      },
-    ]);
+    const nextWorkspace = updateNodeBounds(workspace, terminal.id, {
+      x: terminal.bounds.x,
+      y: terminal.bounds.y,
+      width: terminal.bounds.width,
+      height: terminal.bounds.height,
+    });
 
     expect(nextWorkspace).toBe(workspace);
   });

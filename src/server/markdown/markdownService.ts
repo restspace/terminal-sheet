@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import { unwatchFile, watchFile } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 
+import type { FastifyBaseLogger } from 'fastify';
+
 import type {
   MarkdownConflictChoice,
   MarkdownDocumentState,
@@ -31,6 +33,7 @@ export class MarkdownService {
   constructor(
     private readonly workspaceRoot: string,
     private readonly legacyWorkspaceRoot?: string,
+    private readonly logger?: FastifyBaseLogger,
   ) {}
 
   async syncWithWorkspace(workspace: Workspace): Promise<void> {
@@ -523,7 +526,17 @@ export class MarkdownService {
     record.state = state;
 
     for (const listener of this.documentListeners) {
-      listener(state);
+      try {
+        listener(state);
+      } catch (error) {
+        this.logger?.warn(
+          {
+            nodeId: state.nodeId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Markdown document listener failed',
+        );
+      }
     }
   }
 
@@ -531,7 +544,17 @@ export class MarkdownService {
     const links = this.getLinks();
 
     for (const listener of this.linkListeners) {
-      listener(links);
+      try {
+        listener(links);
+      } catch (error) {
+        this.logger?.warn(
+          {
+            linkCount: links.length,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Markdown link listener failed',
+        );
+      }
     }
   }
 }

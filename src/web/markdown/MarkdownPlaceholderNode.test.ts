@@ -134,7 +134,6 @@ function createNodeProps(options: {
       markdown: options.markdown,
       document: options.document,
       activeLinks: [],
-      onSelect: vi.fn(),
       onFocusRequest: vi.fn(),
       onRemove: vi.fn(),
       onBoundsChange: vi.fn(),

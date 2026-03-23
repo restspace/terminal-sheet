@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-import { serializeJsonMessage } from './jsonTransport';
-
 export const markdownDocumentStatusSchema = z.enum([
   'loading',
   'ready',
@@ -103,7 +101,3 @@ export type MarkdownResolveConflictRequest = z.infer<
   typeof markdownResolveConflictRequestSchema
 >;
 export type MarkdownLinkRequest = z.infer<typeof markdownLinkRequestSchema>;
-
-export function serializeMarkdownPayload(payload: object): string {
-  return serializeJsonMessage(payload);
-}

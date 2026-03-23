@@ -45,6 +45,7 @@ export class BackendRuntimeManager {
         options.localBackendId,
         options.localPtySessionManager,
         options.localAttentionService,
+        this.logger.child({ backendId: options.localBackendId }),
       ),
     );
   }
@@ -237,13 +238,34 @@ export class BackendRuntimeManager {
 
   private broadcastSession(message: TerminalServerSocketMessage): void {
     for (const listener of this.sessionListeners) {
-      listener(message);
+      try {
+        listener(message);
+      } catch (error) {
+        this.logger.warn(
+          {
+            messageType: message.type,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Runtime session listener failed',
+        );
+      }
     }
   }
 
   private broadcastAttention(event: AttentionEvent): void {
     for (const listener of this.attentionListeners) {
-      listener(event);
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger.warn(
+          {
+            sessionId: event.sessionId,
+            backendId: event.backendId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Runtime attention listener failed',
+        );
+      }
     }
   }
 }

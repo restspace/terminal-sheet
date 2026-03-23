@@ -11,7 +11,7 @@ import type { BackendAccent } from './backendAccents';
 import type { TerminalSurfaceModel } from '../terminals/terminalSurfaceModel';
 import type { MarkdownFlowNode, TerminalFlowNode } from '../terminals/types';
 
-export type CanvasNode = TerminalFlowNode | MarkdownFlowNode;
+type CanvasNode = TerminalFlowNode | MarkdownFlowNode;
 
 export function getSelectedNodeIdFromChanges(
   changes: NodeChange[],
@@ -36,7 +36,8 @@ export function getSelectedNodeIdFromChanges(
 }
 
 interface BuildCanvasNodesOptions {
-  workspace: Workspace;
+  terminals: Workspace['terminals'];
+  markdown: Workspace['markdown'];
   backendAccents: ReadonlyMap<string, BackendAccent>;
   selectedNodeId: string | null;
   renderedBoundsByNodeId: ReadonlyMap<
@@ -54,7 +55,7 @@ interface BuildCanvasNodesOptions {
   activeMarkdownLinkByTerminalId: ReadonlyMap<string, MarkdownLinkState>;
   activeMarkdownLinksByNodeId: ReadonlyMap<string, readonly MarkdownLinkState[]>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
-  onSelect: (nodeId: string) => void;
+  deferTerminalResizeSync: boolean;
   onBoundsChange: (
     nodeId: string,
     bounds: Partial<Workspace['terminals'][number]['bounds']>,
@@ -82,7 +83,8 @@ interface BuildCanvasNodesOptions {
 }
 
 export function buildCanvasNodes({
-  workspace,
+  terminals,
+  markdown,
   backendAccents,
   selectedNodeId,
   renderedBoundsByNodeId,
@@ -97,7 +99,7 @@ export function buildCanvasNodes({
   activeMarkdownLinkByTerminalId,
   activeMarkdownLinksByNodeId,
   socketState,
-  onSelect,
+  deferTerminalResizeSync,
   onBoundsChange,
   onTerminalChange,
   onPathSelectRequest,
@@ -114,7 +116,7 @@ export function buildCanvasNodes({
   onDocumentSave,
   onResolveConflict,
 }: BuildCanvasNodesOptions): CanvasNode[] {
-  const terminals = workspace.terminals.map((terminal) => {
+  const terminalNodes = terminals.map((terminal) => {
     const surfaceModel = terminalSurfaceModelById.get(terminal.id) ?? {
       presentationMode: 'overview',
       surfaceKind: 'summary',
@@ -144,7 +146,6 @@ export function buildCanvasNodes({
             ? focusAutoFocusAtMs
             : null,
         socketState,
-        onSelect,
         onBoundsChange,
         onTerminalChange,
         onPathSelectRequest,
@@ -156,6 +157,7 @@ export function buildCanvasNodes({
         onMarkdownDrop,
         activeMarkdownLink:
           activeMarkdownLinkByTerminalId.get(terminal.id) ?? null,
+        deferResizeSync: deferTerminalResizeSync,
         allowResize: nodesResizable,
         resizeZoom: selectedNodeId === terminal.id ? viewportZoom : 1,
       },
@@ -171,7 +173,7 @@ export function buildCanvasNodes({
     };
   });
 
-  const markdown = workspace.markdown.map((node) => {
+  const markdownNodes = markdown.map((node) => {
     const renderedBounds = renderedBoundsByNodeId.get(node.id) ?? node.bounds;
 
     return {
@@ -187,7 +189,6 @@ export function buildCanvasNodes({
         markdown: node,
         document: markdownDocuments[node.id] ?? null,
         activeLinks: activeMarkdownLinksByNodeId.get(node.id) ?? [],
-        onSelect,
         onFocusRequest: onMarkdownFocusRequest,
         onRemove: onMarkdownRemove,
         onBoundsChange,
@@ -209,15 +210,16 @@ export function buildCanvasNodes({
     };
   });
 
-  return [...terminals, ...markdown];
+  return [...terminalNodes, ...markdownNodes];
 }
 
 export function buildCanvasEdges(
-  workspace: Workspace,
+  terminals: Workspace['terminals'],
+  markdown: Workspace['markdown'],
   markdownLinks: readonly MarkdownLinkState[],
 ): Edge[] {
-  const terminalIds = new Set(workspace.terminals.map((terminal) => terminal.id));
-  const markdownIds = new Set(workspace.markdown.map((markdown) => markdown.id));
+  const terminalIds = new Set(terminals.map((terminal) => terminal.id));
+  const markdownIds = new Set(markdown.map((node) => node.id));
 
   return markdownLinks
     .filter(
@@ -239,43 +241,6 @@ export function buildCanvasEdges(
         strokeWidth: link.phase === 'active' ? 2 : 1.5,
       },
     }));
-}
-
-export function applyNodeChangesToWorkspace(
-  workspace: Workspace,
-  changes: NodeChange[],
-): Workspace {
-  let nextWorkspace = workspace;
-
-  for (const change of changes) {
-    if (change.type === 'position' && change.position) {
-      nextWorkspace = updateNodeBounds(nextWorkspace, change.id, {
-        x: change.position.x,
-        y: change.position.y,
-      });
-    }
-
-    if (change.type === 'dimensions' && change.dimensions) {
-      nextWorkspace = updateNodeBounds(nextWorkspace, change.id, {
-        width: change.dimensions.width,
-        height: change.dimensions.height,
-      });
-    }
-
-    if (change.type === 'remove') {
-      nextWorkspace = {
-        ...nextWorkspace,
-        terminals: nextWorkspace.terminals.filter(
-          (terminal) => terminal.id !== change.id,
-        ),
-        markdown: nextWorkspace.markdown.filter(
-          (markdown) => markdown.id !== change.id,
-        ),
-      };
-    }
-  }
-
-  return nextWorkspace;
 }
 
 export function updateNodeBounds(

@@ -37,6 +37,9 @@ describe('useWorkspaceRealtime', () => {
 
   it('refreshes workspace state when a newer realtime snapshot arrives', async () => {
     const workspace = createDefaultWorkspace();
+    const newerUpdatedAt = new Date(
+      new Date(workspace.updatedAt).getTime() + 60_000,
+    ).toISOString();
     const refreshWorkspaceFromServer = vi.fn(async () => true);
 
     act(() => {
@@ -53,7 +56,7 @@ describe('useWorkspaceRealtime', () => {
         type: 'workspace.updated',
         workspace: {
           ...workspace,
-          updatedAt: '2026-03-23T10:15:00.000Z',
+          updatedAt: newerUpdatedAt,
         },
       });
     });
@@ -61,7 +64,7 @@ describe('useWorkspaceRealtime', () => {
     await vi.waitFor(() => {
       expect(refreshWorkspaceFromServer).toHaveBeenCalledWith(
         expect.objectContaining({
-          updatedAt: '2026-03-23T10:15:00.000Z',
+          updatedAt: newerUpdatedAt,
         }),
       );
     });

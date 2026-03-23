@@ -27,6 +27,7 @@ export interface TerminalSurfaceProps {
   interactionMode?: 'interactive' | 'read-only';
   sizeSource?: 'measured' | 'snapshot';
   resizeAuthority?: 'owner' | 'none';
+  deferResizeSync?: boolean;
   visualScale?: number;
   snapshotCols?: number;
   scrollResetKey?: string | number | boolean;
@@ -79,6 +80,7 @@ export function useXtermSurfaceController({
   interactionMode = 'interactive',
   sizeSource = 'measured',
   resizeAuthority = 'owner',
+  deferResizeSync = false,
   visualScale = 1,
   snapshotCols,
   scrollResetKey,
@@ -93,6 +95,10 @@ export function useXtermSurfaceController({
   const lastSizeRef = useRef('');
   const lastRenderedTerminalSizeRef = useRef('');
   const lastSyncedBackendSizeRef = useRef('');
+  const pendingBackendSizeRef = useRef<{
+    cols: number;
+    rows: number;
+  } | null>(null);
   const didInitializeReadOnlySizingRef = useRef(false);
   const focusTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
@@ -104,6 +110,8 @@ export function useXtermSurfaceController({
   resizeAuthorityRef.current = resizeAuthority;
   const sizeSourceRef = useRef(sizeSource);
   sizeSourceRef.current = sizeSource;
+  const deferResizeSyncRef = useRef(deferResizeSync);
+  deferResizeSyncRef.current = deferResizeSync;
   const snapshotColsRef = useRef<number | undefined>(snapshotCols);
   snapshotColsRef.current = snapshotCols;
   const visualScaleRef = useRef(visualScale);
@@ -116,6 +124,11 @@ export function useXtermSurfaceController({
   });
   const syncBackendSize = useEffectEvent((cols: number, rows: number) => {
     if (resizeAuthorityRef.current !== 'owner') {
+      return;
+    }
+
+    if (deferResizeSyncRef.current) {
+      pendingBackendSizeRef.current = { cols, rows };
       return;
     }
 
@@ -133,6 +146,7 @@ export function useXtermSurfaceController({
     });
     onResize?.(sessionId, cols, rows);
     lastSyncedBackendSizeRef.current = sizeKey;
+    pendingBackendSizeRef.current = null;
   });
 
   useEffect(() => {
@@ -292,6 +306,7 @@ export function useXtermSurfaceController({
         resizeFrameRef.current = null;
       }
       lastSyncedBackendSizeRef.current = '';
+      pendingBackendSizeRef.current = null;
       dataDisposable?.dispose();
       container.removeEventListener('wheel', handleUserScroll);
       rendererController.dispose();
@@ -308,6 +323,19 @@ export function useXtermSurfaceController({
       });
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (deferResizeSync) {
+      return;
+    }
+
+    const pendingBackendSize = pendingBackendSizeRef.current;
+    if (!pendingBackendSize) {
+      return;
+    }
+
+    syncBackendSize(pendingBackendSize.cols, pendingBackendSize.rows);
+  }, [deferResizeSync, syncBackendSize]);
 
   useEffect(() => {
     const terminal = terminalRef.current;

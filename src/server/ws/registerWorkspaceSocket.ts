@@ -108,9 +108,17 @@ export async function registerWorkspaceSocket(
     });
 
     socket.on('message', (payload: Buffer) => {
-      const parsed = parseClientMessage(payload.toString());
+      const rawPayload = payload.toString();
+      const parsed = parseClientMessage(rawPayload);
 
       if (!parsed) {
+        app.log.warn(
+          {
+            debugSessionId,
+            payloadLength: rawPayload.length,
+          },
+          'Ignoring invalid workspace websocket client message',
+        );
         return;
       }
 
@@ -126,6 +134,16 @@ export async function registerWorkspaceSocket(
       unsubscribeDocuments();
       unsubscribeLinks();
       unsubscribeWorkspace();
+    });
+    socket.on('error', (error: unknown) => {
+      app.log.warn(
+        {
+          debugSessionId,
+          error: error instanceof Error ? error.message : String(error),
+          url: request.url,
+        },
+        'Workspace websocket error',
+      );
     });
   });
 }

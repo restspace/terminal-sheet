@@ -4,7 +4,6 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MiniMap,
   type NodeChange,
   ReactFlow,
   ReactFlowProvider,
@@ -22,11 +21,9 @@ import type {
   MarkdownLinkState,
 } from '../../shared/markdown';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
-import { isAttentionRequiredStatus } from '../../shared/events';
 import { MarkdownPlaceholderNode } from '../markdown/MarkdownPlaceholderNode';
 import { deriveTerminalSurfaceModelState } from '../terminals/terminalSurfaceModel';
 import { TerminalPlaceholderNode } from '../terminals/TerminalPlaceholderNode';
-import { getTerminalDisplayStatus } from '../terminals/presentation';
 import { buildBackendAccentsMap } from './backendAccents';
 import { getLayoutStrategy } from './layout/strategyRegistry';
 import type { NodeBounds } from './layout/types';
@@ -81,7 +78,6 @@ const nodeTypes = {
   terminal: TerminalPlaceholderNode,
   markdown: MarkdownPlaceholderNode,
 };
-const ENABLE_REACT_FLOW_MINIMAP = false;
 const LAYOUT_INTERACTION_DEBOUNCE_MS = 96;
 
 export function WorkspaceCanvas({
@@ -447,20 +443,12 @@ export function WorkspaceCanvas({
 
     return linksByNodeId;
   }, [markdownLinks]);
-  const terminalStatusById = useMemo(
-    () =>
-      new Map(
-        workspace.terminals.map((terminal) => [
-          terminal.id,
-          getTerminalDisplayStatus(terminal, sessions[terminal.id] ?? null),
-        ]),
-      ),
-    [sessions, workspace.terminals],
-  );
+  const deferTerminalResizeSync = layoutAnimationClassName.length > 0;
   const nodes = useMemo(
     () =>
       buildCanvasNodes({
-        workspace,
+        terminals: workspace.terminals,
+        markdown: workspace.markdown,
         backendAccents,
         selectedNodeId,
         renderedBoundsByNodeId,
@@ -475,7 +463,7 @@ export function WorkspaceCanvas({
         activeMarkdownLinkByTerminalId,
         activeMarkdownLinksByNodeId,
         socketState,
-        onSelect: onSelectedNodeChange,
+        deferTerminalResizeSync,
         onBoundsChange: handleNodeBoundsChange,
         onTerminalChange: handleTerminalChange,
         onPathSelectRequest: handlePathSelectRequest,
@@ -510,7 +498,6 @@ export function WorkspaceCanvas({
       onDocumentChange,
       onDocumentLoad,
       onDocumentSave,
-      onSelectedNodeChange,
       selectedNodeId,
       renderedBoundsByNodeId,
       interactionPolicy.nodesDraggable,
@@ -519,16 +506,18 @@ export function WorkspaceCanvas({
       markdownDocuments,
       activeMarkdownLinkByTerminalId,
       activeMarkdownLinksByNodeId,
+      deferTerminalResizeSync,
       socketState,
       semanticZoomMode,
       terminalSurfaceModelState.modelById,
-      workspace,
+      workspace.markdown,
+      workspace.terminals,
       onResolveConflict,
     ],
   );
   const edges = useMemo(
-    () => buildCanvasEdges(workspace, markdownLinks),
-    [markdownLinks, workspace],
+    () => buildCanvasEdges(workspace.terminals, workspace.markdown, markdownLinks),
+    [markdownLinks, workspace.markdown, workspace.terminals],
   );
 
   return (
@@ -564,29 +553,32 @@ export function WorkspaceCanvas({
               onSelectedNodeChange(nextSelectedNodeId);
             }
 
+            if (
+              !interactionPolicy.nodesDraggable &&
+              !interactionPolicy.nodesResizable
+            ) {
+              return;
+            }
+
             const boundsChanges = getNodeBoundsChanges(changes);
 
             if (!boundsChanges.length) {
               return;
             }
 
-            setRenderedBoundsByNodeId((current) =>
-              applyRenderedBoundsUpdates(current, workspace, boundsChanges),
+            const nextBoundsByNodeId = applyRenderedBoundsUpdates(
+              renderedBoundsByNodeIdRef.current,
+              workspace,
+              boundsChanges,
             );
+            setRenderedBoundsByNodeId(nextBoundsByNodeId);
 
             for (const boundsChange of boundsChanges) {
-              const nextBounds = resolveNextRenderedBounds(
-                renderedBoundsByNodeId,
-                workspace,
-                boundsChange.nodeId,
-                boundsChange.bounds,
-              );
+              const nextBounds = nextBoundsByNodeId.get(boundsChange.nodeId);
 
-              if (!nextBounds) {
-                continue;
+              if (nextBounds) {
+                onNodeBoundsChange(boundsChange.nodeId, nextBounds);
               }
-
-              onNodeBoundsChange(boundsChange.nodeId, nextBounds);
             }
           }}
           onPaneClick={(event) => {
@@ -640,48 +632,6 @@ export function WorkspaceCanvas({
             size={1}
             color="rgba(91, 110, 130, 0.35)"
           />
-          {ENABLE_REACT_FLOW_MINIMAP ? (
-            <MiniMap
-              position="bottom-right"
-              pannable
-              zoomable
-              style={{
-                width: 160,
-                height: 120,
-              }}
-              nodeColor={(node) => {
-                if (node.type === 'markdown') {
-                  return 'rgba(255, 207, 132, 0.75)';
-                }
-
-                const status = terminalStatusById.get(node.id);
-
-                if (!status) {
-                  const accent = backendAccents.get(
-                    (node.data as { terminal?: { backendId?: string } })
-                      ?.terminal?.backendId ?? '',
-                  );
-                  return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
-                }
-
-                if (isAttentionRequiredStatus(status)) {
-                  return status === 'approval-needed' || status === 'needs-input'
-                    ? 'rgba(255, 194, 102, 0.9)'
-                    : 'rgba(255, 123, 114, 0.9)';
-                }
-
-                if (status === 'completed') {
-                  return 'rgba(94, 196, 139, 0.82)';
-                }
-
-                const accent = backendAccents.get(
-                  (node.data as { terminal?: { backendId?: string } })
-                    ?.terminal?.backendId ?? '',
-                );
-                return accent?.color ?? 'rgba(138, 180, 216, 0.78)';
-              }}
-            />
-          ) : null}
           <Controls position="top-right" showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>

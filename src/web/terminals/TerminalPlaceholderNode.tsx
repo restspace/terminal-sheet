@@ -286,6 +286,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 interactionMode={surfaceModel.interactionMode}
                 sizeSource={surfaceModel.sizeSource}
                 resizeAuthority={surfaceModel.resizeAuthority}
+                deferResizeSync={data.deferResizeSync}
                 snapshotCols={session.cols}
                 scrollResetKey={previewScrollResetKey}
                 autoFocusAtMs={surfaceKind === 'interactive' ? data.autoFocusAtMs : null}
@@ -363,6 +364,7 @@ function areTerminalNodePropsEqual(
     previousData.autoFocusAtMs === nextData.autoFocusAtMs &&
     previousData.socketState === nextData.socketState &&
     previousData.activeMarkdownLink === nextData.activeMarkdownLink &&
+    previousData.deferResizeSync === nextData.deferResizeSync &&
     previousData.allowResize === nextData.allowResize &&
     previousData.resizeZoom === nextData.resizeZoom &&
     previousData.onBoundsChange === nextData.onBoundsChange &&

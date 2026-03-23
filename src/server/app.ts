@@ -50,7 +50,9 @@ export async function createServer(
   const role = options.role ?? 'standalone';
   const serverId = options.serverId ?? 'server-local';
   const localBackendId = options.localBackendId ?? LOCAL_BACKEND_ID;
-  const machineToken = options.machineToken ?? 'dev-machine-token';
+  const machineTokenState = {
+    value: options.machineToken ?? 'dev-machine-token',
+  };
   const serverIdentityFilePath = options.serverIdentityFilePath ?? options.workspaceFilePath;
   const contentRoot = options.contentRoot ?? process.cwd();
   const app = Fastify({ logger: true });
@@ -64,6 +66,7 @@ export async function createServer(
   const markdownService = new MarkdownService(
     contentRoot,
     dirname(options.workspaceFilePath),
+    app.log.child({ component: 'markdown' }),
   );
   const localFileSystemService = new LocalFileSystemService(contentRoot);
   const attentionService = new AttentionService({
@@ -139,7 +142,10 @@ export async function createServer(
   await registerBackendMachineRoutes(app, {
     role,
     serverId,
-    machineToken,
+    getMachineToken: () => machineTokenState.value,
+    setMachineToken: (machineToken) => {
+      machineTokenState.value = machineToken;
+    },
     serverIdentityFilePath,
     localBackendId,
     workspaceService,
@@ -171,7 +177,7 @@ export async function createServer(
     workspaceCommitPublisher,
   });
   await registerBackendSocket(app, {
-    machineToken,
+    getMachineToken: () => machineTokenState.value,
     ptySessionManager,
     attentionService,
   });

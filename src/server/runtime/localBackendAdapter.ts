@@ -1,3 +1,5 @@
+import type { FastifyBaseLogger } from 'fastify';
+
 import type { AttentionService } from '../integrations/attentionService';
 import type { PtySessionManager } from '../pty/ptySessionManager';
 import type {
@@ -20,15 +22,38 @@ export class LocalBackendAdapter implements BackendAdapter {
     readonly backendId: string,
     private readonly ptySessionManager: PtySessionManager,
     private readonly attentionService: AttentionService,
+    private readonly logger: FastifyBaseLogger,
   ) {
     this.unsubscribeSession = this.ptySessionManager.subscribe((message) => {
       for (const listener of this.sessionListeners) {
-        listener(message);
+        try {
+          listener(message);
+        } catch (error) {
+          this.logger.warn(
+            {
+              backendId: this.backendId,
+              messageType: message.type,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            'Local backend session listener failed',
+          );
+        }
       }
     });
     this.unsubscribeAttention = this.attentionService.subscribe((event) => {
       for (const listener of this.attentionListeners) {
-        listener(event);
+        try {
+          listener(event);
+        } catch (error) {
+          this.logger.warn(
+            {
+              backendId: this.backendId,
+              sessionId: event.sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            'Local backend attention listener failed',
+          );
+        }
       }
     });
   }

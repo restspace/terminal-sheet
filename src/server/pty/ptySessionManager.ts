@@ -53,6 +53,7 @@ interface SessionRuntimeState {
   projectRoot: string | null;
   pendingOutput: string;
   contextVersion: number;
+  disposeEpoch: number;
   lastPreparedProjectRoot: string | null;
   currentIntegrationProjectRoot: string | null;
   queuedIntegrationProjectRoot: string | null;
@@ -244,6 +245,7 @@ export class PtySessionManager {
         projectRoot: null,
         pendingOutput: '',
         contextVersion: 0,
+        disposeEpoch: 0,
         lastPreparedProjectRoot: null,
         currentIntegrationProjectRoot: null,
         queuedIntegrationProjectRoot: null,
@@ -340,6 +342,7 @@ export class PtySessionManager {
         record,
         cwd,
         record.runtime.contextVersion,
+        record.runtime.disposeEpoch,
         true,
       );
     } catch (error) {
@@ -472,9 +475,20 @@ export class PtySessionManager {
       return;
     }
 
+    record.runtime.disposeEpoch += 1;
     this.disposePty(record);
     this.options.markdownService.clearTerminalLink(sessionId);
     this.sessions.delete(sessionId);
+  }
+
+  private isSessionRecordActive(
+    record: SessionRecord,
+    disposeEpoch: number,
+  ): boolean {
+    return (
+      this.sessions.get(record.terminal.id) === record &&
+      record.runtime.disposeEpoch === disposeEpoch
+    );
   }
 
   private broadcast(message: TerminalServerSocketMessage): void {
@@ -521,6 +535,7 @@ export class PtySessionManager {
       record,
       liveCwd,
       record.runtime.contextVersion,
+      record.runtime.disposeEpoch,
       false,
     );
   }
@@ -529,12 +544,20 @@ export class PtySessionManager {
     record: SessionRecord,
     liveCwd: string,
     contextVersion: number,
+    disposeEpoch: number,
     forceSnapshot: boolean,
   ): Promise<void> {
+    if (!this.isSessionRecordActive(record, disposeEpoch)) {
+      return;
+    }
+
     const provider = this.integrationRegistry.get(record.terminal.agentType);
 
     if (!provider) {
-      if (contextVersion !== record.runtime.contextVersion) {
+      if (
+        !this.isSessionRecordActive(record, disposeEpoch) ||
+        contextVersion !== record.runtime.contextVersion
+      ) {
         return;
       }
 
@@ -560,6 +583,7 @@ export class PtySessionManager {
     const projectRoot = await provider.resolveProjectRoot(liveCwd);
 
     if (
+      !this.isSessionRecordActive(record, disposeEpoch) ||
       contextVersion !== record.runtime.contextVersion ||
       record.runtime.liveCwd !== liveCwd
     ) {
@@ -607,7 +631,7 @@ export class PtySessionManager {
     );
 
     if (shouldPrepare) {
-      this.scheduleIntegration(record, provider, projectRoot);
+      this.scheduleIntegration(record, provider, projectRoot, disposeEpoch);
     }
   }
 
@@ -639,7 +663,12 @@ export class PtySessionManager {
     record: SessionRecord,
     provider: AgentIntegrationProvider,
     projectRoot: string,
+    disposeEpoch: number,
   ): void {
+    if (!this.isSessionRecordActive(record, disposeEpoch)) {
+      return;
+    }
+
     if (record.runtime.currentIntegrationProjectRoot === projectRoot) {
       return;
     }
@@ -668,9 +697,13 @@ export class PtySessionManager {
       true,
     );
 
-    const task = this.runIntegration(record, provider, projectRoot);
+    const task = this.runIntegration(record, provider, projectRoot, disposeEpoch);
     record.runtime.integrationTask = task;
     void task.finally(() => {
+      if (!this.isSessionRecordActive(record, disposeEpoch)) {
+        return;
+      }
+
       record.runtime.integrationTask = null;
       record.runtime.currentIntegrationProjectRoot = null;
       const queuedProjectRoot = record.runtime.queuedIntegrationProjectRoot;
@@ -680,7 +713,12 @@ export class PtySessionManager {
         queuedProjectRoot &&
         queuedProjectRoot !== record.runtime.lastPreparedProjectRoot
       ) {
-        this.scheduleIntegration(record, provider, queuedProjectRoot);
+        this.scheduleIntegration(
+          record,
+          provider,
+          queuedProjectRoot,
+          record.runtime.disposeEpoch,
+        );
       }
     });
   }
@@ -689,12 +727,18 @@ export class PtySessionManager {
     record: SessionRecord,
     provider: AgentIntegrationProvider,
     projectRoot: string,
+    disposeEpoch: number,
   ): Promise<void> {
     try {
       const result = await provider.prepareForProject({
         terminal: record.terminal,
         projectRoot,
       });
+
+      if (!this.isSessionRecordActive(record, disposeEpoch)) {
+        return;
+      }
+
       record.runtime.lastPreparedProjectRoot = projectRoot;
 
       this.logger.info(
@@ -726,6 +770,10 @@ export class PtySessionManager {
         true,
       );
     } catch (error) {
+      if (!this.isSessionRecordActive(record, disposeEpoch)) {
+        return;
+      }
+
       record.runtime.lastPreparedProjectRoot = projectRoot;
       const message =
         error instanceof Error

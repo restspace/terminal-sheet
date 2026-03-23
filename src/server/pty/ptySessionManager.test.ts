@@ -163,6 +163,56 @@ describe('PtySessionManager', () => {
     expect(manager.getSnapshots()[0]?.projectRoot).toBeNull();
   });
 
+  it('ignores integration updates that complete after session disposal', async () => {
+    let resolvePreparation: () => void = () => {
+      throw new Error('Expected integration preparation callback to be available.');
+    };
+    const preparation = new Promise<{ status: 'configured'; message: string }>((resolve) => {
+      resolvePreparation = () => {
+        resolve({
+          status: 'configured',
+          message: 'Configured after delay',
+        });
+      };
+    });
+    const provider = {
+      agentType: 'claude' as const,
+      supports: (agentType: string) => agentType === 'claude',
+      resolveProjectRoot: vi.fn(async () => 'C:\\workspace\\repo-a'),
+      prepareForProject: vi.fn(async () => preparation),
+    };
+    const manager = createManager({
+      get: vi.fn(() => provider),
+    });
+    const delivered = vi.fn();
+    manager.subscribe(delivered);
+
+    const workspace = createWorkspace({
+      id: 'terminal-dispose',
+      shell: 'powershell.exe',
+      cwd: './repo-a',
+      agentType: 'claude',
+    });
+    await manager.syncWithWorkspace(workspace);
+    await vi.waitFor(() => {
+      expect(provider.prepareForProject).toHaveBeenCalledTimes(1);
+    });
+
+    await manager.syncWithWorkspace({
+      ...workspace,
+      terminals: [],
+    });
+    const callCountAfterDispose = delivered.mock.calls.length;
+    expect(manager.hasSession('terminal-dispose')).toBe(false);
+    resolvePreparation();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(delivered).toHaveBeenCalledTimes(callCountAfterDispose);
+    expect(manager.getSnapshots()).toHaveLength(0);
+  });
+
   it('continues notifying later listeners when one listener throws', () => {
     const logger = createLogger();
     const attentionService = new AttentionService({

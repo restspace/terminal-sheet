@@ -5,7 +5,10 @@ import {
   backendConnectionSchema,
   LOCAL_BACKEND_ID,
 } from './backends';
+import { agentTypeSchema } from './agentTypes';
 import { getDefaultShell } from './platform';
+
+export { agentTypeSchema } from './agentTypes';
 
 export const terminalStatusSchema = z.enum([
   'idle',
@@ -17,8 +20,6 @@ export const terminalStatusSchema = z.enum([
   'failed',
   'disconnected',
 ]);
-
-export const agentTypeSchema = z.enum(['claude', 'codex', 'shell']);
 
 export const nodeBoundsSchema = z.object({
   x: z.number(),
