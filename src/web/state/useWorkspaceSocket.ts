@@ -19,7 +19,7 @@ interface UseWorkspaceSocketOptions {
 
 interface WorkspaceSocketController {
   socketState: TerminalSocketState;
-  send: (message: TerminalClientSocketMessage) => void;
+  send: (message: TerminalClientSocketMessage) => boolean;
 }
 
 export function useWorkspaceSocket({
@@ -113,10 +113,11 @@ export function useWorkspaceSocket({
     const socket = socketRef.current;
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
 
     socket.send(serializeJsonMessage(message));
+    return true;
   }, []);
 
   return {

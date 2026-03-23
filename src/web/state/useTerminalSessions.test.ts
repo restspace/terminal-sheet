@@ -194,6 +194,51 @@ describe('useTerminalSessions helpers', () => {
     expect(next['terminal-1']).toBe(retainedSession);
   });
 
+  it('keeps existing sessions when websocket init payload is empty', () => {
+    const currentSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+      scrollback: 'keep me',
+    });
+    const current = {
+      'terminal-1': currentSession,
+    };
+
+    const next = applyServerMessage(current, {
+      type: 'session.init',
+      sessions: [],
+    });
+
+    expect(next).toBe(current);
+  });
+
+  it('keeps existing sessions missing from websocket init payload', () => {
+    const firstSession = createSessionSnapshot({
+      sessionId: 'terminal-1',
+      scrollback: 'keep me',
+    });
+    const secondSession = createSessionSnapshot({
+      sessionId: 'terminal-2',
+      scrollback: 'also keep me',
+    });
+    const current = {
+      'terminal-1': firstSession,
+      'terminal-2': secondSession,
+    };
+    const refreshedSecondSession = {
+      ...secondSession,
+      summary: 'updated',
+      lastActivityAt: '2026-03-20T12:01:00.000Z',
+    };
+
+    const next = applyServerMessage(current, {
+      type: 'session.init',
+      sessions: [refreshedSecondSession],
+    });
+
+    expect(next['terminal-1']).toBe(firstSession);
+    expect(next['terminal-2']).toEqual(refreshedSecondSession);
+  });
+
   it('ignores identical session snapshot messages', () => {
     const currentSession = createSessionSnapshot({
       sessionId: 'terminal-1',

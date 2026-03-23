@@ -287,7 +287,9 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 sizeSource={surfaceModel.sizeSource}
                 resizeAuthority={surfaceModel.resizeAuthority}
                 deferResizeSync={data.deferResizeSync}
+                canSyncResize={data.socketState === 'open'}
                 snapshotCols={session.cols}
+                snapshotRows={session.rows}
                 scrollResetKey={previewScrollResetKey}
                 autoFocusAtMs={surfaceKind === 'interactive' ? data.autoFocusAtMs : null}
                 onInput={onInput}

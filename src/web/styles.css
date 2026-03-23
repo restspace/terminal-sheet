@@ -1212,6 +1212,40 @@ button:disabled {
   inset: 0;
 }
 
+.terminal-selection-context-menu {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  min-width: 8.5rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(138, 180, 216, 0.35);
+  background: rgba(7, 17, 26, 0.98);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.42);
+}
+
+.terminal-selection-context-menu-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #d7e4ee;
+  text-align: left;
+  font-family: 'IBM Plex Mono', 'Cascadia Code', monospace;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  padding: 0.3rem 0.45rem;
+  cursor: pointer;
+}
+
+.terminal-selection-context-menu-item:hover,
+.terminal-selection-context-menu-item:focus-visible {
+  outline: none;
+  background: rgba(138, 180, 216, 0.22);
+}
+
+.terminal-selection-context-menu-item.is-dismiss {
+  color: rgba(215, 228, 238, 0.78);
+}
+
 .terminal-preview-surface:focus-visible {
   outline: 1px solid rgba(154, 202, 245, 0.45);
   outline-offset: -1px;

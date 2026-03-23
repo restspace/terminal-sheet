@@ -29,23 +29,24 @@ function getCssTransformScale(element: HTMLElement): number {
 export function measureCellSize(
   container: HTMLDivElement,
   fallback: TerminalCellSize = DEFAULT_TERMINAL_CELL_SIZE,
+  fontSize: number = TERMINAL_FONT_SIZE,
 ): TerminalCellSize {
   const probe = document.createElement('span');
   probe.textContent = PROBE_TEXT;
-  probe.style.position = 'absolute';
+  probe.style.display = 'inline-block';
   probe.style.visibility = 'hidden';
   probe.style.pointerEvents = 'none';
   probe.style.whiteSpace = 'pre';
   probe.style.fontFamily = TERMINAL_FONT_FAMILY;
-  probe.style.fontSize = `${TERMINAL_FONT_SIZE}px`;
-  probe.style.lineHeight = 'normal';
+  probe.style.fontSize = `${fontSize}px`;
+  probe.style.lineHeight = String(TERMINAL_LINE_HEIGHT);
 
   container.appendChild(probe);
 
   const scale = getCssTransformScale(container);
   const probeRect = probe.getBoundingClientRect();
   const width = probeRect.width / scale / PROBE_TEXT.length;
-  const height = (probeRect.height / scale) * TERMINAL_LINE_HEIGHT;
+  const height = probeRect.height / scale;
 
   probe.remove();
 

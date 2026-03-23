@@ -3,14 +3,15 @@ import type {
   TerminalIntegrationState,
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
+import {
+  DEFAULT_TERMINAL_COLS,
+  DEFAULT_TERMINAL_ROWS,
+} from '../../shared/terminalSizeConstraints';
 import type { AgentType } from '../../shared/workspace';
 import type { AttentionEvent } from '../../shared/events';
 import { appendScrollback } from '../../shared/scrollback';
 import type { TerminalNode, TerminalStatus } from '../../shared/workspace';
 import { extractPreviewLines, renderTerminalText } from './outputPreview';
-
-const DEFAULT_COLS = 100;
-const DEFAULT_ROWS = 30;
 
 export function createInitialSnapshot(
   sessionId: string,
@@ -36,8 +37,8 @@ export function createInitialSnapshot(
     summary: 'Session not started yet.',
     exitCode: null,
     disconnectReason: null,
-    cols: DEFAULT_COLS,
-    rows: DEFAULT_ROWS,
+    cols: DEFAULT_TERMINAL_COLS,
+    rows: DEFAULT_TERMINAL_ROWS,
     liveCwd,
     projectRoot: null,
     integration: createInitialIntegrationState(agentType),

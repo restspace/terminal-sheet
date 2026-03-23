@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { TerminalNode } from '../../shared/workspace';
 import {
+  DEFAULT_TERMINAL_COLS,
+  DEFAULT_TERMINAL_ROWS,
+} from '../../shared/terminalSizeConstraints';
+import {
   applyAttentionEventSnapshot,
   createInputSnapshot,
   createExitSnapshot,
@@ -32,6 +36,13 @@ const terminal: TerminalNode = {
 };
 
 describe('session snapshot helpers', () => {
+  it('uses conservative default PTY dimensions before frontend sizing sync', () => {
+    const snapshot = createInitialSnapshot(terminal.id, 'local', terminal.agentType);
+
+    expect(snapshot.cols).toBe(DEFAULT_TERMINAL_COLS);
+    expect(snapshot.rows).toBe(DEFAULT_TERMINAL_ROWS);
+  });
+
   it('creates a running snapshot with cleared output state', () => {
     const snapshot = createRunningSnapshot({
       snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),

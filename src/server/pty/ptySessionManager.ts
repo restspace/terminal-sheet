@@ -5,6 +5,7 @@ import { spawn, type IDisposable, type IPty } from 'node-pty';
 
 import { LOCAL_BACKEND_ID } from '../../shared/backends';
 import type { AttentionEvent } from '../../shared/events';
+import { clampTerminalDimensions } from '../../shared/terminalSizeConstraints';
 import {
   type TerminalIntegrationState,
   type TerminalServerSocketMessage,
@@ -180,8 +181,21 @@ export class PtySessionManager {
       return false;
     }
 
-    const nextCols = clamp(cols, 20, 240);
-    const nextRows = clamp(rows, 8, 120);
+    const nextDimensions = clampTerminalDimensions(cols, rows);
+    const { cols: nextCols, rows: nextRows } = nextDimensions;
+
+    if (nextCols !== cols || nextRows !== rows) {
+      this.logger.warn(
+        {
+          sessionId,
+          requestedCols: cols,
+          requestedRows: rows,
+          clampedCols: nextCols,
+          clampedRows: nextRows,
+        },
+        'Clamped PTY resize request to allowed bounds',
+      );
+    }
 
     record.pty?.resize(nextCols, nextRows);
     this.setSnapshot(
@@ -822,10 +836,6 @@ function buildSessionOutputState(
   void _scrollback;
 
   return state;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 function createIntegrationState(

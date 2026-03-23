@@ -181,7 +181,7 @@ export function useTerminalSessions({
     ),
     resizeSession: useCallback(
       (sessionId: string, cols: number, rows: number) => {
-        send({
+        return send({
           type: 'terminal.resize',
           sessionId,
           cols,

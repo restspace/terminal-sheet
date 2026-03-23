@@ -2,6 +2,7 @@ import {
   useEffect,
   useEffectEvent,
   useRef,
+  useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -12,6 +13,12 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 
 import { MAX_SCROLLBACK_CHARS } from '../../shared/scrollback';
+import {
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_ROWS,
+  MIN_TERMINAL_COLS,
+  MIN_TERMINAL_ROWS,
+} from '../../shared/terminalSizeConstraints';
 import { logStateDebug } from '../debug/stateDebug';
 import { getIncrementalWrite } from './incrementalWrite';
 import {
@@ -30,19 +37,20 @@ export interface TerminalSurfaceProps {
   deferResizeSync?: boolean;
   visualScale?: number;
   snapshotCols?: number;
+  snapshotRows?: number;
+  canSyncResize?: boolean;
   scrollResetKey?: string | number | boolean;
   autoFocusAtMs?: number | null;
   onInput?: (sessionId: string, data: string) => void;
-  onResize?: (sessionId: string, cols: number, rows: number) => void;
+  onResize?: (sessionId: string, cols: number, rows: number) => boolean | void;
 }
 
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
 const TERMINAL_FONT_SIZE = 10.5;
 const TERMINAL_LINE_HEIGHT = 1.1;
 const TERMINAL_SCROLLBACK_LINES = Math.ceil(MAX_SCROLLBACK_CHARS / 48);
-const MIN_TERMINAL_COLS = 12;
-const MIN_TERMINAL_ROWS = 1;
 const WEBGL_PRESERVE_DRAWING_BUFFER = false;
+const RESIZE_SYNC_RETRY_MS = 100;
 const TERMINAL_THEME = {
   background: '#07111a',
   foreground: '#d7e4ee',
@@ -73,6 +81,11 @@ interface RendererController {
   dispose: () => void;
 }
 
+interface TerminalSelectionContextMenu {
+  x: number;
+  y: number;
+}
+
 export function useXtermSurfaceController({
   sessionId,
   scrollback,
@@ -83,6 +96,8 @@ export function useXtermSurfaceController({
   deferResizeSync = false,
   visualScale = 1,
   snapshotCols,
+  snapshotRows,
+  canSyncResize = true,
   scrollResetKey,
   autoFocusAtMs,
   onInput,
@@ -99,9 +114,13 @@ export function useXtermSurfaceController({
     cols: number;
     rows: number;
   } | null>(null);
+  const lastResizeMismatchKeyRef = useRef('');
+  const pendingResizeRetryTimerRef = useRef<number | null>(null);
   const didInitializeReadOnlySizingRef = useRef(false);
   const focusTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
+  const [selectionContextMenu, setSelectionContextMenu] =
+    useState<TerminalSelectionContextMenu | null>(null);
   const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
   const shouldStickToBottomRef = useRef(true);
   const readOnlyRef = useRef(readOnly);
@@ -114,6 +133,10 @@ export function useXtermSurfaceController({
   deferResizeSyncRef.current = deferResizeSync;
   const snapshotColsRef = useRef<number | undefined>(snapshotCols);
   snapshotColsRef.current = snapshotCols;
+  const snapshotRowsRef = useRef<number | undefined>(snapshotRows);
+  snapshotRowsRef.current = snapshotRows;
+  const canSyncResizeRef = useRef(canSyncResize);
+  canSyncResizeRef.current = canSyncResize;
   const visualScaleRef = useRef(visualScale);
   visualScaleRef.current = visualScale;
   const scheduleFitRef = useRef<(() => void) | null>(null);
@@ -122,32 +145,59 @@ export function useXtermSurfaceController({
       onInput?.(sessionId, data);
     }
   });
-  const syncBackendSize = useEffectEvent((cols: number, rows: number) => {
-    if (resizeAuthorityRef.current !== 'owner') {
-      return;
-    }
+  const syncBackendSize = useEffectEvent(
+    (cols: number, rows: number, force = false) => {
+      if (deferResizeSyncRef.current) {
+        pendingBackendSizeRef.current = { cols, rows };
+        return;
+      }
 
-    if (deferResizeSyncRef.current) {
-      pendingBackendSizeRef.current = { cols, rows };
-      return;
-    }
+      if (!canSyncResizeRef.current) {
+        pendingBackendSizeRef.current = { cols, rows };
+        return;
+      }
 
-    const sizeKey = `${cols}x${rows}`;
-    if (sizeKey === lastSyncedBackendSizeRef.current) {
-      return;
-    }
+      const sizeKey = `${cols}x${rows}`;
+      if (!force && sizeKey === lastSyncedBackendSizeRef.current) {
+        return;
+      }
 
-    logStateDebug('terminalSurface', 'resizeSentToBackend', {
-      sessionId,
-      cols,
-      rows,
-      readOnly: readOnlyRef.current,
-      debounced: false,
-    });
-    onResize?.(sessionId, cols, rows);
-    lastSyncedBackendSizeRef.current = sizeKey;
-    pendingBackendSizeRef.current = null;
-  });
+      logStateDebug('terminalSurface', 'resizeSentToBackend', {
+        sessionId,
+        cols,
+        rows,
+        readOnly: readOnlyRef.current,
+        debounced: false,
+        force,
+      });
+      const resizeAccepted = onResize?.(sessionId, cols, rows);
+
+      if (resizeAccepted === false) {
+        pendingBackendSizeRef.current = { cols, rows };
+        if (pendingResizeRetryTimerRef.current === null) {
+          pendingResizeRetryTimerRef.current = window.setTimeout(() => {
+            pendingResizeRetryTimerRef.current = null;
+            const pendingBackendSize = pendingBackendSizeRef.current;
+            if (!pendingBackendSize) {
+              return;
+            }
+            if (deferResizeSyncRef.current || !canSyncResizeRef.current) {
+              return;
+            }
+            syncBackendSize(pendingBackendSize.cols, pendingBackendSize.rows);
+          }, RESIZE_SYNC_RETRY_MS);
+        }
+        return;
+      }
+
+      lastSyncedBackendSizeRef.current = sizeKey;
+      pendingBackendSizeRef.current = null;
+      if (pendingResizeRetryTimerRef.current !== null) {
+        window.clearTimeout(pendingResizeRetryTimerRef.current);
+        pendingResizeRetryTimerRef.current = null;
+      }
+    },
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -200,13 +250,18 @@ export function useXtermSurfaceController({
         terminal,
         container,
         cellSizeRef.current,
+        getTerminalFontSize(visualScaleRef.current),
       );
       const size = measureTerminal(container, cellSizeRef.current);
       const effectiveCols =
         currentSizeSource === 'snapshot' && snapshotColsRef.current
           ? snapshotColsRef.current
           : size.cols;
-      const terminalSizeKey = `${effectiveCols}x${size.rows}`;
+      const effectiveRows =
+        currentSizeSource === 'snapshot' && snapshotRowsRef.current
+          ? snapshotRowsRef.current
+          : size.rows;
+      const terminalSizeKey = `${effectiveCols}x${effectiveRows}`;
       const sizeKey = terminalSizeKey;
 
       if (sizeKey === lastSizeRef.current) {
@@ -220,16 +275,18 @@ export function useXtermSurfaceController({
         resizeAuthority: currentResizeAuthority,
         sizeSource: currentSizeSource,
         effectiveCols,
-        rows: size.rows,
+        rows: effectiveRows,
         measuredCols: size.cols,
+        measuredRows: size.rows,
         snapshotCols: snapshotColsRef.current ?? null,
+        snapshotRows: snapshotRowsRef.current ?? null,
         containerWidth: container.clientWidth,
         containerHeight: container.clientHeight,
       });
 
       if (isReadOnly) {
         const cols = effectiveCols;
-        const rows = size.rows;
+        const rows = effectiveRows;
         const shouldResizeTerminal =
           terminalSizeKey !== lastRenderedTerminalSizeRef.current;
         const stickToBottom =
@@ -247,10 +304,12 @@ export function useXtermSurfaceController({
           terminalSizeKey !== lastRenderedTerminalSizeRef.current;
         terminal.write('', () => {
           if (shouldResizeTerminal) {
-            terminal.resize(effectiveCols, size.rows);
+            terminal.resize(effectiveCols, effectiveRows);
             lastRenderedTerminalSizeRef.current = terminalSizeKey;
           }
-          syncBackendSize(effectiveCols, size.rows);
+          if (currentResizeAuthority === 'owner') {
+            syncBackendSize(effectiveCols, effectiveRows);
+          }
           restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
         });
       }
@@ -305,6 +364,10 @@ export function useXtermSurfaceController({
         window.cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
       }
+      if (pendingResizeRetryTimerRef.current !== null) {
+        window.clearTimeout(pendingResizeRetryTimerRef.current);
+        pendingResizeRetryTimerRef.current = null;
+      }
       lastSyncedBackendSizeRef.current = '';
       pendingBackendSizeRef.current = null;
       dataDisposable?.dispose();
@@ -325,7 +388,7 @@ export function useXtermSurfaceController({
   }, [sessionId]);
 
   useEffect(() => {
-    if (deferResizeSync) {
+    if (deferResizeSync || !canSyncResize) {
       return;
     }
 
@@ -335,7 +398,78 @@ export function useXtermSurfaceController({
     }
 
     syncBackendSize(pendingBackendSize.cols, pendingBackendSize.rows);
-  }, [deferResizeSync, syncBackendSize]);
+  }, [canSyncResize, deferResizeSync, syncBackendSize]);
+
+  useEffect(() => {
+    if (readOnly || resizeAuthority !== 'owner') {
+      return;
+    }
+
+    if (!snapshotCols || !snapshotRows) {
+      return;
+    }
+
+    const backendSizeKey = `${snapshotCols}x${snapshotRows}`;
+    const renderedSizeKey = lastRenderedTerminalSizeRef.current;
+    const lastSyncedSizeKey = lastSyncedBackendSizeRef.current;
+
+    if (
+      !renderedSizeKey ||
+      backendSizeKey === renderedSizeKey ||
+      backendSizeKey === lastSyncedSizeKey
+    ) {
+      lastResizeMismatchKeyRef.current = '';
+      return;
+    }
+
+    const renderedSize = parseTerminalSizeKey(renderedSizeKey);
+
+    if (!renderedSize) {
+      lastResizeMismatchKeyRef.current = '';
+      return;
+    }
+
+    const pendingBackendSize = pendingBackendSizeRef.current;
+    const pendingSizeKey = pendingBackendSize
+      ? `${pendingBackendSize.cols}x${pendingBackendSize.rows}`
+      : null;
+
+    if (pendingSizeKey === renderedSizeKey) {
+      lastResizeMismatchKeyRef.current = '';
+      return;
+    }
+
+    const mismatchKey = `${renderedSizeKey}->${backendSizeKey}->${pendingSizeKey ?? 'none'}`;
+    if (mismatchKey === lastResizeMismatchKeyRef.current) {
+      return;
+    }
+
+    lastResizeMismatchKeyRef.current = mismatchKey;
+    logStateDebug('terminalSurface', 'backendResizeMismatchRecover', {
+      sessionId,
+      renderedSize: renderedSizeKey,
+      expectedSize: lastSyncedSizeKey,
+      backendSize: backendSizeKey,
+      pendingSize: pendingSizeKey,
+      canSyncResize,
+      deferResizeSync,
+    });
+
+    if (deferResizeSync || !canSyncResize) {
+      pendingBackendSizeRef.current = renderedSize;
+      return;
+    }
+
+    syncBackendSize(renderedSize.cols, renderedSize.rows, true);
+  }, [
+    canSyncResize,
+    deferResizeSync,
+    readOnly,
+    resizeAuthority,
+    sessionId,
+    snapshotCols,
+    snapshotRows,
+  ]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -387,7 +521,7 @@ export function useXtermSurfaceController({
 
     lastSizeRef.current = '';
     scheduleFitRef.current?.();
-  }, [readOnly, resizeAuthority, sizeSource, snapshotCols]);
+  }, [readOnly, resizeAuthority, sizeSource, snapshotCols, snapshotRows]);
 
   useEffect(() => {
     if (readOnly) {
@@ -464,17 +598,102 @@ export function useXtermSurfaceController({
 
   const onClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
     focusTerminalInput(terminalRef.current);
+    setSelectionContextMenu(null);
     if (!readOnly) {
       event.stopPropagation();
     }
   };
 
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (readOnly) {
+      return;
+    }
+
+    const terminal = terminalRef.current;
+    const hasSelection = terminal?.hasSelection() ?? false;
+    const selectionText = hasSelection ? terminal?.getSelection() ?? '' : '';
+
+    if (!hasSelection || selectionText.length === 0) {
+      setSelectionContextMenu(null);
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    focusTerminalInput(terminal);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setSelectionContextMenu({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+  };
+
+  const onDismissSelectionContextMenu = () => {
+    setSelectionContextMenu(null);
+  };
+
+  const onCopySelection = async () => {
+    const terminal = terminalRef.current;
+    await copyTerminalSelection(terminal);
+    setSelectionContextMenu(null);
+  };
+
+  const onCutSelection = async () => {
+    const terminal = terminalRef.current;
+    await copyTerminalSelection(terminal);
+    terminal?.clearSelection();
+    setSelectionContextMenu(null);
+  };
+
+  useEffect(() => {
+    if (!selectionContextMenu) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('.terminal-selection-context-menu')
+      ) {
+        return;
+      }
+
+      setSelectionContextMenu(null);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectionContextMenu(null);
+      }
+    };
+
+    const handleWindowBlur = () => {
+      setSelectionContextMenu(null);
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [selectionContextMenu]);
+
   return {
     containerRef,
     surfaceClassName: buildSurfaceClassName(className, readOnly),
     isReadOnly: readOnly,
+    selectionContextMenu,
     onPointerDown: readOnly ? undefined : stopCanvasInteractionPropagation,
     onClick,
+    onContextMenu,
+    onDismissSelectionContextMenu,
+    onCopySelection,
+    onCutSelection,
     onWheel: stopCanvasInteractionPropagation,
   };
 }
@@ -490,8 +709,16 @@ function measureTerminal(
   const height = Math.max(container.clientHeight, 0);
 
   return {
-    cols: clamp(Math.floor(width / cellSize.width), MIN_TERMINAL_COLS, 240),
-    rows: clamp(Math.floor(height / cellSize.height), MIN_TERMINAL_ROWS, 120),
+    cols: clamp(
+      Math.floor(width / cellSize.width),
+      MIN_TERMINAL_COLS,
+      MAX_TERMINAL_COLS,
+    ),
+    rows: clamp(
+      Math.floor(height / cellSize.height),
+      MIN_TERMINAL_ROWS,
+      MAX_TERMINAL_ROWS,
+    ),
   };
 }
 
@@ -499,6 +726,7 @@ function getTerminalCellSize(
   terminal: Terminal,
   container: HTMLDivElement,
   fallback: TerminalCellSize,
+  fontSize: number,
 ): TerminalCellSize {
   const measuredCellSize = getMeasuredRendererCellSize(terminal);
 
@@ -506,7 +734,7 @@ function getTerminalCellSize(
     return measuredCellSize;
   }
 
-  return measureCellSize(container, fallback);
+  return measureCellSize(container, fallback, fontSize);
 }
 
 function getMeasuredRendererCellSize(
@@ -543,6 +771,30 @@ function getMeasuredRendererCellSize(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function parseTerminalSizeKey(
+  sizeKey: string,
+): {
+  cols: number;
+  rows: number;
+} | null {
+  const [rawCols, rawRows] = sizeKey.split('x');
+  const cols = Number(rawCols);
+  const rows = Number(rawRows);
+
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+    return null;
+  }
+
+  if (cols <= 0 || rows <= 0) {
+    return null;
+  }
+
+  return {
+    cols,
+    rows,
+  };
 }
 
 function focusTerminalInput(terminal: Terminal | null): void {
@@ -810,4 +1062,50 @@ function getTerminalFontSize(visualScale: number): number {
 
 function almostEqualOption(value: unknown, nextValue: number): boolean {
   return typeof value === 'number' && Math.abs(value - nextValue) < 0.001;
+}
+
+async function copyTerminalSelection(terminal: Terminal | null): Promise<void> {
+  if (!terminal?.hasSelection()) {
+    return;
+  }
+
+  const selectionText = terminal.getSelection();
+  if (selectionText.length === 0) {
+    return;
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(selectionText);
+      return;
+    } catch {
+      // Fall back for environments where clipboard writes are blocked.
+    }
+  }
+
+  copyTextWithDocumentExecCommand(selectionText);
+}
+
+function copyTextWithDocumentExecCommand(text: string): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  textarea.style.opacity = '0';
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    document.execCommand('copy');
+  } catch {
+    // Ignore environments where execCommand is unavailable.
+  } finally {
+    textarea.remove();
+  }
 }

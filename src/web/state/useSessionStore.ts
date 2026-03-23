@@ -60,9 +60,7 @@ export function applyServerMessage(
     case 'workspace.updated':
       return current;
     case 'session.init':
-      return mergeSessionSnapshots(current, message.sessions, {
-        replaceAll: true,
-      });
+      return mergeSessionSnapshots(current, message.sessions);
     case 'session.snapshot': {
       const existing = current[message.session.sessionId];
 

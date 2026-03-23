@@ -1,5 +1,9 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 
+import {
+  MIN_TERMINAL_COLS,
+  MIN_TERMINAL_ROWS,
+} from '../../shared/terminalSizeConstraints';
 import type { Workspace } from '../../shared/workspace';
 import { AttentionService } from '../integrations/attentionService';
 import type { AgentIntegrationRegistry } from '../integrations/agentIntegration';
@@ -247,6 +251,50 @@ describe('PtySessionManager', () => {
     ).not.toThrow();
     expect(delivered).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs when resize requests are clamped to backend bounds', async () => {
+    const logger = createLogger();
+    const attentionService = new AttentionService({
+      receiverUrl: 'http://127.0.0.1:4312/api/attention',
+      token: 'test-token',
+    });
+    const manager = new PtySessionManager(logger as never, {
+      attentionService,
+      attentionReceiverUrl: attentionService.getSetup().receiverUrl,
+      attentionToken: attentionService.getSetup().token,
+      markdownService: createMarkdownServiceStub(),
+      workspaceRoot: 'C:\\workspace',
+      integrationRegistry: {
+        get: vi.fn(() => null),
+      },
+    });
+
+    await manager.syncWithWorkspace(
+      createWorkspace({
+        id: 'terminal-clamp',
+        shell: 'powershell.exe',
+        cwd: '.',
+        agentType: 'shell',
+      }),
+    );
+
+    const pty = expectSpawnedPty();
+    expect(manager.resizeSession('terminal-clamp', 15, 4)).toBe(true);
+    expect(pty.resize).toHaveBeenCalledWith(
+      MIN_TERMINAL_COLS,
+      MIN_TERMINAL_ROWS,
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'terminal-clamp',
+        requestedCols: 15,
+        requestedRows: 4,
+        clampedCols: MIN_TERMINAL_COLS,
+        clampedRows: MIN_TERMINAL_ROWS,
+      }),
+      'Clamped PTY resize request to allowed bounds',
+    );
   });
 });
 
