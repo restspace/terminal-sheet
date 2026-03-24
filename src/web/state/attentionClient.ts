@@ -1,7 +1,8 @@
 import { attentionIntegrationSetupSchema } from '../../shared/events';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 
 export async function fetchAttentionSetup() {
-  const response = await fetch('/api/attention/setup');
+  const response = await fetchWithFrontendLease('/api/attention/setup');
 
   if (!response.ok) {
     throw new Error(`Attention setup request failed with ${response.status}`);

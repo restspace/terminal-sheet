@@ -2,18 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { TerminalNode } from '../../shared/workspace';
 import {
-  DEFAULT_TERMINAL_COLS,
-  DEFAULT_TERMINAL_ROWS,
-  estimateTerminalDimensionsFromNodeBounds,
-} from '../../shared/terminalSizeConstraints';
-import {
   applyAttentionEventSnapshot,
+  createAppliedResizeSnapshot,
   createInputSnapshot,
   createExitSnapshot,
   createInitialSnapshot,
   createOutputSnapshot,
   createReadSnapshot,
-  createResizeSnapshot,
   createRunningSnapshot,
 } from './sessionSnapshot';
 
@@ -37,25 +32,24 @@ const terminal: TerminalNode = {
 };
 
 describe('session snapshot helpers', () => {
-  it('uses conservative default PTY dimensions when no node bounds hint is provided', () => {
+  it('starts without an applied PTY size before spawn or resize acknowledgement', () => {
     const snapshot = createInitialSnapshot(terminal.id, 'local', terminal.agentType);
-
-    expect(snapshot.cols).toBe(DEFAULT_TERMINAL_COLS);
-    expect(snapshot.rows).toBe(DEFAULT_TERMINAL_ROWS);
+    expect(snapshot.cols).toBeNull();
+    expect(snapshot.rows).toBeNull();
+    expect(snapshot.appliedResizeGeneration).toBeNull();
   });
 
-  it('estimates PTY dimensions from terminal node bounds with clamping', () => {
-    const snapshot = createInitialSnapshot(
-      terminal.id,
-      'local',
-      terminal.agentType,
-      null,
-      terminal.bounds,
+  it('records PTY-applied resize generations separately from desired local size', () => {
+    const snapshot = createAppliedResizeSnapshot(
+      createInitialSnapshot(terminal.id, 'local', terminal.agentType),
+      120,
+      40,
+      3,
     );
-    const expected = estimateTerminalDimensionsFromNodeBounds(terminal.bounds);
 
-    expect(snapshot.cols).toBe(expected.cols);
-    expect(snapshot.rows).toBe(expected.rows);
+    expect(snapshot.cols).toBe(120);
+    expect(snapshot.rows).toBe(40);
+    expect(snapshot.appliedResizeGeneration).toBe(3);
   });
 
   it('creates a running snapshot with cleared output state', () => {
@@ -103,7 +97,7 @@ describe('session snapshot helpers', () => {
       timestamp: '2026-03-09T20:00:01.000Z',
     });
 
-    const resized = createResizeSnapshot(withOutput, 120, 40);
+    const resized = createAppliedResizeSnapshot(withOutput, 120, 40, 4);
     const read = createReadSnapshot(resized);
     const exited = createExitSnapshot({
       snapshot: read,
@@ -114,6 +108,7 @@ describe('session snapshot helpers', () => {
     expect(read.unreadCount).toBe(0);
     expect(resized.cols).toBe(120);
     expect(resized.rows).toBe(40);
+    expect(resized.appliedResizeGeneration).toBe(4);
     expect(exited.status).toBe('failed');
     expect(exited.commandState).toBe('idle-at-prompt');
   });

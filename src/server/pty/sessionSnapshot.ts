@@ -3,12 +3,6 @@ import type {
   TerminalIntegrationState,
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
-import {
-  DEFAULT_TERMINAL_COLS,
-  DEFAULT_TERMINAL_ROWS,
-  estimateTerminalDimensionsFromNodeBounds,
-  type NodeBoundsSize,
-} from '../../shared/terminalSizeConstraints';
 import type { AgentType } from '../../shared/workspace';
 import type { AttentionEvent } from '../../shared/events';
 import { appendScrollback } from '../../shared/scrollback';
@@ -20,11 +14,7 @@ export function createInitialSnapshot(
   backendId: string,
   agentType: AgentType,
   liveCwd: string | null = null,
-  bounds?: NodeBoundsSize,
 ): TerminalSessionSnapshot {
-  const { cols, rows } = bounds
-    ? estimateTerminalDimensionsFromNodeBounds(bounds)
-    : { cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
 
   return {
     sessionId,
@@ -44,8 +34,9 @@ export function createInitialSnapshot(
     summary: 'Session not started yet.',
     exitCode: null,
     disconnectReason: null,
-    cols,
-    rows,
+    cols: null,
+    rows: null,
+    appliedResizeGeneration: null,
     liveCwd,
     projectRoot: null,
     integration: createInitialIntegrationState(agentType),
@@ -119,15 +110,17 @@ export function createInputSnapshot(
   };
 }
 
-export function createResizeSnapshot(
+export function createAppliedResizeSnapshot(
   snapshot: TerminalSessionSnapshot,
   cols: number,
   rows: number,
+  appliedResizeGeneration: number,
 ): TerminalSessionSnapshot {
   return {
     ...snapshot,
     cols,
     rows,
+    appliedResizeGeneration,
   };
 }
 

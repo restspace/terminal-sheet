@@ -17,7 +17,7 @@ const webHost = '127.0.0.1';
 const webPort = 4313;
 const serverPort = 4312;
 const webUrl = `http://${webHost}:${webPort}`;
-const workspaceUrl = `${webUrl}/api/workspace`;
+const frontendSessionUrl = `${webUrl}/api/frontend-session`;
 const healthUrl = `http://${webHost}:${serverPort}/api/health`;
 
 interface ManagedChildSpec {
@@ -194,7 +194,7 @@ function pipeWithPrefix(
 async function waitForStartup(): Promise<void> {
   await waitForHttpOk(`${webUrl}/`, 'frontend root');
   await waitForHttpOk(healthUrl, 'backend health');
-  await waitForHttpOk(workspaceUrl, 'workspace proxy');
+  await waitForHttpOk(frontendSessionUrl, 'frontend API proxy');
 }
 
 async function waitForHttpOk(url: string, label: string): Promise<void> {

@@ -2,9 +2,10 @@ import type {
   MarkdownConflictChoice,
   MarkdownDocumentState,
 } from '../../shared/markdown';
+import { markdownDocumentStateSchema } from '../../shared/markdown';
 import { serializeJsonMessage } from '../../shared/jsonTransport';
 import { type Workspace, workspaceSchema } from '../../shared/workspace';
-import { markdownDocumentStateSchema } from '../../shared/markdown';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 
 interface MarkdownMutationResponse {
   workspace: Workspace;
@@ -18,7 +19,7 @@ export async function createMarkdownDocument(input?: {
   label?: string;
   filePath?: string;
 }): Promise<MarkdownMutationResponse> {
-  const response = await fetch('/api/markdown/create', {
+  const response = await fetchWithFrontendLease('/api/markdown/create', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -36,7 +37,7 @@ export async function createMarkdownDocument(input?: {
 export async function openMarkdownDocument(
   filePath: string,
 ): Promise<MarkdownMutationResponse> {
-  const response = await fetch('/api/markdown/open', {
+  const response = await fetchWithFrontendLease('/api/markdown/open', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -56,7 +57,9 @@ export async function openMarkdownDocument(
 export async function fetchMarkdownDocument(
   nodeId: string,
 ): Promise<MarkdownDocumentState> {
-  const response = await fetch(`/api/markdown/${encodeURIComponent(nodeId)}`);
+  const response = await fetchWithFrontendLease(
+    `/api/markdown/${encodeURIComponent(nodeId)}`,
+  );
 
   if (!response.ok) {
     throw new Error(`Markdown request failed with ${response.status}`);
@@ -70,16 +73,19 @@ export async function saveMarkdownDocument(input: {
   content: string;
   externalVersion: string;
 }): Promise<MarkdownDocumentState> {
-  const response = await fetch(`/api/markdown/${encodeURIComponent(input.nodeId)}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
+  const response = await fetchWithFrontendLease(
+    `/api/markdown/${encodeURIComponent(input.nodeId)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: serializeJsonMessage({
+        content: input.content,
+        externalVersion: input.externalVersion,
+      }),
     },
-    body: serializeJsonMessage({
-      content: input.content,
-      externalVersion: input.externalVersion,
-    }),
-  });
+  );
 
   if (!response.ok) {
     throw new Error(`Markdown save failed with ${response.status}`);
@@ -94,7 +100,7 @@ export async function resolveMarkdownConflict(input: {
   content?: string;
   externalVersion: string;
 }): Promise<MarkdownDocumentState> {
-  const response = await fetch(
+  const response = await fetchWithFrontendLease(
     `/api/markdown/${encodeURIComponent(input.nodeId)}/resolve`,
     {
       method: 'POST',
@@ -120,7 +126,7 @@ export async function queueMarkdownLink(input: {
   markdownNodeId: string;
   terminalId: string;
 }): Promise<void> {
-  const response = await fetch('/api/markdown/link', {
+  const response = await fetchWithFrontendLease('/api/markdown/link', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

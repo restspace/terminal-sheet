@@ -26,24 +26,18 @@ describe('deriveTerminalSurfaceModelState', () => {
 
     expect(result.modelById.get(focusedTerminal!.id)).toEqual({
       presentationMode: 'focus',
-      surfaceKind: 'interactive',
-      interactionMode: 'interactive',
-      sizeSource: 'measured',
-      resizeAuthority: 'owner',
+      surfaceKind: 'live',
+      acceptsInput: true,
     });
     expect(result.modelById.get(terminals[1]!.id)).toEqual({
       presentationMode: 'inspect',
-      surfaceKind: 'live-preview',
-      interactionMode: 'read-only',
-      sizeSource: 'snapshot',
-      resizeAuthority: 'none',
+      surfaceKind: 'live',
+      acceptsInput: false,
     });
     expect(result.modelById.get(terminals[2]!.id)).toEqual({
       presentationMode: 'inspect',
-      surfaceKind: 'live-preview',
-      interactionMode: 'read-only',
-      sizeSource: 'snapshot',
-      resizeAuthority: 'none',
+      surfaceKind: 'live',
+      acceptsInput: false,
     });
   });
 
@@ -64,17 +58,77 @@ describe('deriveTerminalSurfaceModelState', () => {
 
     expect(result.modelById.get(terminals[0]!.id)).toEqual({
       presentationMode: 'focus',
-      surfaceKind: 'interactive',
-      interactionMode: 'interactive',
-      sizeSource: 'measured',
-      resizeAuthority: 'owner',
+      surfaceKind: 'live',
+      acceptsInput: true,
     });
     expect(result.modelById.get(terminals[1]!.id)).toEqual({
       presentationMode: 'inspect',
       surfaceKind: 'summary',
-      interactionMode: 'read-only',
-      sizeSource: 'snapshot',
-      resizeAuthority: 'none',
+      acceptsInput: false,
+    });
+  });
+
+  it('grants measured resize ownership to visible read-only live previews in focus-tiles', () => {
+    const terminals = Array.from({ length: 6 }, (_, index) =>
+      createPlaceholderTerminal(index),
+    );
+    const focusedTerminal = terminals[0]!;
+
+    const result = deriveTerminalSurfaceModelState({
+      terminals,
+      selectedNodeId: focusedTerminal.id,
+      sessions: buildSessions(terminals),
+      interactionAtByTerminalId: {},
+      layoutMode: 'focus-tiles',
+    });
+
+    expect(result.modelById.get(focusedTerminal.id)).toEqual({
+      presentationMode: 'focus',
+      surfaceKind: 'live',
+      acceptsInput: true,
+    });
+    expect(result.inspectTerminalIds).toEqual(
+      terminals.slice(1, 5).map((terminal) => terminal.id),
+    );
+    expect(result.modelById.get(terminals[1]!.id)).toEqual({
+      presentationMode: 'inspect',
+      surfaceKind: 'live',
+      acceptsInput: false,
+    });
+    expect(result.modelById.get(terminals[5]!.id)).toEqual({
+      presentationMode: 'overview',
+      surfaceKind: 'summary',
+      acceptsInput: false,
+    });
+  });
+
+  it('keeps focus-tiles startup resize-correct with null selection by assigning visible read-only owners', () => {
+    const terminals = Array.from({ length: 6 }, (_, index) =>
+      createPlaceholderTerminal(index),
+    );
+    const result = deriveTerminalSurfaceModelState({
+      terminals,
+      selectedNodeId: null,
+      sessions: buildSessions(terminals),
+      interactionAtByTerminalId: {},
+      layoutMode: 'focus-tiles',
+    });
+
+    expect(result.focusedTerminalId).toBeNull();
+    expect(result.inspectTerminalIds).toEqual(
+      terminals.slice(0, 5).map((terminal) => terminal.id),
+    );
+    for (const terminal of terminals.slice(0, 5)) {
+      expect(result.modelById.get(terminal.id)).toEqual({
+        presentationMode: 'inspect',
+        surfaceKind: 'live',
+        acceptsInput: false,
+      });
+    }
+    expect(result.modelById.get(terminals[5]!.id)).toEqual({
+      presentationMode: 'overview',
+      surfaceKind: 'summary',
+      acceptsInput: false,
     });
   });
 
@@ -239,6 +293,10 @@ function buildSession(
   sessionId: string,
   overrides?: Partial<TerminalSessionSnapshot>,
 ): TerminalSessionSnapshot {
+  const {
+    appliedResizeGeneration = null,
+    ...remainingOverrides
+  } = overrides ?? {};
   return {
     sessionId,
     backendId: 'local',
@@ -259,6 +317,7 @@ function buildSession(
     disconnectReason: null,
     cols: 80,
     rows: 24,
+    appliedResizeGeneration,
     liveCwd: '.',
     projectRoot: '.',
     integration: {
@@ -267,6 +326,6 @@ function buildSession(
       message: null,
       updatedAt: null,
     },
-    ...overrides,
+    ...remainingOverrides,
   };
 }

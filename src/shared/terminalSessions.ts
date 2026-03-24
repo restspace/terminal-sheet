@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { LOCAL_BACKEND_ID } from './backends';
 import { attentionEventSchema } from './events';
 import {
+  frontendSessionOwnerSchema,
+  frontendSessionLockedResponseSchema,
+} from './frontendSessionTransport';
+import {
   markdownDocumentInitMessageSchema,
   markdownDocumentMessageSchema,
   markdownLinkInitMessageSchema,
@@ -56,8 +60,9 @@ export const terminalSessionSnapshotSchema = z.object({
   summary: z.string(),
   exitCode: z.number().int().nullable(),
   disconnectReason: z.string().nullable(),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
+  cols: z.number().int().positive().nullable(),
+  rows: z.number().int().positive().nullable(),
+  appliedResizeGeneration: z.number().int().nonnegative().nullable(),
   liveCwd: z.string().nullable(),
   projectRoot: z.string().nullable(),
   integration: terminalIntegrationStateSchema,
@@ -73,6 +78,15 @@ export const terminalSessionOutputStateSchema =
 export const terminalSocketReadyMessageSchema = z.object({
   type: z.literal('ready'),
   timestamp: z.iso.datetime(),
+});
+export const frontendLeaseMessageSchema = z.object({
+  type: z.literal('frontend.lease'),
+  lease: frontendSessionOwnerSchema,
+});
+
+export const frontendLockedMessageSchema = z.object({
+  type: z.literal('frontend.locked'),
+  lock: frontendSessionLockedResponseSchema,
 });
 
 export const workspaceUpdatedMessageSchema = z.object({
@@ -115,6 +129,8 @@ export const attentionEventMessageSchema = z.object({
 });
 
 export const terminalServerSocketMessageSchema = z.discriminatedUnion('type', [
+  frontendLeaseMessageSchema,
+  frontendLockedMessageSchema,
   terminalSocketReadyMessageSchema,
   workspaceUpdatedMessageSchema,
   terminalSessionInitMessageSchema,
@@ -134,12 +150,17 @@ export const terminalInputMessageSchema = z.object({
   sessionId: z.string(),
   data: z.string(),
 });
+export const frontendHeartbeatMessageSchema = z.object({
+  type: z.literal('frontend.heartbeat'),
+  timestamp: z.iso.datetime(),
+});
 
 export const terminalResizeMessageSchema = z.object({
   type: z.literal('terminal.resize'),
   sessionId: z.string(),
   cols: z.number().int().positive(),
   rows: z.number().int().positive(),
+  generation: z.number().int().positive(),
 });
 
 export const terminalRestartMessageSchema = z.object({
@@ -153,6 +174,7 @@ export const terminalMarkReadMessageSchema = z.object({
 });
 
 export const terminalClientSocketMessageSchema = z.discriminatedUnion('type', [
+  frontendHeartbeatMessageSchema,
   terminalInputMessageSchema,
   terminalResizeMessageSchema,
   terminalRestartMessageSchema,

@@ -120,9 +120,17 @@ export async function registerBackendMachineRoutes(
   app.post<{ Params: { sessionId: string } }>(
     '/api/backend/sessions/:sessionId/resize',
     async (request, reply) => {
-      const body = request.body as { cols?: number; rows?: number };
+      const body = request.body as {
+        cols?: number;
+        rows?: number;
+        generation?: number;
+      };
 
-      if (!Number.isFinite(body?.cols) || !Number.isFinite(body?.rows)) {
+      if (
+        !Number.isFinite(body?.cols) ||
+        !Number.isFinite(body?.rows) ||
+        !Number.isFinite(body?.generation)
+      ) {
         return reply.code(400).send({ message: 'Missing resize dimensions' });
       }
 
@@ -130,6 +138,7 @@ export async function registerBackendMachineRoutes(
         request.params.sessionId,
         Number(body.cols),
         Number(body.rows),
+        Number(body.generation),
       );
       return ok
         ? { ok: true }

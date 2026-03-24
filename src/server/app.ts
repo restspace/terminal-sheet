@@ -6,6 +6,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { LOCAL_BACKEND_ID, type ServerRole } from '../shared/backends';
+import { FrontendLeaseManager } from './frontend/frontendLeaseManager';
 import { registerHealthRoutes } from './routes/health';
 import { registerInstallRoutes } from './routes/install';
 import { registerSessionRoutes } from './routes/sessions';
@@ -14,6 +15,7 @@ import { registerBackendRoutes } from './routes/backends';
 import { registerBackendMachineRoutes } from './routes/backendMachine';
 import { registerDebugStateRoutes } from './routes/debugState';
 import { registerFileSystemRoutes } from './routes/filesystem';
+import { registerFrontendSessionRoutes } from './routes/frontendSession';
 import { registerMarkdownRoutes } from './routes/markdown';
 import { registerTokenRoutes } from './routes/token';
 import { registerWorkspaceRoutes } from './routes/workspace';
@@ -42,6 +44,8 @@ export interface TerminalCanvasServerOptions {
   contentRoot?: string;
   devWebUrl?: string;
   webRoot?: string;
+  frontendLeaseTimeoutMs?: number;
+  frontendLeaseSweepIntervalMs?: number;
 }
 
 export async function createServer(
@@ -98,8 +102,15 @@ export async function createServer(
   const tunnelManager = new SshTunnelManager(
     app.log.child({ component: 'ssh-tunnels' }),
   );
+  const frontendLeaseManager = new FrontendLeaseManager({
+    timeoutMs: options.frontendLeaseTimeoutMs,
+    sweepIntervalMs: options.frontendLeaseSweepIntervalMs,
+  });
 
   await app.register(websocket);
+  await registerFrontendSessionRoutes(app, {
+    frontendLeaseManager,
+  });
   const unsubscribeWorkspaceReconciliations = await registerWorkspaceReconciliations(
     app.log,
     {
@@ -175,6 +186,8 @@ export async function createServer(
     markdownService,
     workspaceService,
     workspaceCommitPublisher,
+    eventStore: stateDebugEventStore,
+    frontendLeaseManager,
   });
   await registerBackendSocket(app, {
     getMachineToken: () => machineTokenState.value,
@@ -184,6 +197,7 @@ export async function createServer(
 
   app.addHook('onClose', async () => {
     unsubscribeWorkspaceReconciliations();
+    frontendLeaseManager.close();
     markdownService.close();
     await Promise.allSettled([tunnelManager.close(), runtimeManager.close()]);
     ptySessionManager.close();

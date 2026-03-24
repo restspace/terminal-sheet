@@ -49,7 +49,7 @@ describe('LocalBackendAdapter', () => {
     expect(adapter.getAttentionEvents()).toBe(events);
     expect(adapter.getStatus()).toBeNull();
     expect(adapter.sendInput('terminal-1', 'ls')).toBe(true);
-    expect(adapter.resizeSession('terminal-1', 120, 40)).toBe(true);
+    expect(adapter.resizeSession('terminal-1', 120, 40, 1)).toBe(true);
     expect(adapter.restartSession('terminal-1')).toBe(true);
     expect(adapter.markRead('terminal-1')).toBe(true);
     expect(typeof adapter.subscribeSession(sessionListener)).toBe('function');

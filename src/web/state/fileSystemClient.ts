@@ -4,11 +4,12 @@ import {
   type FileSystemListResponse,
 } from '../../shared/filesystem';
 import { serializeJsonMessage } from '../../shared/jsonTransport';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 
 export async function fetchFileSystemDirectory(
   input: Partial<FileSystemListRequest>,
 ): Promise<FileSystemListResponse> {
-  const response = await fetch('/api/filesystem/list', {
+  const response = await fetchWithFrontendLease('/api/filesystem/list', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

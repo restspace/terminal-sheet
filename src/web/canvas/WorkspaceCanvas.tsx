@@ -48,6 +48,7 @@ interface WorkspaceCanvasProps {
     sessionId: string,
     cols: number,
     rows: number,
+    generation: number,
   ) => boolean | void;
   onTerminalResizeSyncError?: (details: {
     sessionId: string;
@@ -208,8 +209,8 @@ export function WorkspaceCanvas({
   }, []);
   const handleTerminalResize = useCallback<
     WorkspaceCanvasProps['onTerminalResize']
-  >((sessionId, cols, rows) => {
-    return onTerminalResizeRef.current(sessionId, cols, rows);
+  >((sessionId, cols, rows, generation) => {
+    return onTerminalResizeRef.current(sessionId, cols, rows, generation);
   }, []);
   const handleTerminalRestart = useCallback<
     WorkspaceCanvasProps['onTerminalRestart']
@@ -308,6 +309,7 @@ export function WorkspaceCanvas({
   }, [debouncedNodeInteractionAtMs, nodeInteractionAtMs]);
 
   useEffect(() => {
+    const previousLayoutMode = previousLayoutModeRef.current;
     const layoutStrategy = getLayoutStrategy(workspace.layoutMode);
     const layoutResult = layoutStrategy.compute({
       mode: workspace.layoutMode,
@@ -329,7 +331,7 @@ export function WorkspaceCanvas({
       viewportSize,
       safeAreaInsets: getLayoutSafeAreaInsets(viewportSize),
       previousState: layoutStateByModeRef.current[workspace.layoutMode] ?? null,
-      previousMode: previousLayoutModeRef.current,
+      previousMode: previousLayoutMode,
     });
 
     layoutStateByModeRef.current[workspace.layoutMode] = layoutResult.nextState;
@@ -360,7 +362,7 @@ export function WorkspaceCanvas({
         : layoutResult.interactionPolicy,
     );
 
-    if (!layoutResult.animation) {
+    if (!layoutResult.animation || previousLayoutMode === null) {
       return;
     }
 
@@ -456,7 +458,37 @@ export function WorkspaceCanvas({
 
     return linksByNodeId;
   }, [markdownLinks]);
-  const deferTerminalResizeSync = layoutAnimationClassName.length > 0;
+  const freezeTerminalGeometry = layoutAnimationClassName.length > 0;
+  useEffect(() => {
+    if (workspace.layoutMode !== 'focus-tiles') {
+      return;
+    }
+
+    logStateDebug('focusTiles', 'surfaceState', {
+      selectedNodeId,
+      focusedTerminalId,
+      freezeTerminalGeometry,
+      layoutAnimationClassName: layoutAnimationClassName || null,
+      terminals: workspace.terminals.map((terminal) =>
+        summarizeTerminalSurfaceStateForDebug({
+          terminal,
+          renderedBounds: renderedBoundsByNodeId.get(terminal.id) ?? terminal.bounds,
+          surfaceModel: terminalSurfaceModelState.modelById.get(terminal.id) ?? null,
+          session: sessions[terminal.id] ?? null,
+        }),
+      ),
+    });
+  }, [
+    focusedTerminalId,
+    freezeTerminalGeometry,
+    layoutAnimationClassName,
+    renderedBoundsByNodeId,
+    selectedNodeId,
+    sessions,
+    terminalSurfaceModelState.modelById,
+    workspace.layoutMode,
+    workspace.terminals,
+  ]);
   const nodes = useMemo(
     () =>
       buildCanvasNodes({
@@ -476,7 +508,7 @@ export function WorkspaceCanvas({
         activeMarkdownLinkByTerminalId,
         activeMarkdownLinksByNodeId,
         socketState,
-        deferTerminalResizeSync,
+        freezeTerminalGeometry,
         onBoundsChange: handleNodeBoundsChange,
         onTerminalChange: handleTerminalChange,
         onPathSelectRequest: handlePathSelectRequest,
@@ -520,7 +552,7 @@ export function WorkspaceCanvas({
       markdownDocuments,
       activeMarkdownLinkByTerminalId,
       activeMarkdownLinksByNodeId,
-      deferTerminalResizeSync,
+      freezeTerminalGeometry,
       socketState,
       semanticZoomMode,
       terminalSurfaceModelState.modelById,
@@ -869,6 +901,31 @@ function readFocusTilesDebugState(value: unknown): {
           (nodeId): nodeId is string => typeof nodeId === 'string',
         )
       : [],
+  };
+}
+
+function summarizeTerminalSurfaceStateForDebug(options: {
+  terminal: TerminalNode;
+  renderedBounds: NodeBounds;
+  surfaceModel: {
+    presentationMode: string;
+    surfaceKind: string;
+    acceptsInput: boolean;
+  } | null;
+  session: TerminalSessionSnapshot | null;
+}): Record<string, unknown> {
+  const { terminal, renderedBounds, surfaceModel, session } = options;
+
+  return {
+    terminalId: terminal.id,
+    storedBounds: terminal.bounds,
+    renderedBounds,
+    surfaceModel,
+    connected: session?.connected ?? null,
+    recoveryState: session?.recoveryState ?? null,
+    cols: session?.cols ?? null,
+    rows: session?.rows ?? null,
+    appliedResizeGeneration: session?.appliedResizeGeneration ?? null,
   };
 }
 

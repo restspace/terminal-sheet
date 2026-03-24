@@ -117,10 +117,16 @@ export class RemoteBackendAdapter implements ConnectionAwareBackendAdapter {
     return true;
   }
 
-  resizeSession(sessionId: string, cols: number, rows: number): boolean {
+  resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ): boolean {
     void this.post(`/api/backend/sessions/${encodeURIComponent(sessionId)}/resize`, {
       cols,
       rows,
+      generation,
     });
     return true;
   }
@@ -220,6 +226,8 @@ export class RemoteBackendAdapter implements ConnectionAwareBackendAdapter {
 
   private handleMessage(message: TerminalServerSocketMessage): void {
     switch (message.type) {
+      case 'frontend.lease':
+      case 'frontend.locked':
       case 'ready':
         return;
       case 'session.init': {

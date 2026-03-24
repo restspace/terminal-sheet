@@ -3,6 +3,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  FRONTEND_ID_HEADER,
+  FRONTEND_ID_QUERY_PARAM,
+  FRONTEND_LEASE_TOKEN_HEADER,
+  FRONTEND_LEASE_TOKEN_QUERY_PARAM,
+  type FrontendSessionLease,
+} from '../shared/frontendSessionTransport';
+import type { TerminalServerSocketMessage } from '../shared/terminalSessions';
 
 import {
   createDefaultWorkspace,
@@ -122,11 +130,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/markdown/open',
+        headers: leaseHeaders,
         payload: {
           filePath: 'DISCOVERY.md',
           createIfMissing: true,
@@ -191,11 +201,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath,
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/markdown/open',
+        headers: leaseHeaders,
         payload: {
           filePath: 'DISCOVERY.md',
           createIfMissing: true,
@@ -241,11 +253,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath,
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/markdown/open',
+        headers: leaseHeaders,
         payload: {
           filePath: 'DISCOVERY.md',
           createIfMissing: true,
@@ -290,11 +304,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/filesystem/list',
+        headers: leaseHeaders,
         payload: {
           server: 'local',
           directoryPath: '.',
@@ -359,11 +375,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/filesystem/list',
+        headers: leaseHeaders,
         payload: {
           server: 'local',
           directoryPath: '.',
@@ -388,11 +406,13 @@ describe('createServer web entrypoint', () => {
       port: 4312,
       workspaceFilePath: join(tempDirectory, 'workspace.json'),
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/filesystem/list',
+        headers: leaseHeaders,
         payload: {
           server: 'remote-server-1',
         },
@@ -414,11 +434,13 @@ describe('createServer web entrypoint', () => {
       port: 4312,
       workspaceFilePath: join(tempDirectory, 'workspace.json'),
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const initialWorkspaceResponse = await app.inject({
         method: 'GET',
         url: '/api/workspace',
+        headers: leaseHeaders,
       });
       const initialWorkspace = initialWorkspaceResponse.json();
       const firstUpdate = {
@@ -434,6 +456,7 @@ describe('createServer web entrypoint', () => {
         method: 'PUT',
         url: '/api/workspace',
         headers: {
+          ...leaseHeaders,
           [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
         },
         payload: firstUpdate,
@@ -446,6 +469,7 @@ describe('createServer web entrypoint', () => {
         method: 'PUT',
         url: '/api/workspace',
         headers: {
+          ...leaseHeaders,
           [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
         },
         payload: {
@@ -480,11 +504,13 @@ describe('createServer web entrypoint', () => {
       workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
       contentRoot,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/markdown/create',
+        headers: leaseHeaders,
         payload: {
           label: 'Discovery',
           filePath: 'DISCOVERY.md',
@@ -527,11 +553,13 @@ describe('createServer web entrypoint', () => {
       role: 'home',
       workspaceFilePath: join(workspaceDirectory, 'workspace.json'),
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const createResponse = await app.inject({
         method: 'POST',
         url: '/api/backends',
+        headers: leaseHeaders,
         payload: {
           label: 'Remote backend',
           baseUrl: 'http://remote-backend.example',
@@ -556,6 +584,7 @@ describe('createServer web entrypoint', () => {
       const backendsResponse = await app.inject({
         method: 'GET',
         url: '/api/backends',
+        headers: leaseHeaders,
       });
 
       expect(backendsResponse.statusCode).toBe(200);
@@ -574,6 +603,7 @@ describe('createServer web entrypoint', () => {
       const deleteResponse = await app.inject({
         method: 'DELETE',
         url: `/api/backends/${created.backend.id}`,
+        headers: leaseHeaders,
       });
 
       expect(deleteResponse.statusCode).toBe(200);
@@ -588,6 +618,7 @@ describe('createServer web entrypoint', () => {
       const afterDeleteResponse = await app.inject({
         method: 'GET',
         url: '/api/backends',
+        headers: leaseHeaders,
       });
 
       expect(afterDeleteResponse.statusCode).toBe(200);
@@ -637,12 +668,14 @@ describe('createServer web entrypoint', () => {
       port: 4312,
       workspaceFilePath,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/workspace/mutations',
         headers: {
+          ...leaseHeaders,
           [WORKSPACE_BASE_UPDATED_AT_HEADER]: workspace.updatedAt,
         },
         payload: {
@@ -758,11 +791,13 @@ describe('createServer web entrypoint', () => {
       port: 4312,
       workspaceFilePath,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/workspace/mutations',
+        headers: leaseHeaders,
         payload: {
           commands: [
             {
@@ -793,12 +828,14 @@ describe('createServer web entrypoint', () => {
       port: 4312,
       workspaceFilePath,
     });
+    const leaseHeaders = frontendLeaseHeaders(await acquireFrontendLease(app));
 
     try {
       const initialMutation = await app.inject({
         method: 'POST',
         url: '/api/workspace/mutations',
         headers: {
+          ...leaseHeaders,
           [WORKSPACE_BASE_UPDATED_AT_HEADER]: workspace.updatedAt,
         },
         payload: {
@@ -820,6 +857,7 @@ describe('createServer web entrypoint', () => {
         method: 'POST',
         url: '/api/workspace/mutations',
         headers: {
+          ...leaseHeaders,
           [WORKSPACE_BASE_UPDATED_AT_HEADER]: workspace.updatedAt,
         },
         payload: {
@@ -842,6 +880,262 @@ describe('createServer web entrypoint', () => {
         workspace: savedWorkspace.workspace,
       });
     } finally {
+      await app.close();
+    }
+  });
+
+  it('enforces the active browser lease on browser APIs while machine routes remain available', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 4312,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+    });
+
+    try {
+      const firstLease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-a',
+        ownerLabel: 'Desk A',
+      });
+      const refreshResponse = await app.inject({
+        method: 'POST',
+        url: '/api/frontend-session/acquire',
+        payload: {
+          frontendId: firstLease.frontendId,
+          ownerLabel: 'Desk A (refresh)',
+          leaseToken: firstLease.leaseToken,
+        },
+      });
+
+      expect(refreshResponse.statusCode).toBe(200);
+      const refreshedLease = refreshResponse.json() as FrontendSessionLease;
+      expect(refreshedLease.leaseToken).toBe(firstLease.leaseToken);
+      expect(refreshedLease.leaseEpoch).toBe(firstLease.leaseEpoch);
+      expect(refreshedLease.ownerLabel).toBe('Desk A (refresh)');
+
+      const lockedStatus = await app.inject({
+        method: 'GET',
+        url: '/api/frontend-session',
+      });
+      expect(lockedStatus.statusCode).toBe(200);
+      expect(lockedStatus.json()).toMatchObject({
+        state: 'locked',
+        owner: expect.objectContaining({
+          frontendId: refreshedLease.frontendId,
+          ownerLabel: refreshedLease.ownerLabel,
+        }),
+      });
+
+      const competingAcquire = await app.inject({
+        method: 'POST',
+        url: '/api/frontend-session/acquire',
+        payload: {
+          frontendId: 'frontend-b',
+          ownerLabel: 'Desk B',
+        },
+      });
+      expect(competingAcquire.statusCode).toBe(423);
+      expect(competingAcquire.json()).toMatchObject({
+        canTakeOver: true,
+        owner: expect.objectContaining({
+          frontendId: refreshedLease.frontendId,
+          ownerLabel: refreshedLease.ownerLabel,
+        }),
+      });
+
+      const blockedBrowserRoute = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+      });
+      expect(blockedBrowserRoute.statusCode).toBe(423);
+      expect(blockedBrowserRoute.json()).toMatchObject({
+        canTakeOver: true,
+        owner: expect.objectContaining({
+          frontendId: refreshedLease.frontendId,
+        }),
+      });
+
+      const healthRoute = await app.inject({
+        method: 'GET',
+        url: '/api/health',
+      });
+      expect(healthRoute.statusCode).toBe(200);
+      expect(healthRoute.json()).toMatchObject({
+        status: 'ok',
+      });
+
+      const allowedBrowserRoute = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: frontendLeaseHeaders(refreshedLease),
+      });
+      expect(allowedBrowserRoute.statusCode).toBe(200);
+      expect(allowedBrowserRoute.json()).toMatchObject({
+        sessions: [],
+      });
+
+      const machineRoute = await app.inject({
+        method: 'GET',
+        url: '/api/backend/health',
+        headers: {
+          'x-terminal-canvas-token': 'dev-machine-token',
+        },
+      });
+      expect(machineRoute.statusCode).toBe(200);
+      expect(machineRoute.json()).toMatchObject({
+        status: 'ok',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('hands off workspace sockets for same-owner reconnects and notifies the previous owner on takeover', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 0,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+    });
+    const baseUrl = await app.listen({
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    let firstSocket: TrackedWebSocket | null = null;
+    let secondSocket: TrackedWebSocket | null = null;
+    let thirdSocket: TrackedWebSocket | null = null;
+
+    try {
+      const firstLease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-a',
+        ownerLabel: 'Desk A',
+      });
+
+      firstSocket = connectWorkspaceSocket(baseUrl, firstLease);
+      await waitForWsMessageType(firstSocket, 'frontend.lease');
+      await waitForWsMessageType(firstSocket, 'ready');
+
+      secondSocket = connectWorkspaceSocket(baseUrl, firstLease);
+      await waitForWsMessageType(secondSocket, 'frontend.lease');
+
+      const replacedClose = await waitForWsClose(firstSocket);
+      expect(replacedClose).toMatchObject({
+        code: 4000,
+      });
+
+      const takeoverLease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-b',
+        ownerLabel: 'Desk B',
+        takeover: true,
+      });
+      const lockedMessage = await waitForWsMessageType(
+        secondSocket,
+        'frontend.locked',
+      );
+      expect(lockedMessage.lock).toMatchObject({
+        canTakeOver: true,
+        owner: expect.objectContaining({
+          frontendId: takeoverLease.frontendId,
+          ownerLabel: takeoverLease.ownerLabel,
+        }),
+      });
+
+      const takeoverClose = await waitForWsClose(secondSocket);
+      expect(takeoverClose).toMatchObject({
+        code: 4002,
+      });
+
+      const staleOwnerRoute = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: frontendLeaseHeaders(firstLease),
+      });
+      expect(staleOwnerRoute.statusCode).toBe(423);
+
+      const activeOwnerRoute = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: frontendLeaseHeaders(takeoverLease),
+      });
+      expect(activeOwnerRoute.statusCode).toBe(200);
+
+      thirdSocket = connectWorkspaceSocket(baseUrl, takeoverLease);
+      const activeLeaseMessage = await waitForWsMessageType(
+        thirdSocket,
+        'frontend.lease',
+      );
+      expect(activeLeaseMessage.lease).toMatchObject({
+        frontendId: takeoverLease.frontendId,
+        ownerLabel: takeoverLease.ownerLabel,
+      });
+    } finally {
+      await closeTrackedWs(thirdSocket);
+      await closeTrackedWs(secondSocket);
+      await closeTrackedWs(firstSocket);
+      await app.close();
+    }
+  });
+
+  it('expires abandoned frontend leases after missed heartbeats', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 0,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+      frontendLeaseTimeoutMs: 50,
+      frontendLeaseSweepIntervalMs: 10,
+    });
+    const baseUrl = await app.listen({
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    let socket: TrackedWebSocket | null = null;
+
+    try {
+      const lease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-a',
+        ownerLabel: 'Desk A',
+      });
+
+      socket = connectWorkspaceSocket(baseUrl, lease);
+      await waitForWsMessageType(socket, 'frontend.lease');
+
+      await delay(150);
+
+      const expiredClose = await waitForWsClose(socket);
+      expect(expiredClose).toMatchObject({
+        code: 4001,
+      });
+
+      const statusResponse = await app.inject({
+        method: 'GET',
+        url: '/api/frontend-session',
+        headers: frontendLeaseHeaders(lease),
+      });
+      expect(statusResponse.statusCode).toBe(200);
+      expect(statusResponse.json()).toMatchObject({
+        state: 'available',
+        owner: null,
+      });
+
+      const blockedStaleRoute = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: frontendLeaseHeaders(lease),
+      });
+      expect(blockedStaleRoute.statusCode).toBe(423);
+      expect(blockedStaleRoute.json()).toMatchObject({
+        canTakeOver: false,
+        owner: null,
+      });
+
+      const nextLease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-b',
+        ownerLabel: 'Desk B',
+      });
+      expect(nextLease.frontendId).toBe('frontend-b');
+      expect(nextLease.ownerLabel).toBe('Desk B');
+    } finally {
+      await closeTrackedWs(socket);
       await app.close();
     }
   });
@@ -891,6 +1185,216 @@ function jsonResponse(body: unknown, status = 200): Response {
 async function tick(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
+  });
+}
+
+type TestApp = Awaited<ReturnType<typeof createServer>>;
+
+interface TrackedWebSocket {
+  socket: WebSocket;
+  messages: TerminalServerSocketMessage[];
+  close: {
+    code: number;
+    reason: string;
+  } | null;
+}
+
+async function acquireFrontendLease(
+  app: TestApp,
+  options?: {
+    frontendId?: string;
+    ownerLabel?: string;
+    leaseToken?: string;
+    takeover?: boolean;
+  },
+): Promise<FrontendSessionLease> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/frontend-session/acquire',
+    payload: {
+      frontendId: options?.frontendId ?? 'frontend-default',
+      ownerLabel: options?.ownerLabel ?? 'Test browser',
+      leaseToken: options?.leaseToken,
+      takeover: options?.takeover,
+    },
+  });
+
+  expect(response.statusCode).toBe(200);
+  return response.json() as FrontendSessionLease;
+}
+
+function frontendLeaseHeaders(
+  lease: FrontendSessionLease,
+): Record<string, string> {
+  return {
+    [FRONTEND_ID_HEADER]: lease.frontendId,
+    [FRONTEND_LEASE_TOKEN_HEADER]: lease.leaseToken,
+  };
+}
+
+function connectWorkspaceSocket(
+  baseUrl: string,
+  lease: FrontendSessionLease,
+): TrackedWebSocket {
+  const socketUrl = new URL('/ws', baseUrl.replace(/^http/, 'ws'));
+  socketUrl.searchParams.set(FRONTEND_ID_QUERY_PARAM, lease.frontendId);
+  socketUrl.searchParams.set(
+    FRONTEND_LEASE_TOKEN_QUERY_PARAM,
+    lease.leaseToken,
+  );
+
+  const socket = new WebSocket(socketUrl);
+  const tracked: TrackedWebSocket = {
+    socket,
+    messages: [],
+    close: null,
+  };
+
+  socket.addEventListener('message', (event) => {
+    void readWsEventData(event.data).then((payload) => {
+      const message = parseTrackedWsMessage(payload);
+
+      if (message) {
+        tracked.messages.push(message);
+      }
+    });
+  });
+  socket.addEventListener('close', (event) => {
+    tracked.close = {
+      code: event.code,
+      reason: event.reason,
+    };
+  });
+
+  return tracked;
+}
+
+async function waitForWsMessageType<Type extends TerminalServerSocketMessage['type']>(
+  tracked: TrackedWebSocket,
+  type: Type,
+  timeoutMs = 2_000,
+): Promise<Extract<TerminalServerSocketMessage, { type: Type }>> {
+  const existing = tracked.messages.find((message) => message.type === type);
+
+  if (existing) {
+    return existing as Extract<TerminalServerSocketMessage, { type: Type }>;
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for websocket message ${type}`));
+    }, timeoutMs);
+    const onMessage = (event: MessageEvent) => {
+      void readWsEventData(event.data).then((payload) => {
+        const message = parseTrackedWsMessage(payload);
+
+        if (message?.type !== type) {
+          return;
+        }
+
+        cleanup();
+        resolve(message as Extract<TerminalServerSocketMessage, { type: Type }>);
+      });
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error(`Websocket closed before receiving ${type}`));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      tracked.socket.removeEventListener('message', onMessage);
+      tracked.socket.removeEventListener('close', onClose);
+    };
+
+    tracked.socket.addEventListener('message', onMessage);
+    tracked.socket.addEventListener('close', onClose);
+  });
+}
+
+async function waitForWsClose(
+  tracked: TrackedWebSocket,
+  timeoutMs = 2_000,
+): Promise<{ code: number; reason: string }> {
+  if (tracked.close) {
+    return tracked.close;
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for websocket close'));
+    }, timeoutMs);
+    const onClose = (event: CloseEvent) => {
+      cleanup();
+      resolve({
+        code: event.code,
+        reason: event.reason,
+      });
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      tracked.socket.removeEventListener('close', onClose);
+    };
+
+    tracked.socket.addEventListener('close', onClose);
+  });
+}
+
+async function closeTrackedWs(tracked: TrackedWebSocket | null): Promise<void> {
+  if (!tracked) {
+    return;
+  }
+
+  if (tracked.close) {
+    return;
+  }
+
+  try {
+    tracked.socket.close();
+    await waitForWsClose(tracked, 500);
+  } catch {
+    // Ignore shutdown races in tests.
+  }
+}
+
+async function readWsEventData(data: unknown): Promise<string> {
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString('utf8');
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer).toString('utf8');
+  }
+
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    return data.text();
+  }
+
+  return String(data);
+}
+
+function parseTrackedWsMessage(
+  payload: string,
+): TerminalServerSocketMessage | null {
+  try {
+    const parsed = JSON.parse(payload) as { type?: unknown };
+
+    return typeof parsed.type === 'string'
+      ? (parsed as TerminalServerSocketMessage)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 

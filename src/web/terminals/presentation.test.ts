@@ -17,6 +17,7 @@ import {
 function createSessionSnapshot(
   overrides: Partial<TerminalSessionSnapshot> = {},
 ): TerminalSessionSnapshot {
+  const { appliedResizeGeneration = null, ...remainingOverrides } = overrides;
   return {
     sessionId: 'terminal-1',
     backendId: 'local',
@@ -37,6 +38,7 @@ function createSessionSnapshot(
     disconnectReason: null,
     cols: 100,
     rows: 30,
+    appliedResizeGeneration,
     liveCwd: 'C:/dev/terminal-sheet',
     projectRoot: 'C:/dev/terminal-sheet',
     integration: {
@@ -45,7 +47,7 @@ function createSessionSnapshot(
       message: 'Integration is not required for shell sessions.',
       updatedAt: null,
     },
-    ...overrides,
+    ...remainingOverrides,
   };
 }
 

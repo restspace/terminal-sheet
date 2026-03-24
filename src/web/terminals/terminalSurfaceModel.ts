@@ -4,19 +4,15 @@ import {
   type TerminalNode,
   type WorkspaceLayoutMode,
 } from '../../shared/workspace';
+const MAX_FOCUS_TILES_LIVE_TERMINAL_SURFACES = 5;
 
 export type TerminalPresentationMode = 'overview' | 'inspect' | 'focus';
-export type TerminalSurfaceKind = 'interactive' | 'live-preview' | 'summary';
-export type TerminalInteractionMode = 'interactive' | 'read-only';
-export type TerminalSizeSource = 'measured' | 'snapshot';
-export type TerminalResizeAuthority = 'owner' | 'none';
+export type TerminalSurfaceKind = 'live' | 'summary';
 
 export interface TerminalSurfaceModel {
   presentationMode: TerminalPresentationMode;
   surfaceKind: TerminalSurfaceKind;
-  interactionMode: TerminalInteractionMode;
-  sizeSource: TerminalSizeSource;
-  resizeAuthority: TerminalResizeAuthority;
+  acceptsInput: boolean;
 }
 
 export interface TerminalSurfaceModelState {
@@ -38,7 +34,9 @@ export function deriveTerminalSurfaceModelState(options: {
     selectedNodeId,
     sessions,
     interactionAtByTerminalId,
+    layoutMode,
   } = options;
+  const isFocusTilesLayout = layoutMode === 'focus-tiles';
   const terminalOrder = new Map(
     terminals.map((terminal, index) => [terminal.id, index] as const),
   );
@@ -47,9 +45,12 @@ export function deriveTerminalSurfaceModelState(options: {
   )
     ? selectedNodeId
     : null;
-  const inspectPreviewBudget = focusedTerminalId
-    ? Math.max(0, MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS - 1)
+  const maxLiveTerminalSurfaces = isFocusTilesLayout
+    ? MAX_FOCUS_TILES_LIVE_TERMINAL_SURFACES
     : MAX_LIVE_READ_ONLY_TERMINAL_PREVIEWS;
+  const inspectPreviewBudget = focusedTerminalId
+    ? Math.max(0, maxLiveTerminalSurfaces - 1)
+    : maxLiveTerminalSurfaces;
   const inspectTerminalIds = terminals
     .filter((terminal) => terminal.id !== focusedTerminalId)
     .sort((left, right) => {
@@ -81,23 +82,21 @@ export function deriveTerminalSurfaceModelState(options: {
 
   for (const terminal of terminals) {
     if (terminal.id === focusedTerminalId) {
+      const hasLiveSession = Boolean(sessions[terminal.id]);
       modelById.set(terminal.id, {
         presentationMode: 'focus',
-        surfaceKind: sessions[terminal.id] ? 'interactive' : 'summary',
-        interactionMode: 'interactive',
-        sizeSource: 'measured',
-        resizeAuthority: 'owner',
+        surfaceKind: hasLiveSession ? 'live' : 'summary',
+        acceptsInput: hasLiveSession,
       });
       continue;
     }
 
     if (inspectTerminalIdSet.has(terminal.id)) {
+      const hasLiveSession = Boolean(sessions[terminal.id]);
       modelById.set(terminal.id, {
         presentationMode: 'inspect',
-        surfaceKind: sessions[terminal.id] ? 'live-preview' : 'summary',
-        interactionMode: 'read-only',
-        sizeSource: 'snapshot',
-        resizeAuthority: 'none',
+        surfaceKind: hasLiveSession ? 'live' : 'summary',
+        acceptsInput: false,
       });
       continue;
     }
@@ -105,9 +104,7 @@ export function deriveTerminalSurfaceModelState(options: {
     modelById.set(terminal.id, {
       presentationMode: 'overview',
       surfaceKind: 'summary',
-      interactionMode: 'read-only',
-      sizeSource: 'snapshot',
-      resizeAuthority: 'none',
+      acceptsInput: false,
     });
     overviewTerminalIds.push(terminal.id);
   }

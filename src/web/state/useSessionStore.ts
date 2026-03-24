@@ -6,6 +6,7 @@ import type {
   TerminalSessionOutputState,
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
+import { logStateDebug } from '../debug/stateDebug';
 
 interface MergeSessionSnapshotsOptions {
   replaceAll?: boolean;
@@ -56,17 +57,31 @@ export function applyServerMessage(
   message: TerminalServerSocketMessage,
 ): Record<string, TerminalSessionSnapshot> {
   switch (message.type) {
+    case 'frontend.lease':
+    case 'frontend.locked':
     case 'ready':
     case 'workspace.updated':
       return current;
     case 'session.init':
+      logStateDebug('sessions', 'session.init', {
+        sessions: message.sessions.map(summarizeSessionSnapshotForDebug),
+      });
       return mergeSessionSnapshots(current, message.sessions);
     case 'session.snapshot': {
       const existing = current[message.session.sessionId];
 
       if (existing && areSessionSnapshotsEqual(existing, message.session)) {
+        logStateDebug('sessions', 'session.snapshotIgnored', {
+          existing: summarizeSessionSnapshotForDebug(existing),
+          next: summarizeSessionSnapshotForDebug(message.session),
+        });
         return current;
       }
+
+      logStateDebug('sessions', 'session.snapshotApplied', {
+        existing: existing ? summarizeSessionSnapshotForDebug(existing) : null,
+        next: summarizeSessionSnapshotForDebug(message.session),
+      });
 
       return {
         ...current,
@@ -231,4 +246,20 @@ function areIntegrationStatesEqual(
     left.message === right.message &&
     left.updatedAt === right.updatedAt
   );
+}
+
+function summarizeSessionSnapshotForDebug(
+  session: TerminalSessionSnapshot,
+): Record<string, unknown> {
+  return {
+    sessionId: session.sessionId,
+    status: session.status,
+    recoveryState: session.recoveryState,
+    connected: session.connected,
+    cols: session.cols,
+    rows: session.rows,
+    appliedResizeGeneration: session.appliedResizeGeneration,
+    lastActivityAt: session.lastActivityAt,
+    lastOutputAt: session.lastOutputAt,
+  };
 }

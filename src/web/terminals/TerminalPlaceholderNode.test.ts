@@ -33,9 +33,9 @@ vi.mock('./TerminalFocusSurface', () => {
     className?: string;
     sessionId: string;
     scrollback: string;
-    interactionMode?: 'interactive' | 'read-only';
+    acceptsInput?: boolean;
     autoFocusAtMs?: number | null;
-    deferResizeSync?: boolean;
+    freezeGeometry?: boolean;
   }) => {
     useEffect(() => {
       mockSurfaceState.mountCount += 1;
@@ -49,9 +49,9 @@ vi.mock('./TerminalFocusSurface', () => {
       'data-testid': 'terminal-surface',
       'data-session-id': props.sessionId,
       'data-scrollback': props.scrollback,
-      'data-read-only': String(props.interactionMode === 'read-only'),
+      'data-read-only': String(!props.acceptsInput),
       'data-auto-focus': String(props.autoFocusAtMs ?? ''),
-      'data-defer-resize-sync': String(Boolean(props.deferResizeSync)),
+      'data-freeze-geometry': String(Boolean(props.freezeGeometry)),
       className: props.className,
     });
   };
@@ -66,7 +66,7 @@ vi.mock('./TerminalFocusSurface', () => {
     }) =>
       MockTerminalSurface({
         ...props,
-        interactionMode: 'interactive',
+        acceptsInput: true,
       }),
   };
 });
@@ -117,7 +117,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'inspect',
-            surfaceKind: 'live-preview',
+            surfaceKind: 'live',
           }),
         ),
       );
@@ -172,7 +172,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'inspect',
-            surfaceKind: 'live-preview',
+            surfaceKind: 'live',
           }),
         ),
       );
@@ -192,8 +192,9 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'focus',
-            surfaceKind: 'interactive',
+            surfaceKind: 'live',
             selected: true,
+            acceptsInput: true,
             autoFocusAtMs: 123,
           }),
         ),
@@ -208,7 +209,7 @@ describe('TerminalPlaceholderNode', () => {
     expect(mockSurfaceState.unmountCount).toBe(0);
   });
 
-  it('defers backend resize sync while layout animation is active', () => {
+  it('freezes terminal geometry while layout animation is active', () => {
     const terminal = createPlaceholderTerminal(0);
     const session = createSessionSnapshot(terminal.id, {
       scrollback: 'streaming output',
@@ -222,16 +223,17 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'focus',
-            surfaceKind: 'interactive',
+            surfaceKind: 'live',
             selected: true,
-            deferResizeSync: true,
+            acceptsInput: true,
+            freezeTerminalGeometry: true,
           }),
         ),
       );
     });
 
     const animatedSurface = container.querySelector('[data-testid="terminal-surface"]');
-    expect(animatedSurface?.getAttribute('data-defer-resize-sync')).toBe('true');
+    expect(animatedSurface?.getAttribute('data-freeze-geometry')).toBe('true');
 
     act(() => {
       root.render(
@@ -241,16 +243,17 @@ describe('TerminalPlaceholderNode', () => {
             terminal,
             session,
             presentationMode: 'focus',
-            surfaceKind: 'interactive',
+            surfaceKind: 'live',
             selected: true,
-            deferResizeSync: false,
+            acceptsInput: true,
+            freezeTerminalGeometry: false,
           }),
         ),
       );
     });
 
     const steadySurface = container.querySelector('[data-testid="terminal-surface"]');
-    expect(steadySurface?.getAttribute('data-defer-resize-sync')).toBe('false');
+    expect(steadySurface?.getAttribute('data-freeze-geometry')).toBe('false');
   });
 
   it('renders remote sessions through the same live preview path as local sessions', () => {
@@ -272,7 +275,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal: localTerminal,
             session,
             presentationMode: 'inspect',
-            surfaceKind: 'live-preview',
+            surfaceKind: 'live',
           }),
         ),
       );
@@ -294,7 +297,7 @@ describe('TerminalPlaceholderNode', () => {
             terminal: remoteTerminal,
             session,
             presentationMode: 'inspect',
-            surfaceKind: 'live-preview',
+            surfaceKind: 'live',
           }),
         ),
       );
@@ -316,8 +319,9 @@ function createNodeProps(options: {
   presentationMode: 'overview' | 'inspect' | 'focus';
   surfaceKind: TerminalSurfaceModel['surfaceKind'];
   selected?: boolean;
+  acceptsInput?: boolean;
   autoFocusAtMs?: number | null;
-  deferResizeSync?: boolean;
+  freezeTerminalGeometry?: boolean;
 }): ComponentProps<typeof TerminalPlaceholderNode> {
   return {
     id: options.terminal.id,
@@ -327,12 +331,7 @@ function createNodeProps(options: {
       surfaceModel: {
         presentationMode: options.presentationMode,
         surfaceKind: options.surfaceKind,
-        interactionMode:
-          options.surfaceKind === 'interactive' ? 'interactive' : 'read-only',
-        sizeSource:
-          options.surfaceKind === 'interactive' ? 'measured' : 'snapshot',
-        resizeAuthority:
-          options.surfaceKind === 'interactive' ? 'owner' : 'none',
+        acceptsInput: options.acceptsInput ?? false,
       },
       autoFocusAtMs: options.autoFocusAtMs ?? null,
       socketState: 'open' as const,
@@ -347,7 +346,7 @@ function createNodeProps(options: {
       onMarkdownDrop: vi.fn(),
       backendAccent: null,
       activeMarkdownLink: null,
-      deferResizeSync: options.deferResizeSync ?? false,
+      freezeTerminalGeometry: options.freezeTerminalGeometry ?? false,
       allowResize: true,
       resizeZoom: 1,
     } satisfies TerminalFlowNode['data'],
@@ -365,6 +364,7 @@ function createSessionSnapshot(
   sessionId: string,
   overrides: Partial<TerminalSessionSnapshot> = {},
 ): TerminalSessionSnapshot {
+  const { appliedResizeGeneration = null, ...remainingOverrides } = overrides;
   return {
     sessionId,
     backendId: overrides.backendId ?? 'local',
@@ -385,6 +385,7 @@ function createSessionSnapshot(
     disconnectReason: null,
     cols: 80,
     rows: 24,
+    appliedResizeGeneration,
     liveCwd: '.',
     projectRoot: '.',
     integration: {
@@ -393,6 +394,6 @@ function createSessionSnapshot(
       message: 'Integration is not required for shell sessions.',
       updatedAt: null,
     },
-    ...overrides,
+    ...remainingOverrides,
   };
 }

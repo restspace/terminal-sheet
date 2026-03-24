@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { BackendStatus } from '../../shared/backends';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 
 export interface BackendEntry {
   id: string;
@@ -55,8 +56,8 @@ export function useBackends(isActive: boolean): UseBackendsResult {
   const fetchBackends = useCallback(async () => {
     try {
       const [backendsResponse, tokenResponse] = await Promise.all([
-        fetch('/api/backends'),
-        fetch('/api/token/info'),
+        fetchWithFrontendLease('/api/backends'),
+        fetchWithFrontendLease('/api/token/info'),
       ]);
 
       if (!isMountedRef.current) {
@@ -123,7 +124,7 @@ export function useBackends(isActive: boolean): UseBackendsResult {
 
   const addBackend = useCallback(
     async (label: string, baseUrl: string, token: string): Promise<void> => {
-      const response = await fetch('/api/backends', {
+      const response = await fetchWithFrontendLease('/api/backends', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label, baseUrl, token }),
@@ -141,7 +142,7 @@ export function useBackends(isActive: boolean): UseBackendsResult {
 
   const removeBackend = useCallback(
     async (backendId: string): Promise<void> => {
-      const response = await fetch(
+      const response = await fetchWithFrontendLease(
         `/api/backends/${encodeURIComponent(backendId)}`,
         { method: 'DELETE' },
       );
@@ -158,7 +159,7 @@ export function useBackends(isActive: boolean): UseBackendsResult {
 
   const rotateBackendToken = useCallback(
     async (backendId: string): Promise<void> => {
-      const response = await fetch(
+      const response = await fetchWithFrontendLease(
         `/api/backends/${encodeURIComponent(backendId)}/rotate-token`,
         { method: 'POST' },
       );
@@ -174,7 +175,9 @@ export function useBackends(isActive: boolean): UseBackendsResult {
   );
 
   const rotateLocalToken = useCallback(async (): Promise<void> => {
-    const response = await fetch('/api/token/rotate', { method: 'POST' });
+    const response = await fetchWithFrontendLease('/api/token/rotate', {
+      method: 'POST',
+    });
 
     if (!response.ok) {
       const data = (await response.json()) as { message?: string };
@@ -200,7 +203,7 @@ export function useBackends(isActive: boolean): UseBackendsResult {
       tokenPath?: string;
       runInstall: boolean;
     }): Promise<string | null> => {
-      const response = await fetch('/api/backends/ssh/setup', {
+      const response = await fetchWithFrontendLease('/api/backends/ssh/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),

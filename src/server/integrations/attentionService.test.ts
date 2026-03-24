@@ -106,6 +106,7 @@ describe('AttentionService', () => {
         disconnectReason: null,
         cols: 100,
         rows: 30,
+        appliedResizeGeneration: 1,
         liveCwd: 'C:/dev/terminal-sheet',
         projectRoot: 'C:/dev/terminal-sheet',
         integration: {

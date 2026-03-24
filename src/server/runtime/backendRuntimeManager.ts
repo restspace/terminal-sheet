@@ -130,11 +130,17 @@ export class BackendRuntimeManager {
     return this.getAdapterForSession(sessionId).sendInput(sessionId, data);
   }
 
-  resizeSession(sessionId: string, cols: number, rows: number): boolean {
+  resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ): boolean {
     return this.getAdapterForSession(sessionId).resizeSession(
       sessionId,
       cols,
       rows,
+      generation,
     );
   }
 
@@ -213,6 +219,9 @@ export class BackendRuntimeManager {
 
   private indexSessionMessage(message: TerminalServerSocketMessage): void {
     switch (message.type) {
+      case 'frontend.lease':
+      case 'frontend.locked':
+        return;
       case 'session.snapshot':
         this.sessionBackendIndex.set(
           message.session.sessionId,

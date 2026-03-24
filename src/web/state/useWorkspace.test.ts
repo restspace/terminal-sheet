@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FRONTEND_ID_HEADER } from '../../shared/frontendSessionTransport';
 
 import {
   createDefaultWorkspace,
@@ -29,6 +30,7 @@ describe('useWorkspace', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     latestState = null;
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -41,6 +43,7 @@ describe('useWorkspace', () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     document.body.innerHTML = '';
+    window.sessionStorage.clear();
   });
 
   it('optimistically applies viewport mutations before autosave and then adopts the saved workspace', async () => {
@@ -67,11 +70,13 @@ describe('useWorkspace', () => {
         const payload = JSON.parse(String(init.body)) as {
           commands: unknown[];
         };
+        const headers = new Headers(init.headers);
 
-        expect(init.headers).toMatchObject({
-          'Content-Type': 'application/json',
-          [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
-        });
+        expect(headers.get('Content-Type')).toBe('application/json');
+        expect(headers.get(WORKSPACE_BASE_UPDATED_AT_HEADER)).toBe(
+          initialWorkspace.updatedAt,
+        );
+        expect(headers.get(FRONTEND_ID_HEADER)).toBeTruthy();
         expect(payload).toEqual({
           commands: [
             {
@@ -165,11 +170,13 @@ describe('useWorkspace', () => {
         const payload = JSON.parse(String(init.body)) as {
           commands: unknown[];
         };
+        const headers = new Headers(init.headers);
 
-        expect(init.headers).toMatchObject({
-          'Content-Type': 'application/json',
-          [WORKSPACE_BASE_UPDATED_AT_HEADER]: initialWorkspace.updatedAt,
-        });
+        expect(headers.get('Content-Type')).toBe('application/json');
+        expect(headers.get(WORKSPACE_BASE_UPDATED_AT_HEADER)).toBe(
+          initialWorkspace.updatedAt,
+        );
+        expect(headers.get(FRONTEND_ID_HEADER)).toBeTruthy();
         expect(payload).toEqual({
           commands: [
             {

@@ -14,17 +14,15 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 
 import { MAX_SCROLLBACK_CHARS } from '../../shared/scrollback';
-import {
-  MAX_TERMINAL_COLS,
-  MAX_TERMINAL_ROWS,
-  MIN_TERMINAL_COLS,
-  MIN_TERMINAL_ROWS,
-} from '../../shared/terminalSizeConstraints';
 import { logStateDebug } from '../debug/stateDebug';
 import { getIncrementalWrite } from './incrementalWrite';
+import { measureLiveTerminalGeometry } from './terminalGeometry';
+import {
+  observeAppliedTerminalResizeGeneration,
+  reserveNextTerminalResizeGeneration,
+} from './terminalResizeGeneration';
 import {
   DEFAULT_TERMINAL_CELL_SIZE,
-  measureCellSize,
   type TerminalCellSize,
 } from './terminalSizing';
 
@@ -32,24 +30,29 @@ export interface TerminalSurfaceProps {
   sessionId: string;
   scrollback: string;
   className?: string;
-  interactionMode?: 'interactive' | 'read-only';
-  sizeSource?: 'measured' | 'snapshot';
-  resizeAuthority?: 'owner' | 'none';
-  deferResizeSync?: boolean;
+  acceptsInput?: boolean;
+  freezeGeometry?: boolean;
   visualScale?: number;
-  snapshotCols?: number;
-  snapshotRows?: number;
+  appliedCols?: number | null;
+  appliedRows?: number | null;
+  appliedResizeGeneration?: number | null;
   canSyncResize?: boolean;
   scrollResetKey?: string | number | boolean;
   autoFocusAtMs?: number | null;
   onInput?: (sessionId: string, data: string) => void;
-  onResize?: (sessionId: string, cols: number, rows: number) => boolean | void;
+  onResize?: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ) => boolean | void;
   onResizeSyncError?: (details: {
     sessionId: string;
     cols: number;
     rows: number;
     timeoutMs: number;
   }) => void;
+  onTimedOut?: () => void;
 }
 
 const TERMINAL_FONT_FAMILY = '"IBM Plex Mono", "Cascadia Code", monospace';
@@ -94,295 +97,301 @@ interface TerminalSelectionContextMenu {
   y: number;
 }
 type ResizeSyncBlockedReason =
-  | 'deferred'
+  | 'geometry-frozen'
   | 'socket-unavailable'
   | 'rejected-send';
+interface PendingResizeRequest {
+  cols: number;
+  rows: number;
+  generation: number;
+  sent: boolean;
+}
 
 export function useXtermSurfaceController({
   sessionId,
   scrollback,
   className,
-  interactionMode = 'interactive',
-  sizeSource = 'measured',
-  resizeAuthority = 'owner',
-  deferResizeSync = false,
+  acceptsInput = true,
+  freezeGeometry = false,
   visualScale = 1,
-  snapshotCols,
-  snapshotRows,
+  appliedCols = null,
+  appliedRows = null,
+  appliedResizeGeneration = null,
   canSyncResize = true,
   scrollResetKey,
   autoFocusAtMs,
   onInput,
   onResize,
   onResizeSyncError,
+  onTimedOut,
 }: TerminalSurfaceProps) {
-  const readOnly = interactionMode === 'read-only';
+  const readOnly = !acceptsInput;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const lastRenderedScrollbackRef = useRef('');
-  const lastSizeRef = useRef('');
+  const lastFitStateKeyRef = useRef('');
   const lastRenderedTerminalSizeRef = useRef('');
-  const lastSyncedBackendSizeRef = useRef('');
-  const pendingBackendSizeRef = useRef<{
-    cols: number;
-    rows: number;
-  } | null>(null);
-  const lastResizeMismatchKeyRef = useRef('');
+  const pendingResizeRequestRef = useRef<PendingResizeRequest | null>(null);
   const pendingResizeRetryTimerRef = useRef<number | null>(null);
   const resizeSyncRetryDelayIndexRef = useRef(0);
   const resizeSyncFailureTimerRef = useRef<number | null>(null);
-  const resizeSyncFailureSizeKeyRef = useRef<string | null>(null);
-  const resizeSyncTimedOutSizeKeyRef = useRef<string | null>(null);
+  const resizeSyncFailureRequestKeyRef = useRef<string | null>(null);
+  const resizeSyncTimedOutRequestKeyRef = useRef<string | null>(null);
   const hasAttemptedResizeSyncRef = useRef(false);
   const resizeSyncBlockedReasonRef = useRef<ResizeSyncBlockedReason | null>(null);
-  const resizeSyncBlockedSizeKeyRef = useRef<string | null>(null);
-  const didInitializeReadOnlySizingRef = useRef(false);
+  const resizeSyncBlockedRequestRef = useRef<PendingResizeRequest | null>(null);
   const focusTimerRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const [selectionContextMenu, setSelectionContextMenu] =
     useState<TerminalSelectionContextMenu | null>(null);
+  const [isResizePending, setIsResizePending] = useState(false);
   const cellSizeRef = useRef<TerminalCellSize>(DEFAULT_TERMINAL_CELL_SIZE);
   const shouldStickToBottomRef = useRef(true);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
-  const resizeAuthorityRef = useRef(resizeAuthority);
-  resizeAuthorityRef.current = resizeAuthority;
-  const sizeSourceRef = useRef(sizeSource);
-  sizeSourceRef.current = sizeSource;
-  const deferResizeSyncRef = useRef(deferResizeSync);
-  deferResizeSyncRef.current = deferResizeSync;
-  const snapshotColsRef = useRef<number | undefined>(snapshotCols);
-  snapshotColsRef.current = snapshotCols;
-  const snapshotRowsRef = useRef<number | undefined>(snapshotRows);
-  snapshotRowsRef.current = snapshotRows;
+  const freezeGeometryRef = useRef(freezeGeometry);
+  freezeGeometryRef.current = freezeGeometry;
+  const appliedColsRef = useRef<number | null>(appliedCols);
+  appliedColsRef.current = appliedCols;
+  const appliedRowsRef = useRef<number | null>(appliedRows);
+  appliedRowsRef.current = appliedRows;
+  const appliedResizeGenerationRef = useRef<number | null>(appliedResizeGeneration);
+  appliedResizeGenerationRef.current = appliedResizeGeneration;
   const canSyncResizeRef = useRef(canSyncResize);
   canSyncResizeRef.current = canSyncResize;
   const visualScaleRef = useRef(visualScale);
   visualScaleRef.current = visualScale;
   const scheduleFitRef = useRef<(() => void) | null>(null);
   const onResizeSyncErrorRef = useRef(onResizeSyncError);
-  const syncBackendSizeRef = useRef<((cols: number, rows: number, force?: boolean, fromRetry?: boolean) => void) | null>(
+  const dispatchPendingResizeRef = useRef<((fromRetry?: boolean) => void) | null>(
     null,
   );
   onResizeSyncErrorRef.current = onResizeSyncError;
   const markResizeSyncBlocked = useEffectEvent((
     reason: ResizeSyncBlockedReason,
-    cols: number,
-    rows: number,
+    request: PendingResizeRequest,
   ) => {
-    const sizeKey = `${cols}x${rows}`;
 
     if (
       resizeSyncBlockedReasonRef.current === reason &&
-      resizeSyncBlockedSizeKeyRef.current === sizeKey
+      areResizeRequestsEqual(resizeSyncBlockedRequestRef.current, request)
     ) {
       return;
     }
 
     resizeSyncBlockedReasonRef.current = reason;
-    resizeSyncBlockedSizeKeyRef.current = sizeKey;
+    resizeSyncBlockedRequestRef.current = request;
     logStateDebug('terminalSurface', 'resizeSyncBlocked', {
       sessionId,
       reason,
-      cols,
-      rows,
+      cols: request.cols,
+      rows: request.rows,
+      generation: request.generation,
       canSyncResize: canSyncResizeRef.current,
-      deferResizeSync: deferResizeSyncRef.current,
+      freezeGeometry: freezeGeometryRef.current,
       hasAttemptedResizeSync: hasAttemptedResizeSyncRef.current,
     });
   });
   const clearResizeSyncBlocked = useEffectEvent((
-    result: 'already-synced' | 'synced',
+    result: 'applied' | 'cleared' | 'requested',
   ) => {
     const previousReason = resizeSyncBlockedReasonRef.current;
-    const previousSizeKey = resizeSyncBlockedSizeKeyRef.current;
+    const previousRequest = resizeSyncBlockedRequestRef.current;
 
-    if (!previousReason || !previousSizeKey) {
+    if (!previousReason || !previousRequest) {
       return;
     }
-
-    const previousSize = parseTerminalSizeKey(previousSizeKey);
     logStateDebug('terminalSurface', 'resizeSyncUnblocked', {
       sessionId,
       previousReason,
-      previousCols: previousSize?.cols ?? null,
-      previousRows: previousSize?.rows ?? null,
+      previousCols: previousRequest.cols,
+      previousRows: previousRequest.rows,
+      previousGeneration: previousRequest.generation,
       result,
     });
     resizeSyncBlockedReasonRef.current = null;
-    resizeSyncBlockedSizeKeyRef.current = null;
+    resizeSyncBlockedRequestRef.current = null;
   });
   const forwardInput = useEffectEvent((data: string) => {
     if (!readOnly) {
       onInput?.(sessionId, data);
     }
   });
-  const syncBackendSize = useEffectEvent(
-    (cols: number, rows: number, force = false, fromRetry = false) => {
-      const sizeKey = `${cols}x${rows}`;
-      if (resizeSyncTimedOutSizeKeyRef.current === sizeKey) {
-        return;
-      }
-      if (
-        resizeSyncTimedOutSizeKeyRef.current &&
-        resizeSyncTimedOutSizeKeyRef.current !== sizeKey &&
-        !fromRetry
-      ) {
-        resizeSyncTimedOutSizeKeyRef.current = null;
-      }
+  const dispatchPendingResize = useEffectEvent((fromRetry = false) => {
+    const pendingRequest = pendingResizeRequestRef.current;
 
-      if (deferResizeSyncRef.current) {
-        pendingBackendSizeRef.current = { cols, rows };
-        markResizeSyncBlocked('deferred', cols, rows);
-        if (hasAttemptedResizeSyncRef.current) {
-          scheduleResizeSyncFailureDeadline({
-            sessionId,
-            cols,
-            rows,
-            timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
-            pendingBackendSizeRef,
-            pendingResizeRetryTimerRef,
-            resizeSyncRetryDelayIndexRef,
-            resizeSyncFailureTimerRef,
-            resizeSyncFailureSizeKeyRef,
-            resizeSyncTimedOutSizeKeyRef,
-            onResizeSyncError: onResizeSyncErrorRef.current,
-            reason: 'deferred',
-          });
-        } else {
-          clearResizeSyncFailureDeadline(
-            resizeSyncFailureTimerRef,
-            resizeSyncFailureSizeKeyRef,
-          );
-        }
-        return;
-      }
+    if (!pendingRequest) {
+      return;
+    }
 
-      if (!canSyncResizeRef.current) {
-        pendingBackendSizeRef.current = { cols, rows };
-        markResizeSyncBlocked('socket-unavailable', cols, rows);
-        if (hasAttemptedResizeSyncRef.current) {
-          scheduleResizeSyncFailureDeadline({
-            sessionId,
-            cols,
-            rows,
-            timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
-            pendingBackendSizeRef,
-            pendingResizeRetryTimerRef,
-            resizeSyncRetryDelayIndexRef,
-            resizeSyncFailureTimerRef,
-            resizeSyncFailureSizeKeyRef,
-            resizeSyncTimedOutSizeKeyRef,
-            onResizeSyncError: onResizeSyncErrorRef.current,
-            reason: 'socket-unavailable',
-          });
-        } else {
-          clearResizeSyncFailureDeadline(
-            resizeSyncFailureTimerRef,
-            resizeSyncFailureSizeKeyRef,
-          );
-        }
-        return;
-      }
+    if (pendingRequest.sent && !fromRetry) {
+      return;
+    }
 
-      if (!force && sizeKey === lastSyncedBackendSizeRef.current) {
-        pendingBackendSizeRef.current = null;
-        clearResizeSyncRetryState(
-          pendingResizeRetryTimerRef,
-          resizeSyncRetryDelayIndexRef,
-        );
-        clearResizeSyncFailureDeadline(
-          resizeSyncFailureTimerRef,
-          resizeSyncFailureSizeKeyRef,
-        );
-        clearResizeSyncBlocked('already-synced');
-        return;
-      }
+    const requestKey = getResizeRequestKey(pendingRequest);
+    if (resizeSyncTimedOutRequestKeyRef.current === requestKey) {
+      return;
+    }
 
-      if (!fromRetry) {
-        clearResizeSyncRetryState(
-          pendingResizeRetryTimerRef,
-          resizeSyncRetryDelayIndexRef,
-        );
-      }
+    if (
+      resizeSyncTimedOutRequestKeyRef.current &&
+      resizeSyncTimedOutRequestKeyRef.current !== requestKey &&
+      !fromRetry
+    ) {
+      resizeSyncTimedOutRequestKeyRef.current = null;
+    }
 
-      logStateDebug('terminalSurface', 'resizeSentToBackend', {
-        sessionId,
-        cols,
-        rows,
-        readOnly: readOnlyRef.current,
-        debounced: false,
-        force,
-      });
-      hasAttemptedResizeSyncRef.current = true;
-      const resizeAccepted = onResize?.(sessionId, cols, rows);
-
-      if (resizeAccepted === false) {
-        pendingBackendSizeRef.current = { cols, rows };
-        markResizeSyncBlocked('rejected-send', cols, rows);
+    if (freezeGeometryRef.current) {
+      markResizeSyncBlocked('geometry-frozen', pendingRequest);
+      if (hasAttemptedResizeSyncRef.current) {
         scheduleResizeSyncFailureDeadline({
           sessionId,
-          cols,
-          rows,
+          request: pendingRequest,
           timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
-          pendingBackendSizeRef,
+          pendingResizeRequestRef,
           pendingResizeRetryTimerRef,
           resizeSyncRetryDelayIndexRef,
           resizeSyncFailureTimerRef,
-          resizeSyncFailureSizeKeyRef,
-          resizeSyncTimedOutSizeKeyRef,
+          resizeSyncFailureRequestKeyRef,
+          resizeSyncTimedOutRequestKeyRef,
           onResizeSyncError: onResizeSyncErrorRef.current,
-          reason: 'rejected-send',
+          onTimedOut: () => {
+            setIsResizePending(false);
+            onTimedOut?.();
+          },
+          reason: 'geometry-frozen',
         });
-        scheduleResizeSyncRetry({
-          pendingBackendSizeRef,
+      } else {
+        clearResizeSyncFailureDeadline(
+          resizeSyncFailureTimerRef,
+          resizeSyncFailureRequestKeyRef,
+        );
+      }
+      return;
+    }
+
+    if (!canSyncResizeRef.current) {
+      markResizeSyncBlocked('socket-unavailable', pendingRequest);
+      if (hasAttemptedResizeSyncRef.current) {
+        scheduleResizeSyncFailureDeadline({
+          sessionId,
+          request: pendingRequest,
+          timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
+          pendingResizeRequestRef,
           pendingResizeRetryTimerRef,
           resizeSyncRetryDelayIndexRef,
-          deferResizeSyncRef,
-          canSyncResizeRef,
-          syncBackendSize: (
-            nextCols,
-            nextRows,
-            nextForce = false,
-            nextFromRetry = false,
-          ) => {
-            syncBackendSizeRef.current?.(
-              nextCols,
-              nextRows,
-              nextForce,
-              nextFromRetry,
-            );
+          resizeSyncFailureTimerRef,
+          resizeSyncFailureRequestKeyRef,
+          resizeSyncTimedOutRequestKeyRef,
+          onResizeSyncError: onResizeSyncErrorRef.current,
+          onTimedOut: () => {
+            setIsResizePending(false);
+            onTimedOut?.();
           },
+          reason: 'socket-unavailable',
         });
-        return;
+      } else {
+        clearResizeSyncFailureDeadline(
+          resizeSyncFailureTimerRef,
+          resizeSyncFailureRequestKeyRef,
+        );
       }
+      return;
+    }
 
-      lastSyncedBackendSizeRef.current = sizeKey;
-      pendingBackendSizeRef.current = null;
+    if (!fromRetry) {
       clearResizeSyncRetryState(
         pendingResizeRetryTimerRef,
         resizeSyncRetryDelayIndexRef,
       );
-      clearResizeSyncFailureDeadline(
+    }
+
+    logStateDebug('terminalSurface', 'resizeSentToBackend', {
+      sessionId,
+      cols: pendingRequest.cols,
+      rows: pendingRequest.rows,
+      generation: pendingRequest.generation,
+      readOnly: readOnlyRef.current,
+    });
+    hasAttemptedResizeSyncRef.current = true;
+    const resizeAccepted = onResize?.(
+      sessionId,
+      pendingRequest.cols,
+      pendingRequest.rows,
+      pendingRequest.generation,
+    );
+
+    if (resizeAccepted === false) {
+      pendingResizeRequestRef.current = {
+        ...pendingRequest,
+        sent: false,
+      };
+      setIsResizePending(true);
+      markResizeSyncBlocked('rejected-send', pendingRequest);
+      scheduleResizeSyncFailureDeadline({
+        sessionId,
+        request: pendingRequest,
+        timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
+        pendingResizeRequestRef,
+        pendingResizeRetryTimerRef,
+        resizeSyncRetryDelayIndexRef,
         resizeSyncFailureTimerRef,
-        resizeSyncFailureSizeKeyRef,
-      );
-      resizeSyncTimedOutSizeKeyRef.current = null;
-      clearResizeSyncBlocked('synced');
-    },
-  );
+        resizeSyncFailureRequestKeyRef,
+        resizeSyncTimedOutRequestKeyRef,
+        onResizeSyncError: onResizeSyncErrorRef.current,
+        onTimedOut: () => {
+          setIsResizePending(false);
+          onTimedOut?.();
+        },
+        reason: 'rejected-send',
+      });
+      scheduleResizeSyncRetry({
+        pendingResizeRequestRef,
+        pendingResizeRetryTimerRef,
+        resizeSyncRetryDelayIndexRef,
+        freezeGeometryRef,
+        canSyncResizeRef,
+        dispatchPendingResize: (retryFromTimer = false) => {
+          dispatchPendingResizeRef.current?.(retryFromTimer);
+        },
+      });
+      return;
+    }
+
+    pendingResizeRequestRef.current = {
+      ...pendingRequest,
+      sent: true,
+    };
+    setIsResizePending(true);
+    clearResizeSyncRetryState(
+      pendingResizeRetryTimerRef,
+      resizeSyncRetryDelayIndexRef,
+    );
+    scheduleResizeSyncFailureDeadline({
+      sessionId,
+      request: pendingRequest,
+      timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
+      pendingResizeRequestRef,
+      pendingResizeRetryTimerRef,
+      resizeSyncRetryDelayIndexRef,
+      resizeSyncFailureTimerRef,
+      resizeSyncFailureRequestKeyRef,
+      resizeSyncTimedOutRequestKeyRef,
+      onResizeSyncError: onResizeSyncErrorRef.current,
+      onTimedOut: () => {
+        setIsResizePending(false);
+        onTimedOut?.();
+      },
+    });
+    clearResizeSyncBlocked('requested');
+  });
   useEffect(() => {
-    syncBackendSizeRef.current = (
-      cols: number,
-      rows: number,
-      force = false,
-      fromRetry = false,
-    ) => {
-      syncBackendSize(cols, rows, force, fromRetry);
+    dispatchPendingResizeRef.current = (fromRetry = false) => {
+      dispatchPendingResize(fromRetry);
     };
 
     return () => {
-      syncBackendSizeRef.current = null;
+      dispatchPendingResizeRef.current = null;
     };
   });
 
@@ -392,11 +401,12 @@ export function useXtermSurfaceController({
     if (!container) {
       return;
     }
-
-    lastSyncedBackendSizeRef.current = '';
     hasAttemptedResizeSyncRef.current = false;
     resizeSyncBlockedReasonRef.current = null;
-    resizeSyncBlockedSizeKeyRef.current = null;
+    resizeSyncBlockedRequestRef.current = null;
+    pendingResizeRequestRef.current = null;
+    resizeSyncTimedOutRequestKeyRef.current = null;
+    setIsResizePending(false);
     const terminal = new Terminal(createTerminalOptions(visualScaleRef.current));
 
     terminal.open(container);
@@ -410,10 +420,11 @@ export function useXtermSurfaceController({
     logStateDebug('terminalSurface', 'mount', {
       sessionId,
       readOnly,
-      resizeAuthority: resizeAuthorityRef.current,
-      sizeSource: sizeSourceRef.current,
+      freezeGeometry: freezeGeometryRef.current,
       scrollbackLength: scrollback.length,
-      snapshotCols: snapshotColsRef.current ?? null,
+      appliedCols: appliedColsRef.current,
+      appliedRows: appliedRowsRef.current,
+      appliedResizeGeneration: appliedResizeGenerationRef.current,
       visualScale: visualScaleRef.current,
     });
 
@@ -434,91 +445,159 @@ export function useXtermSurfaceController({
     let disposed = false;
     const fitTerminal = () => {
       const isReadOnly = readOnlyRef.current;
-      const currentResizeAuthority = resizeAuthorityRef.current;
-      const currentSizeSource = sizeSourceRef.current;
-      cellSizeRef.current = getTerminalCellSize(
+      const measuredGeometry = measureLiveTerminalGeometry({
         terminal,
         container,
-        cellSizeRef.current,
-        getTerminalFontSize(visualScaleRef.current),
+        fallbackCellSize: cellSizeRef.current,
+        fontSize: getTerminalFontSize(visualScaleRef.current),
+      });
+      if (measuredGeometry) {
+        cellSizeRef.current = measuredGeometry.cellSize;
+      }
+      const desiredSize = measuredGeometry
+        ? {
+            cols: measuredGeometry.cols,
+            rows: measuredGeometry.rows,
+          }
+        : null;
+      const appliedSize = getTerminalSize(
+        appliedColsRef.current,
+        appliedRowsRef.current,
       );
-      const cellSize = cellSizeRef.current;
-      const size = measureTerminal(terminal, container, cellSize);
-      if (
-        size === null &&
-        currentResizeAuthority === 'owner' &&
-        currentSizeSource === 'measured'
-      ) {
+      const existingPendingRequest = pendingResizeRequestRef.current;
+      const pendingTargetsDesired = isResizeRequestForSize(
+        existingPendingRequest,
+        desiredSize,
+      );
+      const needsDesiredGeneration =
+        desiredSize !== null &&
+        (!areTerminalSizesEqual(desiredSize, appliedSize) ||
+          Boolean(existingPendingRequest?.sent && !pendingTargetsDesired));
+      let pendingRequest = existingPendingRequest;
+      let shouldDispatchPendingResize = false;
+
+      if (needsDesiredGeneration && desiredSize) {
+        if (!pendingTargetsDesired) {
+          pendingRequest = {
+            cols: desiredSize.cols,
+            rows: desiredSize.rows,
+            generation: reserveNextTerminalResizeGeneration(
+              sessionId,
+              appliedResizeGenerationRef.current,
+            ),
+            sent: false,
+          };
+          pendingResizeRequestRef.current = pendingRequest;
+          setIsResizePending(true);
+          logStateDebug('terminalSurface', 'pendingResizeQueued', {
+            sessionId,
+            cols: pendingRequest.cols,
+            rows: pendingRequest.rows,
+            generation: pendingRequest.generation,
+            appliedCols: appliedSize?.cols ?? null,
+            appliedRows: appliedSize?.rows ?? null,
+            appliedResizeGeneration: appliedResizeGenerationRef.current ?? null,
+            freezeGeometry: freezeGeometryRef.current,
+            readOnly: isReadOnly,
+          });
+        }
+        shouldDispatchPendingResize = !pendingRequest?.sent;
+      } else if (desiredSize !== null && existingPendingRequest && !existingPendingRequest.sent) {
+        pendingResizeRequestRef.current = null;
+        pendingRequest = null;
+        setIsResizePending(false);
+        logStateDebug('terminalSurface', 'pendingResizeCleared', {
+          sessionId,
+          reason: 'desired-matches-applied',
+          cols: desiredSize.cols,
+          rows: desiredSize.rows,
+        });
+        clearResizeSyncFailureDeadline(
+          resizeSyncFailureTimerRef,
+          resizeSyncFailureRequestKeyRef,
+        );
+        clearResizeSyncBlocked('cleared');
+      }
+
+      const displaySize =
+        freezeGeometryRef.current && appliedSize ? appliedSize : desiredSize ?? appliedSize;
+      if (!displaySize) {
+        logStateDebug('terminalSurface', 'fitSkippedNoDisplaySize', {
+          sessionId,
+          readOnly: isReadOnly,
+          freezeGeometry: freezeGeometryRef.current,
+          containerWidth: container.clientWidth,
+          containerHeight: container.clientHeight,
+          desiredCols: desiredSize?.cols ?? null,
+          desiredRows: desiredSize?.rows ?? null,
+          appliedCols: appliedSize?.cols ?? null,
+          appliedRows: appliedSize?.rows ?? null,
+          appliedResizeGeneration: appliedResizeGenerationRef.current ?? null,
+        });
         return;
       }
 
-      const effectiveCols =
-        currentSizeSource === 'snapshot' && snapshotColsRef.current != null
-          ? snapshotColsRef.current
-          : size !== null
-            ? size.cols
-            : measureTerminalClampContainer(container, cellSize).cols;
-      const effectiveRows =
-        currentSizeSource === 'snapshot' && snapshotRowsRef.current != null
-          ? snapshotRowsRef.current
-          : size !== null
-            ? size.rows
-            : measureTerminalClampContainer(container, cellSize).rows;
-      const terminalSizeKey = `${effectiveCols}x${effectiveRows}`;
-      const sizeKey = terminalSizeKey;
-
-      if (sizeKey === lastSizeRef.current) {
+      const displaySizeKey = buildTerminalSizeKey(displaySize);
+      const fitStateKey = buildFitStateKey({
+        readOnly: isReadOnly,
+        freezeGeometry: freezeGeometryRef.current,
+        desiredSize,
+        displaySize,
+        appliedSize,
+        pendingRequest,
+      });
+      if (fitStateKey === lastFitStateKeyRef.current) {
         return;
       }
-
-      lastSizeRef.current = sizeKey;
+      lastFitStateKeyRef.current = fitStateKey;
       logStateDebug('terminalSurface', 'fit', {
         sessionId,
         readOnly: isReadOnly,
-        resizeAuthority: currentResizeAuthority,
-        sizeSource: currentSizeSource,
-        effectiveCols,
-        rows: effectiveRows,
-        measuredCols: size?.cols ?? null,
-        measuredRows: size?.rows ?? null,
-        measuredWidth: size?.width ?? null,
-        measuredHeight: size?.height ?? null,
-        measuredSource: size?.source ?? null,
-        snapshotCols: snapshotColsRef.current ?? null,
-        snapshotRows: snapshotRowsRef.current ?? null,
+        freezeGeometry: freezeGeometryRef.current,
+        desiredCols: desiredSize?.cols ?? null,
+        desiredRows: desiredSize?.rows ?? null,
+        displayCols: displaySize.cols,
+        displayRows: displaySize.rows,
+        measuredWidth: measuredGeometry?.width ?? null,
+        measuredHeight: measuredGeometry?.height ?? null,
+        measuredSource: measuredGeometry?.source ?? null,
+        appliedCols: appliedSize?.cols ?? null,
+        appliedRows: appliedSize?.rows ?? null,
+        appliedResizeGeneration: appliedResizeGenerationRef.current ?? null,
+        pendingCols: pendingRequest?.cols ?? null,
+        pendingRows: pendingRequest?.rows ?? null,
+        pendingGeneration: pendingRequest?.generation ?? null,
+        pendingSent: pendingRequest?.sent ?? null,
         containerWidth: container.clientWidth,
         containerHeight: container.clientHeight,
       });
-
-      if (isReadOnly) {
-        const cols = effectiveCols;
-        const rows = effectiveRows;
-        const shouldResizeTerminal =
-          terminalSizeKey !== lastRenderedTerminalSizeRef.current;
-        const stickToBottom =
-          terminalRef.current === terminal && shouldStickToBottomRef.current;
-        terminal.write('', () => {
-          if (shouldResizeTerminal) {
-            terminal.resize(cols, rows);
-            lastRenderedTerminalSizeRef.current = terminalSizeKey;
-          }
+      const shouldResizeTerminal =
+        displaySizeKey !== lastRenderedTerminalSizeRef.current;
+      const stickToBottom =
+        terminalRef.current === terminal && shouldStickToBottomRef.current;
+      const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, isReadOnly);
+      terminal.write('', () => {
+        if (shouldResizeTerminal) {
+          terminal.resize(displaySize.cols, displaySize.rows);
+          lastRenderedTerminalSizeRef.current = displaySizeKey;
+          logStateDebug('terminalSurface', 'xtermResizedLocally', {
+            sessionId,
+            cols: displaySize.cols,
+            rows: displaySize.rows,
+            freezeGeometry: freezeGeometryRef.current,
+            readOnly: isReadOnly,
+            measuredSource: measuredGeometry?.source ?? null,
+          });
+        }
+        if (shouldDispatchPendingResize) {
+          dispatchPendingResizeRef.current?.();
+        }
+        if (isReadOnly) {
           syncReadOnlyViewport(terminal, stickToBottom);
-        });
-      } else {
-        const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, isReadOnly);
-        const shouldResizeTerminal =
-          terminalSizeKey !== lastRenderedTerminalSizeRef.current;
-        terminal.write('', () => {
-          if (shouldResizeTerminal) {
-            terminal.resize(effectiveCols, effectiveRows);
-            lastRenderedTerminalSizeRef.current = terminalSizeKey;
-          }
-          if (currentResizeAuthority === 'owner') {
-            syncBackendSize(effectiveCols, effectiveRows);
-          }
-          restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
-        });
-      }
+          return;
+        }
+        restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
+      });
     };
     const scheduleFit = () => {
       if (resizeFrameRef.current !== null) {
@@ -581,150 +660,76 @@ export function useXtermSurfaceController({
       );
       clearResizeSyncFailureDeadline(
         resizeSyncFailureTimerRef,
-        resizeSyncFailureSizeKeyRef,
+        resizeSyncFailureRequestKeyRef,
       );
-      resizeSyncTimedOutSizeKeyRef.current = null;
+      resizeSyncTimedOutRequestKeyRef.current = null;
       resizeSyncBlockedReasonRef.current = null;
-      resizeSyncBlockedSizeKeyRef.current = null;
-      lastSyncedBackendSizeRef.current = '';
-      pendingBackendSizeRef.current = null;
+      resizeSyncBlockedRequestRef.current = null;
+      pendingResizeRequestRef.current = null;
+      setIsResizePending(false);
       dataDisposable?.dispose();
       container.removeEventListener('wheel', handleUserScroll);
       rendererController.dispose();
       terminal.dispose();
       terminalRef.current = null;
       lastRenderedScrollbackRef.current = '';
-      lastSizeRef.current = '';
+      lastFitStateKeyRef.current = '';
       lastRenderedTerminalSizeRef.current = '';
       logStateDebug('terminalSurface', 'unmount', {
         sessionId,
         readOnly: readOnlyRef.current,
-        resizeAuthority: resizeAuthorityRef.current,
-        sizeSource: sizeSourceRef.current,
+        freezeGeometry: freezeGeometryRef.current,
+        isResizePending,
       });
     };
   }, [sessionId]);
 
   useEffect(() => {
-    if (deferResizeSync || !canSyncResize) {
-      const pendingBackendSize = pendingBackendSizeRef.current;
-      if (pendingBackendSize) {
-        const blockedReason: ResizeSyncBlockedReason = deferResizeSync
-          ? 'deferred'
-          : 'socket-unavailable';
-        markResizeSyncBlocked(
-          blockedReason,
-          pendingBackendSize.cols,
-          pendingBackendSize.rows,
-        );
-        if (hasAttemptedResizeSyncRef.current) {
-          scheduleResizeSyncFailureDeadline({
-            sessionId,
-            cols: pendingBackendSize.cols,
-            rows: pendingBackendSize.rows,
-            timeoutMs: RESIZE_SYNC_FAILURE_TIMEOUT_MS,
-            pendingBackendSizeRef,
-            pendingResizeRetryTimerRef,
-            resizeSyncRetryDelayIndexRef,
-            resizeSyncFailureTimerRef,
-            resizeSyncFailureSizeKeyRef,
-            resizeSyncTimedOutSizeKeyRef,
-            onResizeSyncError: onResizeSyncErrorRef.current,
-            reason: blockedReason,
-          });
-        }
-      }
+    const pendingRequest = pendingResizeRequestRef.current;
+
+    if (!pendingRequest || pendingRequest.sent) {
       return;
     }
 
-    const pendingBackendSize = pendingBackendSizeRef.current;
-    if (!pendingBackendSize) {
-      clearResizeSyncFailureDeadline(
-        resizeSyncFailureTimerRef,
-        resizeSyncFailureSizeKeyRef,
-      );
-      clearResizeSyncBlocked('already-synced');
-      return;
-    }
-
-    syncBackendSize(pendingBackendSize.cols, pendingBackendSize.rows);
-  }, [canSyncResize, deferResizeSync]);
+    dispatchPendingResizeRef.current?.();
+  }, [canSyncResize, freezeGeometry]);
 
   useEffect(() => {
-    if (readOnly || resizeAuthority !== 'owner') {
-      return;
-    }
+    observeAppliedTerminalResizeGeneration(sessionId, appliedResizeGeneration);
+    const pendingRequest = pendingResizeRequestRef.current;
 
-    if (!snapshotCols || !snapshotRows) {
-      return;
-    }
-
-    const backendSizeKey = `${snapshotCols}x${snapshotRows}`;
-    const renderedSizeKey = lastRenderedTerminalSizeRef.current;
-    const lastSyncedSizeKey = lastSyncedBackendSizeRef.current;
-
-    if (
-      !renderedSizeKey ||
-      backendSizeKey === renderedSizeKey ||
-      backendSizeKey === lastSyncedSizeKey
-    ) {
-      lastResizeMismatchKeyRef.current = '';
-      return;
-    }
-
-    const renderedSize = parseTerminalSizeKey(renderedSizeKey);
-
-    if (!renderedSize) {
-      lastResizeMismatchKeyRef.current = '';
-      return;
-    }
-
-    const pendingBackendSize = pendingBackendSizeRef.current;
-    const pendingSizeKey = pendingBackendSize
-      ? `${pendingBackendSize.cols}x${pendingBackendSize.rows}`
-      : null;
-
-    if (pendingSizeKey === renderedSizeKey) {
-      lastResizeMismatchKeyRef.current = '';
-      return;
-    }
-
-    const mismatchKey = `${renderedSizeKey}->${backendSizeKey}->${pendingSizeKey ?? 'none'}`;
-    if (mismatchKey === lastResizeMismatchKeyRef.current) {
-      return;
-    }
-
-    lastResizeMismatchKeyRef.current = mismatchKey;
-    logStateDebug('terminalSurface', 'backendResizeMismatchRecover', {
+    logStateDebug('terminalSurface', 'appliedResizeObserved', {
       sessionId,
-      renderedSize: renderedSizeKey,
-      expectedSize: lastSyncedSizeKey,
-      backendSize: backendSizeKey,
-      pendingSize: pendingSizeKey,
-      canSyncResize,
-      deferResizeSync,
+      appliedCols,
+      appliedRows,
+      appliedResizeGeneration,
+      pendingCols: pendingRequest?.cols ?? null,
+      pendingRows: pendingRequest?.rows ?? null,
+      pendingGeneration: pendingRequest?.generation ?? null,
     });
 
-    if (deferResizeSync || !canSyncResize) {
-      pendingBackendSizeRef.current = renderedSize;
-      markResizeSyncBlocked(
-        deferResizeSync ? 'deferred' : 'socket-unavailable',
-        renderedSize.cols,
-        renderedSize.rows,
+    if (
+      pendingRequest &&
+      appliedResizeGeneration != null &&
+      appliedResizeGeneration >= pendingRequest.generation
+    ) {
+      pendingResizeRequestRef.current = null;
+      setIsResizePending(false);
+      clearResizeSyncRetryState(
+        pendingResizeRetryTimerRef,
+        resizeSyncRetryDelayIndexRef,
       );
-      return;
+      clearResizeSyncFailureDeadline(
+        resizeSyncFailureTimerRef,
+        resizeSyncFailureRequestKeyRef,
+      );
+      resizeSyncTimedOutRequestKeyRef.current = null;
+      clearResizeSyncBlocked('applied');
     }
 
-    syncBackendSize(renderedSize.cols, renderedSize.rows, true);
-  }, [
-    canSyncResize,
-    deferResizeSync,
-    readOnly,
-    resizeAuthority,
-    sessionId,
-    snapshotCols,
-    snapshotRows,
-  ]);
+    lastFitStateKeyRef.current = '';
+    scheduleFitRef.current?.();
+  }, [appliedCols, appliedResizeGeneration, appliedRows, sessionId]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -741,7 +746,7 @@ export function useXtermSurfaceController({
     }
 
     applyTerminalInteractivity(terminal, readOnly);
-    lastSizeRef.current = '';
+    lastFitStateKeyRef.current = '';
     scheduleFitRef.current?.();
   }, [readOnly]);
 
@@ -760,23 +765,14 @@ export function useXtermSurfaceController({
 
     terminal.options.fontSize = nextFontSize;
     terminal.options.lineHeight = TERMINAL_LINE_HEIGHT;
-    lastSizeRef.current = '';
+    lastFitStateKeyRef.current = '';
     scheduleFitRef.current?.();
   }, [visualScale]);
 
   useEffect(() => {
-    if (!readOnly) {
-      return;
-    }
-
-    if (!didInitializeReadOnlySizingRef.current) {
-      didInitializeReadOnlySizingRef.current = true;
-      return;
-    }
-
-    lastSizeRef.current = '';
+    lastFitStateKeyRef.current = '';
     scheduleFitRef.current?.();
-  }, [readOnly, resizeAuthority, sizeSource, snapshotCols, snapshotRows]);
+  }, [freezeGeometry]);
 
   useEffect(() => {
     if (readOnly) {
@@ -940,7 +936,7 @@ export function useXtermSurfaceController({
 
   return {
     containerRef,
-    surfaceClassName: buildSurfaceClassName(className, readOnly),
+    surfaceClassName: buildSurfaceClassName(className, readOnly, isResizePending),
     isReadOnly: readOnly,
     selectionContextMenu,
     onPointerDown: readOnly ? undefined : stopCanvasInteractionPropagation,
@@ -953,162 +949,6 @@ export function useXtermSurfaceController({
   };
 }
 
-function measureTerminal(
-  terminal: Terminal,
-  container: HTMLDivElement,
-  cellSize: TerminalCellSize,
-): {
-  cols: number;
-  rows: number;
-  width: number;
-  height: number;
-  source: 'screen' | 'container';
-} | null {
-  const measuredScreenSize = getMeasuredTerminalScreenSize(terminal);
-  const source = measuredScreenSize ? 'screen' : 'container';
-  const width = measuredScreenSize
-    ? measuredScreenSize.width
-    : Math.max(container.clientWidth, 0);
-  const height = measuredScreenSize
-    ? measuredScreenSize.height
-    : Math.max(container.clientHeight, 0);
-
-  if (width < cellSize.width || height < cellSize.height) {
-    return null;
-  }
-
-  return {
-    cols: clamp(
-      Math.floor(width / cellSize.width),
-      MIN_TERMINAL_COLS,
-      MAX_TERMINAL_COLS,
-    ),
-    rows: clamp(
-      Math.floor(height / cellSize.height),
-      MIN_TERMINAL_ROWS,
-      MAX_TERMINAL_ROWS,
-    ),
-    width,
-    height,
-    source,
-  };
-}
-
-function measureTerminalClampContainer(
-  container: HTMLDivElement,
-  cellSize: TerminalCellSize,
-): {
-  cols: number;
-  rows: number;
-} {
-  const width = Math.max(container.clientWidth, 0);
-  const height = Math.max(container.clientHeight, 0);
-
-  return {
-    cols: clamp(
-      Math.floor(width / cellSize.width),
-      MIN_TERMINAL_COLS,
-      MAX_TERMINAL_COLS,
-    ),
-    rows: clamp(
-      Math.floor(height / cellSize.height),
-      MIN_TERMINAL_ROWS,
-      MAX_TERMINAL_ROWS,
-    ),
-  };
-}
-
-function getTerminalCellSize(
-  terminal: Terminal,
-  container: HTMLDivElement,
-  fallback: TerminalCellSize,
-  fontSize: number,
-): TerminalCellSize {
-  const measuredCellSize = getMeasuredRendererCellSize(terminal);
-
-  if (measuredCellSize) {
-    return measuredCellSize;
-  }
-
-  return measureCellSize(container, fallback, fontSize);
-}
-
-type XtermRendererDimensionsCss = {
-  cell?: {
-    width?: number;
-    height?: number;
-  };
-  canvas?: {
-    width?: number;
-    height?: number;
-  };
-};
-
-function readXtermRendererDimensionsCss(
-  terminal: Terminal,
-): XtermRendererDimensionsCss | undefined {
-  const core = (terminal as Terminal & {
-    _core?: {
-      _renderService?: {
-        dimensions?: {
-          css?: XtermRendererDimensionsCss;
-        };
-      };
-    };
-  })._core;
-
-  return core?._renderService?.dimensions?.css;
-}
-
-function getMeasuredRendererCellSize(
-  terminal: Terminal,
-): TerminalCellSize | null {
-  const cell = readXtermRendererDimensionsCss(terminal)?.cell;
-  const width = cell?.width ?? 0;
-  const height = cell?.height ?? 0;
-
-  if (!Number.isFinite(width) || width <= 0) {
-    return null;
-  }
-
-  if (!Number.isFinite(height) || height <= 0) {
-    return null;
-  }
-
-  return { width, height };
-}
-
-function getMeasuredTerminalScreenSize(
-  terminal: Terminal,
-): {
-  width: number;
-  height: number;
-} | null {
-  const terminalElement = terminal.element;
-
-  if (!(terminalElement instanceof HTMLElement)) {
-    return null;
-  }
-
-  const screenElement = terminalElement.querySelector('.xterm-screen');
-
-  if (!(screenElement instanceof HTMLElement)) {
-    return null;
-  }
-
-  const width = Math.max(screenElement.clientWidth, 0);
-  const height = Math.max(screenElement.clientHeight, 0);
-
-  if (!Number.isFinite(width) || width <= 0) {
-    return null;
-  }
-
-  if (!Number.isFinite(height) || height <= 0) {
-    return null;
-  }
-
-  return { width, height };
-}
 
 function clearResizeSyncRetryState(
   timerRef: MutableRefObject<number | null>,
@@ -1118,32 +958,23 @@ function clearResizeSyncRetryState(
     window.clearTimeout(timerRef.current);
     timerRef.current = null;
   }
-
   delayIndexRef.current = 0;
 }
 
 function scheduleResizeSyncRetry({
-  pendingBackendSizeRef,
+  pendingResizeRequestRef,
   pendingResizeRetryTimerRef,
   resizeSyncRetryDelayIndexRef,
-  deferResizeSyncRef,
+  freezeGeometryRef,
   canSyncResizeRef,
-  syncBackendSize,
+  dispatchPendingResize,
 }: {
-  pendingBackendSizeRef: MutableRefObject<{
-    cols: number;
-    rows: number;
-  } | null>;
+  pendingResizeRequestRef: MutableRefObject<PendingResizeRequest | null>;
   pendingResizeRetryTimerRef: MutableRefObject<number | null>;
   resizeSyncRetryDelayIndexRef: MutableRefObject<number>;
-  deferResizeSyncRef: MutableRefObject<boolean>;
+  freezeGeometryRef: MutableRefObject<boolean>;
   canSyncResizeRef: MutableRefObject<boolean>;
-  syncBackendSize: (
-    cols: number,
-    rows: number,
-    force?: boolean,
-    fromRetry?: boolean,
-  ) => void;
+  dispatchPendingResize: (fromRetry?: boolean) => void;
 }): void {
   if (pendingResizeRetryTimerRef.current !== null) {
     return;
@@ -1157,112 +988,114 @@ function scheduleResizeSyncRetry({
   const delay = RESIZE_SYNC_RETRY_DELAYS_MS[cappedDelayIndex];
   pendingResizeRetryTimerRef.current = window.setTimeout(() => {
     pendingResizeRetryTimerRef.current = null;
-
-    if (deferResizeSyncRef.current || !canSyncResizeRef.current) {
+    if (freezeGeometryRef.current || !canSyncResizeRef.current) {
       scheduleResizeSyncRetry({
-        pendingBackendSizeRef,
+        pendingResizeRequestRef,
         pendingResizeRetryTimerRef,
         resizeSyncRetryDelayIndexRef,
-        deferResizeSyncRef,
+        freezeGeometryRef,
         canSyncResizeRef,
-        syncBackendSize,
+        dispatchPendingResize,
       });
       return;
     }
 
-    const pendingBackendSize = pendingBackendSizeRef.current;
+    const pendingResizeRequest = pendingResizeRequestRef.current;
 
-    if (!pendingBackendSize) {
+    if (!pendingResizeRequest || pendingResizeRequest.sent) {
       return;
     }
 
     resizeSyncRetryDelayIndexRef.current = cappedDelayIndex + 1;
-    syncBackendSize(pendingBackendSize.cols, pendingBackendSize.rows, false, true);
+    dispatchPendingResize(true);
   }, delay);
 }
 
 function clearResizeSyncFailureDeadline(
   timerRef: MutableRefObject<number | null>,
-  sizeKeyRef: MutableRefObject<string | null>,
+  requestKeyRef: MutableRefObject<string | null>,
 ): void {
   if (timerRef.current !== null) {
     window.clearTimeout(timerRef.current);
     timerRef.current = null;
   }
-
-  sizeKeyRef.current = null;
+  requestKeyRef.current = null;
 }
 
 function scheduleResizeSyncFailureDeadline(options: {
   sessionId: string;
-  cols: number;
-  rows: number;
+  request: PendingResizeRequest;
   timeoutMs: number;
-  pendingBackendSizeRef: MutableRefObject<{
-    cols: number;
-    rows: number;
-  } | null>;
+  pendingResizeRequestRef: MutableRefObject<PendingResizeRequest | null>;
   pendingResizeRetryTimerRef: MutableRefObject<number | null>;
   resizeSyncRetryDelayIndexRef: MutableRefObject<number>;
   resizeSyncFailureTimerRef: MutableRefObject<number | null>;
-  resizeSyncFailureSizeKeyRef: MutableRefObject<string | null>;
-  resizeSyncTimedOutSizeKeyRef: MutableRefObject<string | null>;
+  resizeSyncFailureRequestKeyRef: MutableRefObject<string | null>;
+  resizeSyncTimedOutRequestKeyRef: MutableRefObject<string | null>;
   onResizeSyncError?: (details: {
     sessionId: string;
     cols: number;
     rows: number;
     timeoutMs: number;
   }) => void;
+  onTimedOut?: () => void;
   reason?: ResizeSyncBlockedReason;
 }): void {
   const {
     sessionId,
-    cols,
-    rows,
+    request,
     timeoutMs,
-    pendingBackendSizeRef,
+    pendingResizeRequestRef,
     pendingResizeRetryTimerRef,
     resizeSyncRetryDelayIndexRef,
     resizeSyncFailureTimerRef,
-    resizeSyncFailureSizeKeyRef,
-    resizeSyncTimedOutSizeKeyRef,
+    resizeSyncFailureRequestKeyRef,
+    resizeSyncTimedOutRequestKeyRef,
     onResizeSyncError,
+    onTimedOut,
     reason,
   } = options;
-  const sizeKey = `${cols}x${rows}`;
+  const requestKey = getResizeRequestKey(request);
 
-  if (resizeSyncTimedOutSizeKeyRef.current === sizeKey) {
+  if (resizeSyncTimedOutRequestKeyRef.current === requestKey) {
     return;
   }
 
   if (
     resizeSyncFailureTimerRef.current !== null &&
-    resizeSyncFailureSizeKeyRef.current === sizeKey
+    resizeSyncFailureRequestKeyRef.current === requestKey
   ) {
     return;
   }
 
   clearResizeSyncFailureDeadline(
     resizeSyncFailureTimerRef,
-    resizeSyncFailureSizeKeyRef,
+    resizeSyncFailureRequestKeyRef,
   );
   logStateDebug('terminalSurface', 'resizeSyncDeadlineScheduled', {
     sessionId,
-    cols,
-    rows,
+    cols: request.cols,
+    rows: request.rows,
+    generation: request.generation,
     timeoutMs,
     reason: reason ?? null,
   });
-  resizeSyncFailureSizeKeyRef.current = sizeKey;
+  resizeSyncFailureRequestKeyRef.current = requestKey;
   resizeSyncFailureTimerRef.current = window.setTimeout(() => {
     resizeSyncFailureTimerRef.current = null;
-    resizeSyncFailureSizeKeyRef.current = null;
-    resizeSyncTimedOutSizeKeyRef.current = sizeKey;
-    pendingBackendSizeRef.current = null;
+    resizeSyncFailureRequestKeyRef.current = null;
+    resizeSyncTimedOutRequestKeyRef.current = requestKey;
+    if (
+      pendingResizeRequestRef.current &&
+      getResizeRequestKey(pendingResizeRequestRef.current) === requestKey
+    ) {
+      pendingResizeRequestRef.current = null;
+    }
     logStateDebug('terminalSurface', 'resizeSyncTimeout', {
       sessionId,
-      cols,
-      rows,
+      cols: request.cols,
+      rows: request.rows,
+      generation: request.generation,
       timeoutMs,
       reason: reason ?? null,
     });
@@ -1270,34 +1103,23 @@ function scheduleResizeSyncFailureDeadline(options: {
       pendingResizeRetryTimerRef,
       resizeSyncRetryDelayIndexRef,
     );
+    onTimedOut?.();
     onResizeSyncError?.({
       sessionId,
-      cols,
-      rows,
+      cols: request.cols,
+      rows: request.rows,
       timeoutMs,
     });
   }, timeoutMs);
 }
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function parseTerminalSizeKey(
-  sizeKey: string,
+function getTerminalSize(
+  cols: number | null | undefined,
+  rows: number | null | undefined,
 ): {
   cols: number;
   rows: number;
 } | null {
-  const [rawCols, rawRows] = sizeKey.split('x');
-  const cols = Number(rawCols);
-  const rows = Number(rawRows);
-
-  if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
-    return null;
-  }
-
-  if (cols <= 0 || rows <= 0) {
+  if (cols == null || rows == null) {
     return null;
   }
 
@@ -1305,6 +1127,109 @@ function parseTerminalSizeKey(
     cols,
     rows,
   };
+}
+
+function buildTerminalSizeKey(
+  size: {
+    cols: number;
+    rows: number;
+  } | null,
+): string {
+  return size ? `${size.cols}x${size.rows}` : 'none';
+}
+
+function buildFitStateKey(options: {
+  readOnly: boolean;
+  freezeGeometry: boolean;
+  desiredSize: {
+    cols: number;
+    rows: number;
+  } | null;
+  displaySize: {
+    cols: number;
+    rows: number;
+  };
+  appliedSize: {
+    cols: number;
+    rows: number;
+  } | null;
+  pendingRequest: PendingResizeRequest | null;
+}): string {
+  const {
+    readOnly,
+    freezeGeometry,
+    desiredSize,
+    displaySize,
+    appliedSize,
+    pendingRequest,
+  } = options;
+
+  return [
+    readOnly ? 'read-only' : 'interactive',
+    freezeGeometry ? 'frozen' : 'live',
+    `desired:${buildTerminalSizeKey(desiredSize)}`,
+    `display:${buildTerminalSizeKey(displaySize)}`,
+    `applied:${buildTerminalSizeKey(appliedSize)}`,
+    pendingRequest
+      ? `pending:${getResizeRequestKey(pendingRequest)}:${pendingRequest.sent ? 'sent' : 'queued'}`
+      : 'pending:none',
+  ].join('|');
+}
+
+function getResizeRequestKey(request: PendingResizeRequest): string {
+  return `${request.generation}:${request.cols}x${request.rows}`;
+}
+
+function isResizeRequestForSize(
+  request: PendingResizeRequest | null,
+  size: {
+    cols: number;
+    rows: number;
+  } | null,
+): boolean {
+  return Boolean(
+    request &&
+      size &&
+      request.cols === size.cols &&
+      request.rows === size.rows,
+  );
+}
+
+function areResizeRequestsEqual(
+  left: PendingResizeRequest | null,
+  right: PendingResizeRequest | null,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return (
+    left.cols === right.cols &&
+    left.rows === right.rows &&
+    left.generation === right.generation &&
+    left.sent === right.sent
+  );
+}
+
+function areTerminalSizesEqual(
+  left: {
+    cols: number;
+    rows: number;
+  } | null,
+  right: {
+    cols: number;
+    rows: number;
+  } | null,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return left.cols === right.cols && left.rows === right.rows;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function focusTerminalInput(terminal: Terminal | null): void {
@@ -1398,6 +1323,7 @@ function markTerminalDomAsCanvasSafe(terminal: Terminal): void {
 function buildSurfaceClassName(
   className: string | undefined,
   readOnly: boolean,
+  isResizePending: boolean,
 ): string {
   const classes = ['terminal-surface', 'nodrag', 'nopan', 'nowheel'];
 
@@ -1407,6 +1333,10 @@ function buildSurfaceClassName(
 
   if (readOnly) {
     classes.push('is-read-only');
+  }
+
+  if (isResizePending) {
+    classes.push('is-resize-pending');
   }
 
   return classes.join(' ');

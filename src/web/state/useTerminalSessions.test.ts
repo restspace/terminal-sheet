@@ -262,6 +262,7 @@ describe('useTerminalSessions helpers', () => {
 function createSessionSnapshot(
   overrides: Partial<TerminalSessionSnapshot> = {},
 ): TerminalSessionSnapshot {
+  const { appliedResizeGeneration = null, ...remainingOverrides } = overrides;
   return {
     sessionId: 'terminal-default',
     backendId: 'local',
@@ -282,6 +283,7 @@ function createSessionSnapshot(
     disconnectReason: null,
     cols: 80,
     rows: 24,
+    appliedResizeGeneration,
     liveCwd: 'C:\\workspace',
     projectRoot: 'C:\\workspace',
     integration: {
@@ -290,7 +292,7 @@ function createSessionSnapshot(
       message: null,
       updatedAt: null,
     },
-    ...overrides,
+    ...remainingOverrides,
   };
 }
 

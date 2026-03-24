@@ -32,6 +32,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
     sessionId: string,
     cols: number,
     rows: number,
+    generation: number,
   ) => boolean | void;
   onResizeSyncError?: (details: {
     sessionId: string;
@@ -43,7 +44,7 @@ export interface TerminalNodeData extends Record<string, unknown> {
   onMarkRead: (sessionId: string) => void;
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
   activeMarkdownLink: MarkdownLinkState | null;
-  deferResizeSync: boolean;
+  freezeTerminalGeometry: boolean;
   allowResize: boolean;
   resizeZoom: number;
 }

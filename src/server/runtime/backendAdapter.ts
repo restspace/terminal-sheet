@@ -18,7 +18,12 @@ export interface BackendAdapter {
   subscribeSession(listener: SessionListener): () => void;
   subscribeAttention(listener: AttentionListener): () => void;
   sendInput(sessionId: string, data: string): boolean;
-  resizeSession(sessionId: string, cols: number, rows: number): boolean;
+  resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ): boolean;
   restartSession(sessionId: string): boolean;
   markRead(sessionId: string): boolean;
   close(): Promise<void> | void;

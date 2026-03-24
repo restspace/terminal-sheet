@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  DEFAULT_TERMINAL_COLS,
-  DEFAULT_TERMINAL_ROWS,
   estimateTerminalDimensionsFromNodeBounds,
   MIN_TERMINAL_COLS,
   MIN_TERMINAL_ROWS,
@@ -298,13 +296,13 @@ describe('PtySessionManager', () => {
     );
 
     expect(spawnedPtys.length).toBe(0);
-    expect(manager.resizeSession('terminal-clamp', 15, 4)).toBe(true);
+    expect(manager.resizeSession('terminal-clamp', 15, 4, 1)).toBe(true);
     const pty = expectSpawnedPty();
     expect(pty.spawnOptions).toMatchObject({
       cols: MIN_TERMINAL_COLS,
       rows: MIN_TERMINAL_ROWS,
     });
-    expect(manager.resizeSession('terminal-clamp', 15, 4)).toBe(true);
+    expect(manager.resizeSession('terminal-clamp', 15, 4, 2)).toBe(true);
     expect(pty.resize).toHaveBeenCalledWith(
       MIN_TERMINAL_COLS,
       MIN_TERMINAL_ROWS,
@@ -337,7 +335,7 @@ describe('PtySessionManager', () => {
 
     expect(spawnedPtys.length).toBe(0);
 
-    expect(manager.resizeSession('terminal-defer', 100, 40)).toBe(true);
+    expect(manager.resizeSession('terminal-defer', 100, 40, 1)).toBe(true);
     const pty = expectSpawnedPty();
     expect(pty.spawnOptions).toMatchObject({ cols: 100, rows: 40 });
   });
@@ -369,9 +367,12 @@ describe('PtySessionManager', () => {
       cols: estimated.cols,
       rows: estimated.rows,
     });
+    expect(manager.getSnapshots()[0]?.cols).toBe(estimated.cols);
+    expect(manager.getSnapshots()[0]?.rows).toBe(estimated.rows);
+    expect(manager.getSnapshots()[0]?.appliedResizeGeneration).toBe(0);
   });
 
-  it('exposes initial snapshot dimensions estimated from node bounds, not 80x24 defaults', async () => {
+  it('keeps initial snapshots unset until the PTY has an applied size', async () => {
     const manager = createManager({
       get: vi.fn(() => null),
     });
@@ -385,18 +386,14 @@ describe('PtySessionManager', () => {
     await manager.syncWithWorkspace(ws);
 
     const snapshot = manager.getSnapshots()[0];
-    const expected = estimateTerminalDimensionsFromNodeBounds(
-      ws.terminals[0]!.bounds,
-    );
 
-    expect(snapshot?.cols).toBe(expected.cols);
-    expect(snapshot?.rows).toBe(expected.rows);
-    expect(snapshot?.cols).not.toBe(DEFAULT_TERMINAL_COLS);
-    expect(snapshot?.rows).not.toBe(DEFAULT_TERMINAL_ROWS);
+    expect(snapshot?.cols).toBeNull();
+    expect(snapshot?.rows).toBeNull();
+    expect(snapshot?.appliedResizeGeneration).toBeNull();
     expect(spawnedPtys.length).toBe(0);
   });
 
-  it('refreshes idle unspawned snapshot dimensions when workspace sync updates bounds', async () => {
+  it('does not publish workspace-bound estimates as snapshot truth before PTY apply', async () => {
     vi.useFakeTimers();
     const manager = createManager({
       get: vi.fn(() => null),
@@ -409,10 +406,9 @@ describe('PtySessionManager', () => {
     });
 
     await manager.syncWithWorkspace(ws);
-    const first = estimateTerminalDimensionsFromNodeBounds(
-      ws.terminals[0]!.bounds,
-    );
-    expect(manager.getSnapshots()[0]?.cols).toBe(first.cols);
+    expect(manager.getSnapshots()[0]?.cols).toBeNull();
+    expect(manager.getSnapshots()[0]?.rows).toBeNull();
+    expect(manager.getSnapshots()[0]?.appliedResizeGeneration).toBeNull();
 
     const wider = {
       ...ws,
@@ -425,12 +421,9 @@ describe('PtySessionManager', () => {
     };
     await manager.syncWithWorkspace(wider);
 
-    const next = estimateTerminalDimensionsFromNodeBounds(
-      wider.terminals[0]!.bounds,
-    );
-    expect(manager.getSnapshots()[0]?.cols).toBe(next.cols);
-    expect(manager.getSnapshots()[0]?.rows).toBe(next.rows);
-    expect(next.cols).toBeGreaterThan(first.cols);
+    expect(manager.getSnapshots()[0]?.cols).toBeNull();
+    expect(manager.getSnapshots()[0]?.rows).toBeNull();
+    expect(manager.getSnapshots()[0]?.appliedResizeGeneration).toBeNull();
     expect(spawnedPtys.length).toBe(0);
   });
 
@@ -448,7 +441,7 @@ describe('PtySessionManager', () => {
       }),
     );
 
-    expect(manager.resizeSession('terminal-restart', 88, 36)).toBe(true);
+    expect(manager.resizeSession('terminal-restart', 88, 36, 7)).toBe(true);
     expect(spawnedPtys.length).toBe(1);
     expect(spawnedPtys[0]?.spawnOptions).toMatchObject({ cols: 88, rows: 36 });
 
@@ -597,5 +590,5 @@ function expectSpawnedPty(): FakePty {
 }
 
 function primeDeferredSpawn(manager: PtySessionManager, sessionId: string): void {
-  manager.resizeSession(sessionId, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS);
+  manager.resizeSession(sessionId, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, 1);
 }

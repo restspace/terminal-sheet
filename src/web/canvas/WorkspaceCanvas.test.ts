@@ -77,6 +77,7 @@ vi.mock('../terminals/TerminalPlaceholderNode', () => ({
       surfaceModel: {
         presentationMode: string;
         surfaceKind: string;
+        acceptsInput: boolean;
       };
       autoFocusAtMs: number | null;
     };
@@ -87,8 +88,9 @@ vi.mock('../terminals/TerminalPlaceholderNode', () => ({
       'data-selected': String(Boolean(props.selected)),
       'data-mode': props.data.surfaceModel.presentationMode,
       'data-live-preview': String(
-        props.data.surfaceModel.surfaceKind === 'live-preview',
+        props.data.surfaceModel.surfaceKind === 'live',
       ),
+      'data-accepts-input': String(props.data.surfaceModel.acceptsInput),
       'data-auto-focus': String(props.data.autoFocusAtMs ?? ''),
     }),
 }));
@@ -629,14 +631,35 @@ describe('WorkspaceCanvas', () => {
     }
   });
 
-  it('defers terminal resize sync only while layout animation is active', () => {
+  it('does not freeze terminal geometry on the initial focus-tiles mount', () => {
+    const focusedTerminal = createPlaceholderTerminal(0);
+    const sideTerminal = createPlaceholderTerminal(1);
+    const workspace = {
+      ...createDefaultWorkspace(),
+      layoutMode: 'focus-tiles' as const,
+      terminals: [focusedTerminal, sideTerminal],
+    };
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          selectedNodeId: focusedTerminal.id,
+        })),
+      );
+    });
+
+    const initialData = expectTerminalNodeData(focusedTerminal.id);
+    expect(initialData.freezeTerminalGeometry).toBe(false);
+  });
+
+  it('freezes terminal geometry only while a focus-tiles transition animation is active', () => {
     vi.useFakeTimers();
     try {
       const focusedTerminal = createPlaceholderTerminal(0);
       const sideTerminal = createPlaceholderTerminal(1);
       const workspace = {
         ...createDefaultWorkspace(),
-        layoutMode: 'focus-tiles' as const,
         terminals: [focusedTerminal, sideTerminal],
       };
 
@@ -648,19 +671,77 @@ describe('WorkspaceCanvas', () => {
           })),
         );
       });
+      expect(expectTerminalNodeData(focusedTerminal.id).freezeTerminalGeometry).toBe(
+        false,
+      );
 
-      const initialData = expectTerminalNodeData(focusedTerminal.id);
-      expect(initialData.deferResizeSync).toBe(true);
+      act(() => {
+        root.render(
+          createElement(WorkspaceCanvas, createCanvasProps({
+            workspace: {
+              ...workspace,
+              layoutMode: 'focus-tiles' as const,
+              updatedAt: '2026-03-24T15:55:00.000Z',
+            },
+            selectedNodeId: focusedTerminal.id,
+          })),
+        );
+      });
+
+      const transitioningData = expectTerminalNodeData(focusedTerminal.id);
+      expect(transitioningData.freezeTerminalGeometry).toBe(true);
 
       act(() => {
         vi.advanceTimersByTime(1_600);
       });
 
       const settledData = expectTerminalNodeData(focusedTerminal.id);
-      expect(settledData.deferResizeSync).toBe(false);
+      expect(settledData.freezeTerminalGeometry).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('assigns read-only measured resize owners to visible focus-tiles terminals when selection is null', () => {
+    const terminals = Array.from({ length: 6 }, (_, index) =>
+      createPlaceholderTerminal(index),
+    );
+    const workspace = {
+      ...createDefaultWorkspace(),
+      layoutMode: 'focus-tiles' as const,
+      terminals,
+    };
+    const sessions = Object.fromEntries(
+      terminals.map((terminal) => [terminal.id, createSessionSnapshot(terminal.id)]),
+    );
+
+    act(() => {
+      root.render(
+        createElement(WorkspaceCanvas, createCanvasProps({
+          workspace,
+          selectedNodeId: null,
+          sessions,
+        })),
+      );
+    });
+
+    for (const terminal of terminals.slice(0, 5)) {
+      const node = container.querySelector(
+        `[data-testid="terminal-node"][data-node-id="${terminal.id}"]`,
+      );
+      expect(node).toBeInstanceOf(HTMLElement);
+      expect(node?.getAttribute('data-mode')).toBe('inspect');
+      expect(node?.getAttribute('data-live-preview')).toBe('true');
+      expect(node?.getAttribute('data-accepts-input')).toBe('false');
+    }
+
+    const hiddenNode = container.querySelector(
+      `[data-testid="terminal-node"][data-node-id="${terminals[5]!.id}"]`,
+    );
+    expect(hiddenNode).toBeInstanceOf(HTMLElement);
+    expect(hiddenNode?.getAttribute('data-mode')).toBe('overview');
+    expect(hiddenNode?.getAttribute('data-live-preview')).toBe('false');
+    expect(hiddenNode?.getAttribute('data-accepts-input')).toBe('false');
   });
 });
 
@@ -721,6 +802,7 @@ function createSessionSnapshot(sessionId: string): TerminalSessionSnapshot {
     disconnectReason: null,
     cols: 80,
     rows: 24,
+    appliedResizeGeneration: 1,
     liveCwd: '.',
     projectRoot: '.',
     integration: {

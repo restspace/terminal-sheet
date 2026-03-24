@@ -7,11 +7,10 @@ import {
   WORKSPACE_BASE_UPDATED_AT_HEADER,
   workspaceConflictResponseSchema,
 } from '../../shared/workspaceTransport';
-import { getStateDebugRequestHeaders } from '../debug/stateDebug';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 
 export async function fetchWorkspace(): Promise<Workspace> {
-  const response = await fetch('/api/workspace', {
-    headers: getStateDebugRequestHeaders(),
+  const response = await fetchWithFrontendLease('/api/workspace', {
     signal: AbortSignal.timeout(10_000),
   });
 
@@ -28,14 +27,13 @@ export async function persistWorkspace(
     baseUpdatedAt?: string | null;
   },
 ): Promise<Workspace> {
-  const response = await fetch('/api/workspace', {
+  const response = await fetchWithFrontendLease('/api/workspace', {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.baseUpdatedAt
         ? { [WORKSPACE_BASE_UPDATED_AT_HEADER]: options.baseUpdatedAt }
         : {}),
-      ...getStateDebugRequestHeaders(),
     },
     body: serializeJsonMessage(workspace),
     signal: AbortSignal.timeout(10_000),
@@ -60,14 +58,13 @@ export async function sendWorkspaceCommands(
     baseUpdatedAt?: string | null;
   },
 ): Promise<Workspace> {
-  const response = await fetch('/api/workspace/mutations', {
+  const response = await fetchWithFrontendLease('/api/workspace/mutations', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.baseUpdatedAt
         ? { [WORKSPACE_BASE_UPDATED_AT_HEADER]: options.baseUpdatedAt }
         : {}),
-      ...getStateDebugRequestHeaders(),
     },
     body: serializeJsonMessage({
       commands,

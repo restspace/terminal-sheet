@@ -38,6 +38,8 @@ import { buildAttentionFooterSummary } from './attentionSummary';
 import { FileSystemPickerModal } from './FileSystemPickerModal';
 import { fetchAttentionSetup } from '../state/attentionClient';
 import { useAttentionNotifications } from '../state/useAttentionNotifications';
+import { fetchWithFrontendLease } from '../state/frontendLeaseClient';
+import { useFrontendLease } from '../state/useFrontendLease';
 import { useMarkdownDocuments } from '../state/useMarkdownDocuments';
 import { useTerminalSessions } from '../state/useTerminalSessions';
 import { useWorkspace } from '../state/useWorkspace';
@@ -59,6 +61,97 @@ const BACKEND_SHELLS_STORAGE_KEY = 'tc-backend-shells';
 const USER_TIMING_CLEAR_INTERVAL_MS = 5_000;
 
 export function App() {
+  const frontendLease = useFrontendLease();
+
+  if (frontendLease.phase === 'locked') {
+    return (
+      <div className="app-shell app-shell-loading">
+        <section className="workspace-panel-loading">
+          <p className="eyebrow">Browser ownership</p>
+          <h2>Another browser is controlling this workspace</h2>
+          <p>{frontendLease.lock?.message ?? 'Waiting for the active browser lease.'}</p>
+          {frontendLease.lock?.owner ? (
+            <div className="workspace-panel-meta">
+              <span>
+                Owner <code>{frontendLease.lock.owner.ownerLabel}</code>
+              </span>
+              <span>
+                Frontend <code>{frontendLease.lock.owner.frontendId}</code>
+              </span>
+              <span>
+                Expires around <code>{formatLeaseExpiry(frontendLease.lock.owner.expiresAt)}</code>
+              </span>
+            </div>
+          ) : null}
+          {frontendLease.error ? (
+            <p className="workspace-modal-error">{frontendLease.error}</p>
+          ) : null}
+          <div className="workspace-panel-actions">
+            <button
+              type="button"
+              onClick={() => {
+                void frontendLease.retryAcquire();
+              }}
+            >
+              Retry
+            </button>
+            {frontendLease.lock?.canTakeOver ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void frontendLease.takeOverLease();
+                }}
+              >
+                Take over
+              </button>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (frontendLease.phase === 'error') {
+    return (
+      <div className="app-shell app-shell-loading">
+        <section className="workspace-panel-loading">
+          <p className="eyebrow">Browser ownership</p>
+          <h2>Failed to acquire the browser lease</h2>
+          <p>{frontendLease.error ?? 'The frontend could not claim workspace control.'}</p>
+          <div className="workspace-panel-actions">
+            <button
+              type="button"
+              onClick={() => {
+                void frontendLease.retryAcquire();
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (frontendLease.phase !== 'active') {
+    return (
+      <div className="app-shell app-shell-loading">
+        <section className="workspace-panel-loading">
+          <p className="eyebrow">Browser ownership</p>
+          <h2>Acquiring workspace control...</h2>
+          <p>
+            Claiming the active browser lease before loading sessions, workspace
+            state, and terminal control.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  return <ActiveApp />;
+}
+
+function ActiveApp() {
   const {
     workspace,
     persistence,
@@ -232,7 +325,7 @@ export function App() {
       while (!cancelled) {
         try {
           const [healthResponse, setup] = await Promise.all([
-            fetch('/api/health'),
+            fetchWithFrontendLease('/api/health'),
             fetchAttentionSetup(),
           ]);
 
@@ -734,7 +827,7 @@ export function App() {
     terminal: TerminalNode;
     workspace: Workspace | null;
   }> => {
-    const response = await fetch(
+    const response = await fetchWithFrontendLease(
       `/api/backends/${encodeURIComponent(backendId)}/terminals`,
       {
         method: 'POST',
@@ -851,8 +944,13 @@ export function App() {
     bumpNodeInteraction(sessionId, 1_000);
     sendInput(sessionId, data);
   }, [bumpNodeInteraction, sendInput]);
-  const handleTerminalResize = useCallback((sessionId: string, cols: number, rows: number) => {
-    return resizeSession(sessionId, cols, rows);
+  const handleTerminalResize = useCallback((
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ) => {
+    return resizeSession(sessionId, cols, rows, generation);
   }, [resizeSession]);
   const handleTerminalResizeSyncError = useCallback((details: {
     sessionId: string;
@@ -1601,6 +1699,16 @@ function getWorkspaceDirectory(workspacePath: string | null): string {
   }
 
   return workspacePath.replace(/[\\/][^\\/]+$/, '');
+}
+
+function formatLeaseExpiry(expiresAt: string): string {
+  const date = new Date(expiresAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return expiresAt;
+  }
+
+  return date.toLocaleTimeString();
 }
 
 function getConfiguredFooterAgent(

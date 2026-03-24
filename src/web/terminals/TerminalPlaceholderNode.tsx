@@ -36,7 +36,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     onRemove,
   } = data;
   const surfaceKind = surfaceModel.surfaceKind;
-  const showsLiveTerminal = surfaceKind !== 'summary' && session !== null;
+  const showsLiveTerminal = surfaceKind === 'live' && session !== null;
   const previewLines = session?.previewLines ?? [];
   const status = getTerminalDisplayStatus(terminal, session);
   const unreadCount = session?.unreadCount ?? 0;
@@ -284,15 +284,14 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 }
                 sessionId={terminal.id}
                 scrollback={session.scrollback}
-                interactionMode={surfaceModel.interactionMode}
-                sizeSource={surfaceModel.sizeSource}
-                resizeAuthority={surfaceModel.resizeAuthority}
-                deferResizeSync={data.deferResizeSync}
+                acceptsInput={surfaceModel.acceptsInput}
+                freezeGeometry={data.freezeTerminalGeometry}
                 canSyncResize={data.socketState === 'open'}
-                snapshotCols={session.cols}
-                snapshotRows={session.rows}
+                appliedCols={session.cols}
+                appliedRows={session.rows}
+                appliedResizeGeneration={session.appliedResizeGeneration}
                 scrollResetKey={previewScrollResetKey}
-                autoFocusAtMs={surfaceKind === 'interactive' ? data.autoFocusAtMs : null}
+                autoFocusAtMs={surfaceModel.acceptsInput ? data.autoFocusAtMs : null}
                 onInput={onInput}
                 onResize={onResize}
                 onResizeSyncError={onResizeSyncError}
@@ -368,7 +367,7 @@ function areTerminalNodePropsEqual(
     previousData.autoFocusAtMs === nextData.autoFocusAtMs &&
     previousData.socketState === nextData.socketState &&
     previousData.activeMarkdownLink === nextData.activeMarkdownLink &&
-    previousData.deferResizeSync === nextData.deferResizeSync &&
+    previousData.freezeTerminalGeometry === nextData.freezeTerminalGeometry &&
     previousData.allowResize === nextData.allowResize &&
     previousData.resizeZoom === nextData.resizeZoom &&
     previousData.onBoundsChange === nextData.onBoundsChange &&

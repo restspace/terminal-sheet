@@ -55,7 +55,7 @@ interface BuildCanvasNodesOptions {
   activeMarkdownLinkByTerminalId: ReadonlyMap<string, MarkdownLinkState>;
   activeMarkdownLinksByNodeId: ReadonlyMap<string, readonly MarkdownLinkState[]>;
   socketState: 'connecting' | 'open' | 'closed' | 'error';
-  deferTerminalResizeSync: boolean;
+  freezeTerminalGeometry: boolean;
   onBoundsChange: (
     nodeId: string,
     bounds: Partial<Workspace['terminals'][number]['bounds']>,
@@ -71,6 +71,7 @@ interface BuildCanvasNodesOptions {
     sessionId: string,
     cols: number,
     rows: number,
+    generation: number,
   ) => boolean | void;
   onResizeSyncError?: (details: {
     sessionId: string;
@@ -109,7 +110,7 @@ export function buildCanvasNodes({
   activeMarkdownLinkByTerminalId,
   activeMarkdownLinksByNodeId,
   socketState,
-  deferTerminalResizeSync,
+  freezeTerminalGeometry,
   onBoundsChange,
   onTerminalChange,
   onPathSelectRequest,
@@ -131,9 +132,7 @@ export function buildCanvasNodes({
     const surfaceModel = terminalSurfaceModelById.get(terminal.id) ?? {
       presentationMode: 'overview',
       surfaceKind: 'summary',
-      interactionMode: 'read-only',
-      sizeSource: 'snapshot',
-      resizeAuthority: 'none',
+      acceptsInput: false,
     };
     const isFocusTarget = surfaceModel.presentationMode === 'focus';
     const renderedBounds = renderedBoundsByNodeId.get(terminal.id) ?? terminal.bounds;
@@ -153,7 +152,7 @@ export function buildCanvasNodes({
         session: sessions[terminal.id] ?? null,
         surfaceModel,
         autoFocusAtMs:
-          surfaceModel.surfaceKind === 'interactive'
+          surfaceModel.surfaceKind === 'live' && surfaceModel.acceptsInput
             ? focusAutoFocusAtMs
             : null,
         socketState,
@@ -169,7 +168,7 @@ export function buildCanvasNodes({
         onMarkdownDrop,
         activeMarkdownLink:
           activeMarkdownLinkByTerminalId.get(terminal.id) ?? null,
-        deferResizeSync: deferTerminalResizeSync,
+        freezeTerminalGeometry,
         allowResize: nodesResizable,
         resizeZoom: selectedNodeId === terminal.id ? viewportZoom : 1,
       },

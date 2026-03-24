@@ -5,6 +5,7 @@ import type {
   TerminalSessionSnapshot,
 } from '../../shared/terminalSessions';
 import type { Workspace } from '../../shared/workspace';
+import { fetchWithFrontendLease } from './frontendLeaseClient';
 import { useAttentionStore } from './useAttentionStore';
 import { useMarkdownRealtime } from './useMarkdownRealtime';
 import { useSessionStore } from './useSessionStore';
@@ -33,7 +34,7 @@ export function useTerminalSessions({
 
   const refreshSnapshots = useCallback(async () => {
     try {
-      const response = await fetch('/api/sessions');
+      const response = await fetchWithFrontendLease('/api/sessions');
 
       if (!response.ok) {
         return [] as TerminalSessionSnapshot[];
@@ -180,12 +181,18 @@ export function useTerminalSessions({
       [send],
     ),
     resizeSession: useCallback(
-      (sessionId: string, cols: number, rows: number) => {
+      (
+        sessionId: string,
+        cols: number,
+        rows: number,
+        generation: number,
+      ) => {
         return send({
           type: 'terminal.resize',
           sessionId,
           cols,
           rows,
+          generation,
         });
       },
       [send],

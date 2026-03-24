@@ -35,11 +35,11 @@ import {
   createCommandStateSnapshot,
   createContextSnapshot,
   createExitSnapshot,
+  createAppliedResizeSnapshot,
   createInitialSnapshot,
   createInputSnapshot,
   createOutputSnapshot,
   createReadSnapshot,
-  createResizeSnapshot,
   createRunningSnapshot,
   createSpawnFailedSnapshot,
 } from './sessionSnapshot';
@@ -50,6 +50,11 @@ interface SessionRecord {
   disposables: IDisposable[];
   snapshot: TerminalSessionSnapshot;
   runtime: SessionRuntimeState;
+}
+interface ResizeRequest {
+  cols: number;
+  rows: number;
+  generation: number;
 }
 
 interface SessionRuntimeState {
@@ -64,12 +69,14 @@ interface SessionRuntimeState {
   integrationTask: Promise<void> | null;
   deferredSpawnTimer: ReturnType<typeof setTimeout> | null;
   spawnInFlight: boolean;
+  requestedResize: ResizeRequest | null;
 }
 
 type SessionListener = (message: TerminalServerSocketMessage) => void;
 
-/** When the client never sends `terminal.resize`, spawn using snapshot dimensions after this delay. */
+/** When the client never sends `terminal.resize`, spawn using an estimated fallback size after this delay. */
 const DEFERRED_PTY_SPAWN_MS = 2000;
+const FALLBACK_RESIZE_GENERATION = 0;
 
 export class PtySessionManager {
   private readonly sessions = new Map<string, SessionRecord>();
@@ -120,24 +127,6 @@ export class PtySessionManager {
 
       if (existing) {
         existing.terminal = terminal;
-        if (
-          !existing.pty &&
-          existing.snapshot.status === 'idle' &&
-          existing.snapshot.recoveryState !== 'spawn-failed'
-        ) {
-          const { cols, rows } = estimateTerminalDimensionsFromNodeBounds(
-            terminal.bounds,
-          );
-          if (
-            cols !== existing.snapshot.cols ||
-            rows !== existing.snapshot.rows
-          ) {
-            this.setSnapshot(
-              existing,
-              createResizeSnapshot(existing.snapshot, cols, rows),
-            );
-          }
-        }
         continue;
       }
 
@@ -200,7 +189,12 @@ export class PtySessionManager {
     return true;
   }
 
-  resizeSession(sessionId: string, cols: number, rows: number): boolean {
+  resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ): boolean {
     const record = this.sessions.get(sessionId);
 
     if (!record) {
@@ -214,6 +208,7 @@ export class PtySessionManager {
       this.logger.warn(
         {
           sessionId,
+          generation,
           requestedCols: cols,
           requestedRows: rows,
           clampedCols: nextCols,
@@ -222,15 +217,26 @@ export class PtySessionManager {
         'Clamped PTY resize request to allowed bounds',
       );
     }
+    const latestRequestedGeneration =
+      record.runtime.requestedResize?.generation ?? Number.NEGATIVE_INFINITY;
+    const latestAppliedGeneration =
+      record.snapshot.appliedResizeGeneration ?? Number.NEGATIVE_INFINITY;
+    if (
+      generation <= latestRequestedGeneration ||
+      generation <= latestAppliedGeneration
+    ) {
+      return true;
+    }
 
     this.clearDeferredSpawnTimer(record);
-    this.setSnapshot(
-      record,
-      createResizeSnapshot(record.snapshot, nextCols, nextRows),
-    );
+    record.runtime.requestedResize = {
+      cols: nextCols,
+      rows: nextRows,
+      generation,
+    };
 
     if (record.pty) {
-      record.pty.resize(nextCols, nextRows);
+      this.applyLatestRequestedResize(record);
       return true;
     }
 
@@ -241,13 +247,7 @@ export class PtySessionManager {
     record.runtime.spawnInFlight = true;
     void this.spawnTerminal(record).finally(() => {
       record.runtime.spawnInFlight = false;
-      if (record.pty) {
-        const latest = clampTerminalDimensions(
-          record.snapshot.cols,
-          record.snapshot.rows,
-        );
-        record.pty.resize(latest.cols, latest.rows);
-      }
+      this.applyLatestRequestedResize(record);
     });
 
     return true;
@@ -263,8 +263,11 @@ export class PtySessionManager {
     this.options.markdownService.clearTerminalLink(sessionId);
     this.clearDeferredSpawnTimer(record);
     this.disposePty(record);
-    record.runtime.spawnInFlight = false;
-    void this.spawnTerminal(record);
+    record.runtime.spawnInFlight = true;
+    void this.spawnTerminal(record).finally(() => {
+      record.runtime.spawnInFlight = false;
+      this.applyLatestRequestedResize(record);
+    });
     return true;
   }
 
@@ -302,7 +305,6 @@ export class PtySessionManager {
         this.options.backendId ?? LOCAL_BACKEND_ID,
         terminal.agentType,
         liveCwd,
-        terminal.bounds,
       ),
       runtime: {
         liveCwd,
@@ -316,6 +318,7 @@ export class PtySessionManager {
         integrationTask: null,
         deferredSpawnTimer: null,
         spawnInFlight: false,
+        requestedResize: null,
       },
     };
 
@@ -357,13 +360,7 @@ export class PtySessionManager {
     record.runtime.spawnInFlight = true;
     void this.spawnTerminal(record).finally(() => {
       record.runtime.spawnInFlight = false;
-      if (record.pty) {
-        const latest = clampTerminalDimensions(
-          record.snapshot.cols,
-          record.snapshot.rows,
-        );
-        record.pty.resize(latest.cols, latest.rows);
-      }
+      this.applyLatestRequestedResize(record);
     });
   }
 
@@ -371,6 +368,7 @@ export class PtySessionManager {
     if (record.pty) {
       return;
     }
+    const spawnResize = this.resolveSpawnResizeRequest(record);
 
     const command = parseCommand(record.terminal.shell);
     const cwd = resolve(
@@ -390,8 +388,8 @@ export class PtySessionManager {
       const pty = spawn(command.file, args, {
         name: 'xterm-256color',
         cwd,
-        cols: record.snapshot.cols,
-        rows: record.snapshot.rows,
+        cols: spawnResize.cols,
+        rows: spawnResize.rows,
         env: {
           ...augmentShellEnvironmentForTracking(command.file, process.env),
           TERMINAL_CANVAS_SESSION_ID: record.terminal.id,
@@ -439,20 +437,33 @@ export class PtySessionManager {
           pid: pty.pid,
           shell: record.terminal.shell,
           cwd,
+          cols: spawnResize.cols,
+          rows: spawnResize.rows,
+          resizeGeneration: spawnResize.generation,
         },
         'Spawned PTY session',
       );
+      const runningSnapshot = createRunningSnapshot({
+        snapshot: createAppliedResizeSnapshot(
+          record.snapshot,
+          spawnResize.cols,
+          spawnResize.rows,
+          spawnResize.generation,
+        ),
+        terminal: record.terminal,
+        pid: pty.pid,
+        startedAt,
+        summary: `${record.terminal.shell} started in ${record.terminal.cwd}`,
+      });
 
       this.setSnapshot(
         record,
-        createRunningSnapshot({
-          snapshot: record.snapshot,
-          terminal: record.terminal,
-          pid: pty.pid,
-          startedAt,
-          summary: `${record.terminal.shell} started in ${record.terminal.cwd}`,
-        }),
+        runningSnapshot,
       );
+      if (record.runtime.requestedResize?.generation === spawnResize.generation) {
+        record.runtime.requestedResize = null;
+      }
+      this.applyLatestRequestedResize(record);
       void this.refreshSessionContext(
         record,
         cwd,
@@ -479,6 +490,90 @@ export class PtySessionManager {
           message,
         }),
       );
+    }
+  }
+
+  private resolveSpawnResizeRequest(record: SessionRecord): ResizeRequest {
+    const requestedResize = record.runtime.requestedResize;
+
+    if (requestedResize) {
+      return requestedResize;
+    }
+
+    if (
+      record.snapshot.cols !== null &&
+      record.snapshot.rows !== null &&
+      record.snapshot.appliedResizeGeneration !== null
+    ) {
+      return {
+        cols: record.snapshot.cols,
+        rows: record.snapshot.rows,
+        generation: record.snapshot.appliedResizeGeneration,
+      };
+    }
+
+    return this.estimateFallbackResize(record);
+  }
+
+  private estimateFallbackResize(record: SessionRecord): ResizeRequest {
+    const { cols, rows } = estimateTerminalDimensionsFromNodeBounds(
+      record.terminal.bounds,
+    );
+
+    return {
+      cols,
+      rows,
+      generation: FALLBACK_RESIZE_GENERATION,
+    };
+  }
+
+  private applyLatestRequestedResize(record: SessionRecord): void {
+    const requestedResize = record.runtime.requestedResize;
+
+    if (!requestedResize) {
+      return;
+    }
+
+    const appliedGeneration =
+      record.snapshot.appliedResizeGeneration ?? Number.NEGATIVE_INFINITY;
+    if (requestedResize.generation <= appliedGeneration) {
+      if (isSnapshotResizeApplied(record.snapshot, requestedResize)) {
+        record.runtime.requestedResize = null;
+      }
+      return;
+    }
+
+    this.applyResizeRequest(record, requestedResize);
+  }
+
+  private applyResizeRequest(
+    record: SessionRecord,
+    request: ResizeRequest,
+  ): void {
+    if (!record.pty) {
+      return;
+    }
+
+    if (isSnapshotResizeApplied(record.snapshot, request)) {
+      if (record.runtime.requestedResize?.generation === request.generation) {
+        record.runtime.requestedResize = null;
+      }
+      return;
+    }
+
+    record.pty.resize(request.cols, request.rows);
+    this.setSnapshot(
+      record,
+      createAppliedResizeSnapshot(
+        record.snapshot,
+        request.cols,
+        request.rows,
+        request.generation,
+      ),
+    );
+
+    if (record.runtime.requestedResize?.generation === request.generation) {
+      record.runtime.requestedResize = null;
     }
   }
 
@@ -938,6 +1033,17 @@ function buildSessionOutputState(
   void _scrollback;
 
   return state;
+}
+
+function isSnapshotResizeApplied(
+  snapshot: TerminalSessionSnapshot,
+  request: ResizeRequest,
+): boolean {
+  return (
+    snapshot.cols === request.cols &&
+    snapshot.rows === request.rows &&
+    snapshot.appliedResizeGeneration === request.generation
+  );
 }
 
 function createIntegrationState(

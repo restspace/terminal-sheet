@@ -94,8 +94,18 @@ export class LocalBackendAdapter implements BackendAdapter {
     return this.ptySessionManager.sendInput(sessionId, data);
   }
 
-  resizeSession(sessionId: string, cols: number, rows: number): boolean {
-    return this.ptySessionManager.resizeSession(sessionId, cols, rows);
+  resizeSession(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    generation: number,
+  ): boolean {
+    return this.ptySessionManager.resizeSession(
+      sessionId,
+      cols,
+      rows,
+      generation,
+    );
   }
 
   restartSession(sessionId: string): boolean {
