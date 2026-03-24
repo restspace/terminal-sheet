@@ -105,6 +105,7 @@ export async function createServer(
   const frontendLeaseManager = new FrontendLeaseManager({
     timeoutMs: options.frontendLeaseTimeoutMs,
     sweepIntervalMs: options.frontendLeaseSweepIntervalMs,
+    log: app.log.child({ component: 'frontend-lease' }),
   });
 
   await app.register(websocket);

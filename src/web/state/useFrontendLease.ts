@@ -22,6 +22,9 @@ export interface FrontendLeaseController {
   takeOverLease: () => Promise<void>;
 }
 
+const LOCKED_STATUS_POLL_INITIAL_DELAY_MS = 1_000;
+const LOCKED_STATUS_POLL_MAX_DELAY_MS = 8_000;
+
 export function useFrontendLease(): FrontendLeaseController {
   const [phase, setPhase] =
     useState<FrontendLeaseController['phase']>('acquiring');
@@ -61,7 +64,17 @@ export function useFrontendLease(): FrontendLeaseController {
   );
 
   useEffect(() => {
-    void attemptAcquire();
+    let cancelled = false;
+
+    queueMicrotask(() => {
+      if (!cancelled) {
+        void attemptAcquire();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [attemptAcquire]);
 
   useEffect(() => {
@@ -97,6 +110,8 @@ export function useFrontendLease(): FrontendLeaseController {
     }
 
     let cancelled = false;
+    let timeoutId: number | null = null;
+    let nextDelayMs = LOCKED_STATUS_POLL_INITIAL_DELAY_MS;
 
     const pollStatus = async () => {
       try {
@@ -121,16 +136,27 @@ export function useFrontendLease(): FrontendLeaseController {
           );
         }
       }
+
+      if (cancelled) {
+        return;
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void pollStatus();
+      }, nextDelayMs);
+      nextDelayMs = Math.min(
+        LOCKED_STATUS_POLL_MAX_DELAY_MS,
+        nextDelayMs * 2,
+      );
     };
 
     void pollStatus();
-    const intervalId = window.setInterval(() => {
-      void pollStatus();
-    }, 1_000);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [attemptAcquire, phase]);
 

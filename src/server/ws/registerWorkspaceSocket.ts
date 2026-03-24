@@ -1,19 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 
 import { parseJsonMessage } from '../../shared/jsonTransport';
-import {
-  terminalClientSocketMessageSchema,
-  type TerminalServerSocketMessage,
-  type TerminalClientSocketMessage,
-} from '../../shared/terminalSessions';
 import type { StateDebugEvent } from '../../shared/debugState';
+import {
+  type TerminalClientSocketMessage,
+  type TerminalServerSocketMessage,
+  terminalClientSocketMessageSchema,
+} from '../../shared/terminalSessions';
+import type { StateDebugEventStore } from '../debug/stateDebugEventStore';
 import {
   getWorkspaceDebugSessionId,
   logWorkspaceDebug,
   summarizeWorkspaceForDebug,
 } from '../debug/workspaceDebug';
-import type { StateDebugEventStore } from '../debug/stateDebugEventStore';
-import { readFrontendLeaseAuth } from '../frontend/frontendLeaseAuth';
 import type { FrontendLeaseManager } from '../frontend/frontendLeaseManager';
 import type { MarkdownService } from '../markdown/markdownService';
 import type { WorkspaceService } from '../persistence/workspaceService';
@@ -30,13 +29,30 @@ interface WorkspaceSocketOptions {
   frontendLeaseManager: FrontendLeaseManager;
 }
 
+interface AuthenticatedWorkspaceSocketLease {
+  frontendId: string;
+  leaseToken: string;
+  leaseEpoch: number;
+}
+
 export async function registerWorkspaceSocket(
   app: FastifyInstance,
   options: WorkspaceSocketOptions,
 ): Promise<void> {
   app.get('/ws', { websocket: true }, (socket, request) => {
-    const leaseAuth = readFrontendLeaseAuth(request);
     const debugSessionId = getWorkspaceDebugSessionId(request);
+    const path = request.url.split('?')[0] ?? request.url;
+    let leaseAuth: AuthenticatedWorkspaceSocketLease | null = null;
+    let authTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      socket.close(4003, 'Workspace socket authentication required.');
+    }, 5_000);
+    authTimeout.unref?.();
+    let unsubscribe = () => {};
+    let unsubscribeAttention = () => {};
+    let unsubscribeDocuments = () => {};
+    let unsubscribeLinks = () => {};
+    let unsubscribeWorkspace = () => {};
+
     const appendServerDebugEvent = (
       scope: string,
       event: string,
@@ -64,103 +80,111 @@ export async function registerWorkspaceSocket(
 
       sendJson(socket, message);
     };
-    logWorkspaceDebug(app.log, debugSessionId, 'workspace socket connected', {
-      url: request.url,
-    });
-    appendServerDebugEvent('serverSocket', 'connected', {
-      url: request.url,
-    });
-    const attachedLease = options.frontendLeaseManager.attachWorkspaceSocket(
-      leaseAuth,
-      socket,
-    );
+    const clearAuthTimeout = () => {
+      if (!authTimeout) {
+        return;
+      }
 
-    if (!attachedLease.ok) {
-      sendDebugTrackedJson({
-        type: 'frontend.locked',
-        lock: attachedLease.locked,
-      });
-      socket.close(4003, 'Active frontend lease required.');
-      return;
-    }
-
-    sendDebugTrackedJson({
-      type: 'frontend.lease',
-      lease: toFrontendLeaseOwner(attachedLease.lease),
-    });
-
-    sendDebugTrackedJson({
-      type: 'ready',
-      timestamp: new Date().toISOString(),
-    });
-
-    logWorkspaceDebug(
-      app.log,
-      debugSessionId,
-      'workspace socket send initial workspace',
-      {
-        workspace: summarizeWorkspaceForDebug(
-          options.workspaceService.getWorkspace(),
-        ),
+      clearTimeout(authTimeout);
+      authTimeout = null;
+    };
+    const initializeAuthenticatedSocket = (
+      attachedLease: Parameters<typeof toFrontendLeaseOwner>[0] & {
+        leaseToken: string;
       },
-    );
-    sendDebugTrackedJson({
-      type: 'workspace.updated',
-      workspace: options.workspaceService.getWorkspace(),
-    });
-    sendDebugTrackedJson({
-      type: 'session.init',
-      sessions: options.runtimeManager.getSnapshots(),
-    });
-    sendDebugTrackedJson({
-      type: 'attention.init',
-      events: options.runtimeManager.getAttentionEvents(),
-    });
-    sendDebugTrackedJson({
-      type: 'markdown.init',
-      documents: options.markdownService.getDocuments(),
-    });
-    sendDebugTrackedJson({
-      type: 'markdown.link.init',
-      links: options.markdownService.getLinks(),
-    });
+    ) => {
+      clearAuthTimeout();
+      sendDebugTrackedJson({
+        type: 'frontend.lease',
+        lease: toFrontendLeaseOwner(attachedLease),
+      });
 
-    const unsubscribe = options.runtimeManager.subscribeSession((message) => {
-      sendDebugTrackedJson(message);
-    });
-    const unsubscribeAttention = options.runtimeManager.subscribeAttention((event) => {
       sendDebugTrackedJson({
-        type: 'attention.event',
-        event,
+        type: 'ready',
+        timestamp: new Date().toISOString(),
       });
-    });
-    const unsubscribeDocuments = options.markdownService.subscribeDocuments(
-      (document) => {
-        sendDebugTrackedJson({
-          type: 'markdown.document',
-          document,
-        });
-      },
-    );
-    const unsubscribeLinks = options.markdownService.subscribeLinks((links) => {
-      sendDebugTrackedJson({
-        type: 'markdown.link',
-        links,
-      });
-    });
-    const unsubscribeWorkspace = options.workspaceCommitPublisher.subscribe((workspace) => {
+
       logWorkspaceDebug(
         app.log,
         debugSessionId,
-        'workspace socket push workspace.updated',
+        'workspace socket send initial workspace',
         {
-          workspace: summarizeWorkspaceForDebug(workspace),
+          frontendId: attachedLease.frontendId,
+          leaseEpoch: attachedLease.leaseEpoch,
+          workspace: summarizeWorkspaceForDebug(
+            options.workspaceService.getWorkspace(),
+          ),
         },
       );
       sendDebugTrackedJson({
         type: 'workspace.updated',
-        workspace,
+        workspace: options.workspaceService.getWorkspace(),
       });
+      sendDebugTrackedJson({
+        type: 'session.init',
+        sessions: options.runtimeManager.getSnapshots(),
+      });
+      sendDebugTrackedJson({
+        type: 'attention.init',
+        events: options.runtimeManager.getAttentionEvents(),
+      });
+      sendDebugTrackedJson({
+        type: 'markdown.init',
+        documents: options.markdownService.getDocuments(),
+      });
+      sendDebugTrackedJson({
+        type: 'markdown.link.init',
+        links: options.markdownService.getLinks(),
+      });
+
+      unsubscribe = options.runtimeManager.subscribeSession((message) => {
+        sendDebugTrackedJson(message);
+      });
+      unsubscribeAttention = options.runtimeManager.subscribeAttention((event) => {
+        sendDebugTrackedJson({
+          type: 'attention.event',
+          event,
+        });
+      });
+      unsubscribeDocuments = options.markdownService.subscribeDocuments(
+        (document) => {
+          sendDebugTrackedJson({
+            type: 'markdown.document',
+            document,
+          });
+        },
+      );
+      unsubscribeLinks = options.markdownService.subscribeLinks((links) => {
+        sendDebugTrackedJson({
+          type: 'markdown.link',
+          links,
+        });
+      });
+      unsubscribeWorkspace = options.workspaceCommitPublisher.subscribe(
+        (workspace) => {
+          logWorkspaceDebug(
+            app.log,
+            debugSessionId,
+            'workspace socket push workspace.updated',
+            {
+              frontendId: attachedLease.frontendId,
+              leaseEpoch: attachedLease.leaseEpoch,
+              workspace: summarizeWorkspaceForDebug(workspace),
+            },
+          );
+          sendDebugTrackedJson({
+            type: 'workspace.updated',
+            workspace,
+          });
+        },
+      );
+    };
+
+    logWorkspaceDebug(app.log, debugSessionId, 'workspace socket connected', {
+      path,
+    });
+    appendServerDebugEvent('serverSocket', 'connected', {
+      path,
     });
 
     socket.on('message', (payload: Buffer) => {
@@ -183,6 +207,69 @@ export async function registerWorkspaceSocket(
         'receive',
         summarizeClientSocketMessageForDebug(parsed),
       );
+
+      if (parsed.type === 'frontend.authenticate') {
+        if (leaseAuth) {
+          app.log.warn(
+            {
+              debugSessionId,
+              frontendId: leaseAuth.frontendId,
+              leaseEpoch: leaseAuth.leaseEpoch,
+            },
+            'Ignoring duplicate workspace websocket authentication message',
+          );
+          return;
+        }
+
+        const attachedLease = options.frontendLeaseManager.attachWorkspaceSocket(
+          {
+            frontendId: parsed.frontendId,
+            leaseToken: parsed.leaseToken,
+            leaseEpoch: parsed.leaseEpoch,
+          },
+          socket,
+        );
+
+        if (!attachedLease.ok) {
+          sendDebugTrackedJson({
+            type: 'frontend.locked',
+            lock: attachedLease.locked,
+          });
+          socket.close(4003, 'Active frontend lease required.');
+          return;
+        }
+
+        leaseAuth = {
+          frontendId: attachedLease.lease.frontendId,
+          leaseToken: parsed.leaseToken,
+          leaseEpoch: attachedLease.lease.leaseEpoch,
+        };
+        logWorkspaceDebug(app.log, debugSessionId, 'workspace socket authenticated', {
+          path,
+          frontendId: leaseAuth.frontendId,
+          leaseEpoch: leaseAuth.leaseEpoch,
+        });
+        appendServerDebugEvent('serverSocket', 'authenticated', {
+          frontendId: leaseAuth.frontendId,
+          leaseEpoch: leaseAuth.leaseEpoch,
+        });
+        initializeAuthenticatedSocket(attachedLease.lease);
+        return;
+      }
+
+      if (!leaseAuth) {
+        app.log.warn(
+          {
+            debugSessionId,
+            messageType: parsed.type,
+            path,
+          },
+          'Closing unauthenticated workspace websocket message',
+        );
+        socket.close(4003, 'Authenticate workspace socket first.');
+        return;
+      }
+
       handleClientMessage({
         runtimeManager: options.runtimeManager,
         frontendLeaseManager: options.frontendLeaseManager,
@@ -194,13 +281,22 @@ export async function registerWorkspaceSocket(
     });
 
     socket.on('close', () => {
+      clearAuthTimeout();
       logWorkspaceDebug(app.log, debugSessionId, 'workspace socket closed', {
-        url: request.url,
+        path,
+        frontendId: leaseAuth?.frontendId ?? null,
+        leaseEpoch: leaseAuth?.leaseEpoch ?? null,
       });
       appendServerDebugEvent('serverSocket', 'closed', {
-        url: request.url,
+        path,
+        frontendId: leaseAuth?.frontendId ?? null,
+        leaseEpoch: leaseAuth?.leaseEpoch ?? null,
       });
-      options.frontendLeaseManager.detachWorkspaceSocket(socket);
+
+      if (leaseAuth) {
+        options.frontendLeaseManager.detachWorkspaceSocket(socket);
+      }
+
       unsubscribe();
       unsubscribeAttention();
       unsubscribeDocuments();
@@ -212,12 +308,16 @@ export async function registerWorkspaceSocket(
         {
           debugSessionId,
           error: error instanceof Error ? error.message : String(error),
-          url: request.url,
+          path,
+          frontendId: leaseAuth?.frontendId ?? null,
+          leaseEpoch: leaseAuth?.leaseEpoch ?? null,
         },
         'Workspace websocket error',
       );
       appendServerDebugEvent('serverSocket', 'error', {
-        url: request.url,
+        path,
+        frontendId: leaseAuth?.frontendId ?? null,
+        leaseEpoch: leaseAuth?.leaseEpoch ?? null,
         error: error instanceof Error ? error.message : String(error),
       });
     });
@@ -232,7 +332,7 @@ function handleClientMessage(
   options: {
     runtimeManager: BackendRuntimeManager;
     frontendLeaseManager: FrontendLeaseManager;
-    leaseAuth: ReturnType<typeof readFrontendLeaseAuth>;
+    leaseAuth: AuthenticatedWorkspaceSocketLease;
     socket: {
       close(code?: number, data?: string): void;
     };
@@ -252,6 +352,8 @@ function handleClientMessage(
   }
 
   switch (options.message.type) {
+    case 'frontend.authenticate':
+      return;
     case 'frontend.heartbeat':
       options.sendMessage({
         type: 'frontend.lease',
@@ -285,6 +387,12 @@ function summarizeClientSocketMessageForDebug(
   message: TerminalClientSocketMessage,
 ): Record<string, unknown> {
   switch (message.type) {
+    case 'frontend.authenticate':
+      return {
+        type: message.type,
+        frontendId: message.frontendId,
+        leaseEpoch: message.leaseEpoch,
+      };
     case 'frontend.heartbeat':
       return {
         type: message.type,

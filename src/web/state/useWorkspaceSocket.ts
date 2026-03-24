@@ -12,9 +12,12 @@ import {
   type TerminalServerSocketMessage,
   terminalServerSocketMessageSchema,
 } from '../../shared/terminalSessions';
-import { logStateDebug } from '../debug/stateDebug';
 import {
-  appendFrontendLeaseToUrl,
+  appendStateDebugSessionToUrl,
+  logStateDebug,
+} from '../debug/stateDebug';
+import {
+  getStoredFrontendSocketAuth,
   reportFrontendLeaseLocked,
 } from './frontendLeaseClient';
 
@@ -42,8 +45,9 @@ export function useWorkspaceSocket({
   const heartbeatTimerRef = useRef<number | null>(null);
   const heartbeatWatchdogRef = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
-  const lastLeaseAckAtRef = useRef<number>(Date.now());
+  const lastLeaseAckAtRef = useRef<number>(0);
   const suppressReconnectRef = useRef(false);
+  const isAuthenticatedRef = useRef(false);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
@@ -58,10 +62,13 @@ export function useWorkspaceSocket({
       }
 
       suppressReconnectRef.current = false;
+      isAuthenticatedRef.current = false;
       setSocketState('connecting');
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const socket = new WebSocket(
-        appendFrontendLeaseToUrl(`${protocol}://${window.location.host}/ws`),
+        appendStateDebugSessionToUrl(
+          `${protocol}://${window.location.host}/ws`,
+        ),
       );
       socketRef.current = socket;
 
@@ -70,54 +77,59 @@ export function useWorkspaceSocket({
           return;
         }
 
-        setSocketState('open');
-        lastLeaseAckAtRef.current = Date.now();
         logStateDebug('socket', 'open', {
-          url: socket.url,
+          endpoint: '/ws',
         });
-        heartbeatTimerRef.current = window.setInterval(() => {
-          if (socket.readyState !== WebSocket.OPEN) {
-            return;
-          }
 
-          socket.send(
-            serializeJsonMessage({
-              type: 'frontend.heartbeat',
-              timestamp: new Date().toISOString(),
-            }),
-          );
-        }, WORKSPACE_SOCKET_HEARTBEAT_INTERVAL_MS);
-        heartbeatWatchdogRef.current = window.setInterval(() => {
-          if (
-            Date.now() - lastLeaseAckAtRef.current <
-            WORKSPACE_SOCKET_HEARTBEAT_TIMEOUT_MS
-          ) {
-            return;
-          }
+        const auth = getStoredFrontendSocketAuth();
 
-          socket.close();
-        }, 1_000);
+        if (!auth) {
+          suppressReconnectRef.current = true;
+          logStateDebug('socket', 'authenticateBlocked', {
+            endpoint: '/ws',
+            reason: 'Frontend lease token or epoch unavailable',
+          });
+          socket.close(4003, 'Active frontend lease required.');
+          return;
+        }
+
+        socket.send(
+          serializeJsonMessage({
+            type: 'frontend.authenticate',
+            frontendId: auth.frontendId,
+            leaseToken: auth.leaseToken,
+            leaseEpoch: auth.leaseEpoch,
+          }),
+        );
       });
 
       socket.addEventListener('error', () => {
         if (!cancelled) {
           setSocketState('error');
           logStateDebug('socket', 'error', {
-            url: socket.url,
+            endpoint: '/ws',
           });
         }
       });
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
         clearHeartbeatTimers(heartbeatTimerRef, heartbeatWatchdogRef);
+        isAuthenticatedRef.current = false;
 
         if (cancelled) {
           return;
         }
 
+        if (event.code === 4000 || event.code === 4003) {
+          suppressReconnectRef.current = true;
+        }
+
         setSocketState('closed');
         logStateDebug('socket', 'close', {
-          url: socket.url,
+          endpoint: '/ws',
+          code: event.code,
+          reason: event.reason,
+          reconnectSuppressed: suppressReconnectRef.current,
         });
 
         if (!suppressReconnectRef.current) {
@@ -132,6 +144,21 @@ export function useWorkspaceSocket({
 
         if (!parsed) {
           return;
+        }
+
+        if (
+          (parsed.type === 'frontend.lease' || parsed.type === 'ready') &&
+          !isAuthenticatedRef.current
+        ) {
+          isAuthenticatedRef.current = true;
+          setSocketState('open');
+          lastLeaseAckAtRef.current = Date.now();
+          startHeartbeatTimers(
+            socket,
+            heartbeatTimerRef,
+            heartbeatWatchdogRef,
+            lastLeaseAckAtRef,
+          );
         }
 
         if (parsed.type === 'frontend.lease') {
@@ -173,8 +200,16 @@ export function useWorkspaceSocket({
   const send = useCallback((message: TerminalClientSocketMessage) => {
     const socket = socketRef.current;
 
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      logStateDebug('socket', 'sendBlocked', summarizeClientMessageForDebug(message));
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !isAuthenticatedRef.current
+    ) {
+      logStateDebug(
+        'socket',
+        'sendBlocked',
+        summarizeClientMessageForDebug(message),
+      );
       return false;
     }
     logStateDebug('socket', 'send', summarizeClientMessageForDebug(message));
@@ -203,6 +238,12 @@ function summarizeClientMessageForDebug(
   message: TerminalClientSocketMessage,
 ): Record<string, unknown> {
   switch (message.type) {
+    case 'frontend.authenticate':
+      return {
+        type: message.type,
+        frontendId: message.frontendId,
+        leaseEpoch: message.leaseEpoch,
+      };
     case 'frontend.heartbeat':
       return {
         type: message.type,
@@ -310,5 +351,40 @@ function clearHeartbeatTimers(
   if (heartbeatWatchdogRef.current !== null) {
     window.clearInterval(heartbeatWatchdogRef.current);
     heartbeatWatchdogRef.current = null;
+  }
+}
+
+function startHeartbeatTimers(
+  socket: WebSocket,
+  heartbeatTimerRef: MutableRefObject<number | null>,
+  heartbeatWatchdogRef: MutableRefObject<number | null>,
+  lastLeaseAckAtRef: MutableRefObject<number>,
+): void {
+  if (heartbeatTimerRef.current === null) {
+    heartbeatTimerRef.current = window.setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      socket.send(
+        serializeJsonMessage({
+          type: 'frontend.heartbeat',
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }, WORKSPACE_SOCKET_HEARTBEAT_INTERVAL_MS);
+  }
+
+  if (heartbeatWatchdogRef.current === null) {
+    heartbeatWatchdogRef.current = window.setInterval(() => {
+      if (
+        Date.now() - lastLeaseAckAtRef.current <
+        WORKSPACE_SOCKET_HEARTBEAT_TIMEOUT_MS
+      ) {
+        return;
+      }
+
+      socket.close();
+    }, 1_000);
   }
 }

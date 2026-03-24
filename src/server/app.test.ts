@@ -5,9 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FRONTEND_ID_HEADER,
-  FRONTEND_ID_QUERY_PARAM,
   FRONTEND_LEASE_TOKEN_HEADER,
-  FRONTEND_LEASE_TOKEN_QUERY_PARAM,
   type FrontendSessionLease,
 } from '../shared/frontendSessionTransport';
 import type { TerminalServerSocketMessage } from '../shared/terminalSessions';
@@ -29,6 +27,40 @@ describe('createServer web entrypoint', () => {
     if (tempDirectory) {
       await rm(tempDirectory, { recursive: true, force: true });
       tempDirectory = null;
+    }
+  });
+
+  it('authenticates workspace sockets after connect without putting the lease token in the URL', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'terminal-canvas-app-'));
+    const app = await createServer({
+      port: 0,
+      workspaceFilePath: join(tempDirectory, 'workspace.json'),
+    });
+    const baseUrl = await app.listen({
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    let socket: TrackedWebSocket | null = null;
+
+    try {
+      const lease = await acquireFrontendLease(app, {
+        frontendId: 'frontend-a',
+        ownerLabel: 'Desk A',
+      });
+
+      socket = connectWorkspaceSocket(baseUrl, lease);
+      expect(socket.socket.url).not.toContain('leaseToken=');
+
+      const leaseMessage = await waitForWsMessageType(socket, 'frontend.lease');
+      expect(leaseMessage.lease).toMatchObject({
+        frontendId: lease.frontendId,
+        ownerLabel: lease.ownerLabel,
+        leaseEpoch: lease.leaseEpoch,
+      });
+    } finally {
+      await closeTrackedWs(socket);
+      await app.close();
     }
   });
 
@@ -1080,8 +1112,8 @@ describe('createServer web entrypoint', () => {
     const app = await createServer({
       port: 0,
       workspaceFilePath: join(tempDirectory, 'workspace.json'),
-      frontendLeaseTimeoutMs: 50,
-      frontendLeaseSweepIntervalMs: 10,
+      frontendLeaseTimeoutMs: 200,
+      frontendLeaseSweepIntervalMs: 25,
     });
     const baseUrl = await app.listen({
       host: '127.0.0.1',
@@ -1098,7 +1130,7 @@ describe('createServer web entrypoint', () => {
 
       socket = connectWorkspaceSocket(baseUrl, lease);
       await waitForWsMessageType(socket, 'frontend.lease');
-
+      await delay(500);
       await delay(150);
 
       const expiredClose = await waitForWsClose(socket);
@@ -1236,19 +1268,22 @@ function connectWorkspaceSocket(
   baseUrl: string,
   lease: FrontendSessionLease,
 ): TrackedWebSocket {
-  const socketUrl = new URL('/ws', baseUrl.replace(/^http/, 'ws'));
-  socketUrl.searchParams.set(FRONTEND_ID_QUERY_PARAM, lease.frontendId);
-  socketUrl.searchParams.set(
-    FRONTEND_LEASE_TOKEN_QUERY_PARAM,
-    lease.leaseToken,
-  );
-
-  const socket = new WebSocket(socketUrl);
+  const socket = new WebSocket(new URL('/ws', baseUrl.replace(/^http/, 'ws')));
   const tracked: TrackedWebSocket = {
     socket,
     messages: [],
     close: null,
   };
+  socket.addEventListener('open', () => {
+    socket.send(
+      JSON.stringify({
+        type: 'frontend.authenticate',
+        frontendId: lease.frontendId,
+        leaseToken: lease.leaseToken,
+        leaseEpoch: lease.leaseEpoch,
+      }),
+    );
+  });
 
   socket.addEventListener('message', (event) => {
     void readWsEventData(event.data).then((payload) => {

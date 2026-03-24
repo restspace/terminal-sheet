@@ -68,10 +68,6 @@ export async function registerFrontendSessionRoutes(
 function requiresFrontendLease(url: string): boolean {
   const path = url.split('?')[0] ?? url;
 
-  if (path === '/ws') {
-    return true;
-  }
-
   if (path === '/api/sessions') {
     return true;
   }

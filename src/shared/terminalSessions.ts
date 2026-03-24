@@ -150,6 +150,12 @@ export const terminalInputMessageSchema = z.object({
   sessionId: z.string(),
   data: z.string(),
 });
+export const frontendAuthenticateMessageSchema = z.object({
+  type: z.literal('frontend.authenticate'),
+  frontendId: z.string().trim().min(1),
+  leaseToken: z.string().trim().min(1),
+  leaseEpoch: z.number().int().positive(),
+});
 export const frontendHeartbeatMessageSchema = z.object({
   type: z.literal('frontend.heartbeat'),
   timestamp: z.iso.datetime(),
@@ -174,6 +180,7 @@ export const terminalMarkReadMessageSchema = z.object({
 });
 
 export const terminalClientSocketMessageSchema = z.discriminatedUnion('type', [
+  frontendAuthenticateMessageSchema,
   frontendHeartbeatMessageSchema,
   terminalInputMessageSchema,
   terminalResizeMessageSchema,

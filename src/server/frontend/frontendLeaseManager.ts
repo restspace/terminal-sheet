@@ -11,9 +11,15 @@ import {
 } from '../../shared/frontendSessionTransport';
 import { serializeJsonMessage } from '../../shared/jsonTransport';
 
+interface FrontendLeaseManagerLogger {
+  info(bindings: Record<string, unknown>, message: string): void;
+  warn(bindings: Record<string, unknown>, message: string): void;
+}
+
 interface FrontendLeaseManagerOptions {
   timeoutMs?: number;
   sweepIntervalMs?: number;
+  log?: FrontendLeaseManagerLogger;
 }
 
 interface LeaseSocket {
@@ -34,6 +40,7 @@ interface InternalLease {
 interface FrontendLeaseAuth {
   frontendId: string | null;
   leaseToken: string | null;
+  leaseEpoch?: number | null;
 }
 
 type LeaseSuccessResult = {
@@ -48,15 +55,14 @@ type LeaseFailureResult = {
 
 export class FrontendLeaseManager {
   private readonly timeoutMs: number;
-
   private readonly sweepTimer: ReturnType<typeof setInterval>;
-
+  private readonly log?: FrontendLeaseManagerLogger;
   private activeLease: InternalLease | null = null;
-
   private nextLeaseEpoch = 0;
 
   constructor(options: FrontendLeaseManagerOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? 12_000;
+    this.log = options.log;
     const sweepIntervalMs = options.sweepIntervalMs ?? 1_000;
 
     this.sweepTimer = setInterval(() => {
@@ -104,9 +110,14 @@ export class FrontendLeaseManager {
     const activeLease = this.getActiveLease();
 
     if (!activeLease) {
+      const lease = this.createLease(request.frontendId, request.ownerLabel);
+      this.logInfo('Frontend lease granted', lease, {
+        event: 'acquireGranted',
+        takeover: false,
+      });
       return {
         ok: true,
-        lease: this.createLease(request.frontendId, request.ownerLabel),
+        lease,
       };
     }
 
@@ -115,19 +126,34 @@ export class FrontendLeaseManager {
       request.leaseToken === activeLease.leaseToken
     ) {
       activeLease.ownerLabel = request.ownerLabel;
+      const lease = this.touchLease(activeLease);
+      this.logInfo('Frontend lease refreshed', lease, {
+        event: 'acquireRefreshed',
+        takeover: false,
+      });
       return {
         ok: true,
-        lease: this.touchLease(activeLease),
+        lease,
       };
     }
 
     if (request.takeover) {
+      const lease = this.replaceLease(request.frontendId, request.ownerLabel);
+      this.logInfo('Frontend lease taken over', lease, {
+        event: 'takeoverGranted',
+        takeover: true,
+      });
       return {
         ok: true,
-        lease: this.replaceLease(request.frontendId, request.ownerLabel),
+        lease,
       };
     }
 
+    this.logWarn('Frontend lease acquire rejected', activeLease, {
+      event: 'acquireRejected',
+      requestedFrontendId: request.frontendId,
+      requestedOwnerLabel: request.ownerLabel,
+    });
     return {
       ok: false,
       locked: this.buildLockedResponse(activeLease),
@@ -137,30 +163,11 @@ export class FrontendLeaseManager {
   renew(
     request: FrontendSessionRenewRequest | FrontendLeaseAuth,
   ): LeaseSuccessResult | LeaseFailureResult {
-    const activeLease = this.getActiveLease();
-
-    if (!activeLease) {
-      return {
-        ok: false,
-        locked: this.buildLockedResponse(null),
-      };
-    }
-
-    if (!this.isMatchingLease(activeLease, request)) {
-      return {
-        ok: false,
-        locked: this.buildLockedResponse(activeLease),
-      };
-    }
-
-    return {
-      ok: true,
-      lease: this.touchLease(activeLease),
-    };
+    return this.refreshLease(request, 'renew');
   }
 
   validate(auth: FrontendLeaseAuth): LeaseSuccessResult | LeaseFailureResult {
-    return this.renew(auth);
+    return this.refreshLease(auth, 'validate');
   }
 
   release(
@@ -169,6 +176,11 @@ export class FrontendLeaseManager {
     const activeLease = this.getActiveLease();
 
     if (!activeLease || !this.isMatchingLease(activeLease, request)) {
+      this.logWarn('Frontend lease release rejected', activeLease, {
+        event: 'releaseRejected',
+        requestedFrontendId: request.frontendId,
+        requestedLeaseEpoch: readRequestedLeaseEpoch(request),
+      });
       return false;
     }
 
@@ -176,6 +188,9 @@ export class FrontendLeaseManager {
       this.closeSocket(activeLease.socket, 1000, 'Frontend lease released.');
     }
 
+    this.logInfo('Frontend lease released', activeLease, {
+      event: 'releaseGranted',
+    });
     this.activeLease = null;
     return true;
   }
@@ -187,6 +202,11 @@ export class FrontendLeaseManager {
     const validation = this.validate(auth);
 
     if (!validation.ok) {
+      this.logWarn('Workspace socket attach rejected', this.activeLease, {
+        event: 'socketAttachRejected',
+        requestedFrontendId: auth.frontendId,
+        requestedLeaseEpoch: auth.leaseEpoch ?? null,
+      });
       return validation;
     }
 
@@ -203,6 +223,13 @@ export class FrontendLeaseManager {
     activeLease.socket = socket;
 
     if (previousSocket && previousSocket !== socket) {
+      this.logInfo(
+        'Workspace socket replaced by a newer connection',
+        activeLease,
+        {
+          event: 'socketReplaced',
+        },
+      );
       this.closeSocket(
         previousSocket,
         4000,
@@ -246,6 +273,9 @@ export class FrontendLeaseManager {
       this.closeSocket(activeLease.socket, 4001, 'Frontend lease expired.');
     }
 
+    this.logInfo('Frontend lease expired', activeLease, {
+      event: 'expired',
+    });
     this.activeLease = null;
   }
 
@@ -303,7 +333,10 @@ export class FrontendLeaseManager {
       typeof auth.frontendId === 'string' &&
       typeof auth.leaseToken === 'string' &&
       auth.frontendId === lease.frontendId &&
-      auth.leaseToken === lease.leaseToken
+      auth.leaseToken === lease.leaseToken &&
+      (auth.leaseEpoch === undefined ||
+        auth.leaseEpoch === null ||
+        auth.leaseEpoch === lease.leaseEpoch)
     );
   }
 
@@ -331,9 +364,53 @@ export class FrontendLeaseManager {
     return {
       message: lease
         ? 'Frontend lease is currently held by another browser.'
-        : 'An active frontend lease is required for this browser request.',
+        : 'Workspace control is no longer active. Refresh or retry to reacquire it.',
       owner: lease ? this.toOwner(lease) : null,
       canTakeOver: lease !== null,
+    };
+  }
+
+  private refreshLease(
+    request: FrontendSessionRenewRequest | FrontendLeaseAuth,
+    mode: 'renew' | 'validate',
+  ): LeaseSuccessResult | LeaseFailureResult {
+    const activeLease = this.getActiveLease();
+
+    if (!activeLease) {
+      this.logWarn('Frontend lease validation rejected', null, {
+        event: `${mode}Rejected`,
+        requestedFrontendId: request.frontendId,
+        requestedLeaseEpoch: readRequestedLeaseEpoch(request),
+      });
+      return {
+        ok: false,
+        locked: this.buildLockedResponse(null),
+      };
+    }
+
+    if (!this.isMatchingLease(activeLease, request)) {
+      this.logWarn('Frontend lease validation rejected', activeLease, {
+        event: `${mode}Rejected`,
+        requestedFrontendId: request.frontendId,
+        requestedLeaseEpoch: readRequestedLeaseEpoch(request),
+      });
+      return {
+        ok: false,
+        locked: this.buildLockedResponse(activeLease),
+      };
+    }
+
+    const lease = this.touchLease(activeLease);
+
+    if (mode === 'renew') {
+      this.logInfo('Frontend lease renewed', lease, {
+        event: 'renewGranted',
+      });
+    }
+
+    return {
+      ok: true,
+      lease,
     };
   }
 
@@ -356,4 +433,43 @@ export class FrontendLeaseManager {
       // Ignore shutdown races while closing sockets.
     }
   }
+
+  private logInfo(
+    message: string,
+    lease: Pick<InternalLease, 'frontendId' | 'ownerLabel' | 'leaseEpoch'> | null,
+    extra: Record<string, unknown>,
+  ): void {
+    this.log?.info(this.toLogBindings(lease, extra), message);
+  }
+
+  private logWarn(
+    message: string,
+    lease: Pick<InternalLease, 'frontendId' | 'ownerLabel' | 'leaseEpoch'> | null,
+    extra: Record<string, unknown>,
+  ): void {
+    this.log?.warn(this.toLogBindings(lease, extra), message);
+  }
+
+  private toLogBindings(
+    lease: Pick<InternalLease, 'frontendId' | 'ownerLabel' | 'leaseEpoch'> | null,
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      frontendId: lease?.frontendId ?? null,
+      ownerLabel: lease?.ownerLabel ?? null,
+      leaseEpoch: lease?.leaseEpoch ?? null,
+      ...extra,
+    };
+  }
+}
+
+function readRequestedLeaseEpoch(
+  request:
+    | FrontendSessionReleaseRequest
+    | FrontendSessionRenewRequest
+    | FrontendLeaseAuth,
+): number | null {
+  return 'leaseEpoch' in request && typeof request.leaseEpoch === 'number'
+    ? request.leaseEpoch
+    : null;
 }

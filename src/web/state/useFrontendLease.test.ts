@@ -1,11 +1,14 @@
 /** @vitest-environment jsdom */
 
-import { createElement } from 'react';
+import { createElement, useEffect } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import type { FrontendSessionLease } from '../../shared/frontendSessionTransport';
+import type {
+  FrontendSessionLease,
+  FrontendSessionLockedResponse,
+} from '../../shared/frontendSessionTransport';
+import { FrontendLeaseLockedError } from './frontendLeaseClient';
 import { useFrontendLease } from './useFrontendLease';
 
 const frontendLeaseClientMocks = vi.hoisted(() => ({
@@ -41,6 +44,7 @@ describe('useFrontendLease', () => {
 
   beforeEach(() => {
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -65,6 +69,7 @@ describe('useFrontendLease', () => {
 
     latestState = null;
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    vi.useRealTimers();
     vi.clearAllMocks();
     document.body.innerHTML = '';
   });
@@ -92,10 +97,55 @@ describe('useFrontendLease', () => {
       2,
     );
   });
+
+  it('polls immediately after becoming locked and then backs off between retries', async () => {
+    frontendLeaseClientMocks.acquireFrontendLease.mockRejectedValue(
+      new FrontendLeaseLockedError(createLockedResponse()),
+    );
+
+    act(() => {
+      root.render(createElement(Harness));
+    });
+    await act(async () => {
+      await settle();
+    });
+
+    expect(latestState?.phase).toBe('locked');
+    expect(frontendLeaseClientMocks.fetchFrontendSessionStatus).toHaveBeenCalledTimes(
+      1,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+      await settle();
+    });
+    expect(frontendLeaseClientMocks.fetchFrontendSessionStatus).toHaveBeenCalledTimes(
+      1,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await settle();
+    });
+    expect(frontendLeaseClientMocks.fetchFrontendSessionStatus).toHaveBeenCalledTimes(
+      2,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await settle();
+    });
+    expect(frontendLeaseClientMocks.fetchFrontendSessionStatus).toHaveBeenCalledTimes(
+      3,
+    );
+  });
 });
 
 function Harness() {
-  latestState = useFrontendLease();
+  const state = useFrontendLease();
+  useEffect(() => {
+    latestState = state;
+  }, [state]);
   return createElement('div');
 }
 
@@ -114,6 +164,14 @@ function createLeaseOwner() {
     acquiredAt: '2026-03-24T17:00:00.000Z',
     lastSeenAt: '2026-03-24T17:00:01.000Z',
     expiresAt: '2026-03-24T17:00:12.000Z',
+  };
+}
+
+function createLockedResponse(): FrontendSessionLockedResponse {
+  return {
+    message: 'Frontend lease is currently held by another browser.',
+    owner: createLeaseOwner(),
+    canTakeOver: true,
   };
 }
 

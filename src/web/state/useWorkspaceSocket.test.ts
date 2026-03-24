@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { createElement } from 'react';
+import { createElement, useEffect } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FrontendSessionLockedResponse } from '../../shared/frontendSessionTransport';
 import {
   FRONTEND_ID_STORAGE_KEY,
+  FRONTEND_LEASE_EPOCH_STORAGE_KEY,
   FRONTEND_LEASE_TOKEN_STORAGE_KEY,
   subscribeToFrontendLeaseConflicts,
 } from './frontendLeaseClient';
@@ -36,6 +37,7 @@ describe('useWorkspaceSocket', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
     window.sessionStorage.setItem(FRONTEND_ID_STORAGE_KEY, 'frontend-1');
     window.sessionStorage.setItem(FRONTEND_LEASE_TOKEN_STORAGE_KEY, 'lease-1');
+    window.sessionStorage.setItem(FRONTEND_LEASE_EPOCH_STORAGE_KEY, '1');
   });
 
   afterEach(() => {
@@ -55,18 +57,32 @@ describe('useWorkspaceSocket', () => {
     window.sessionStorage.clear();
   });
 
-  it('connects with the stored lease in the websocket URL and sends heartbeats', async () => {
+  it('authenticates after connect and keeps the lease token out of the websocket URL', async () => {
     act(() => {
       root.render(createElement(Harness));
     });
 
     const socket = FakeWebSocket.instances[0];
     expect(socket).toBeDefined();
-    expect(socket?.url).toContain('frontendId=frontend-1');
-    expect(socket?.url).toContain('leaseToken=lease-1');
+    expect(socket?.url).not.toContain('leaseToken=');
 
     act(() => {
       socket?.open();
+    });
+
+    expect(JSON.parse(socket?.sent[0] ?? '{}')).toMatchObject({
+      type: 'frontend.authenticate',
+      frontendId: 'frontend-1',
+      leaseToken: 'lease-1',
+      leaseEpoch: 1,
+    });
+    expect(latestState?.socketState).toBe('connecting');
+
+    act(() => {
+      socket?.emitMessage({
+        type: 'frontend.lease',
+        lease: createLeaseOwner(),
+      });
     });
 
     expect(latestState?.socketState).toBe('open');
@@ -76,8 +92,8 @@ describe('useWorkspaceSocket', () => {
       await settle();
     });
 
-    expect(socket?.sent).toHaveLength(1);
-    expect(JSON.parse(socket?.sent[0] ?? '{}')).toMatchObject({
+    expect(socket?.sent).toHaveLength(2);
+    expect(JSON.parse(socket?.sent[1] ?? '{}')).toMatchObject({
       type: 'frontend.heartbeat',
     });
   });
@@ -118,12 +134,43 @@ describe('useWorkspaceSocket', () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     unsubscribe();
   });
+
+  it('suppresses reconnect after a same-owner replacement close code', async () => {
+    act(() => {
+      root.render(createElement(Harness));
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    act(() => {
+      socket?.open();
+      socket?.emitMessage({
+        type: 'frontend.lease',
+        lease: createLeaseOwner(),
+      });
+      socket?.close(4000, 'Workspace socket replaced by a newer connection.');
+    });
+    await act(async () => {
+      await settle();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
 });
 
 function Harness() {
-  latestState = useWorkspaceSocket({
+  const state = useWorkspaceSocket({
     onMessage: vi.fn(),
   });
+  useEffect(() => {
+    latestState = state;
+  }, [state]);
 
   return createElement('div');
 }
@@ -140,6 +187,17 @@ function createLockedResponse(): FrontendSessionLockedResponse {
       lastSeenAt: '2026-03-24T17:00:01.000Z',
       expiresAt: '2026-03-24T17:00:12.000Z',
     },
+  };
+}
+
+function createLeaseOwner() {
+  return {
+    frontendId: 'frontend-1',
+    ownerLabel: 'Desk A',
+    leaseEpoch: 1,
+    acquiredAt: '2026-03-24T17:00:00.000Z',
+    lastSeenAt: '2026-03-24T17:00:01.000Z',
+    expiresAt: '2026-03-24T17:00:12.000Z',
   };
 }
 

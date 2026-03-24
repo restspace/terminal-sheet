@@ -1,8 +1,6 @@
 import {
   FRONTEND_ID_HEADER,
-  FRONTEND_ID_QUERY_PARAM,
   FRONTEND_LEASE_TOKEN_HEADER,
-  FRONTEND_LEASE_TOKEN_QUERY_PARAM,
   frontendSessionLeaseSchema,
   frontendSessionLockedResponseSchema,
   frontendSessionStatusResponseSchema,
@@ -11,19 +9,18 @@ import {
   type FrontendSessionStatusResponse,
 } from '../../shared/frontendSessionTransport';
 import { serializeJsonMessage } from '../../shared/jsonTransport';
-import {
-  appendStateDebugSessionToUrl,
-  getStateDebugRequestHeaders,
-} from '../debug/stateDebug';
+import { getStateDebugRequestHeaders, logStateDebug } from '../debug/stateDebug';
 
 export const FRONTEND_ID_STORAGE_KEY = 'tc-frontend-id';
 export const FRONTEND_OWNER_LABEL_STORAGE_KEY = 'tc-frontend-owner-label';
 export const FRONTEND_LEASE_TOKEN_STORAGE_KEY = 'tc-frontend-lease-token';
+export const FRONTEND_LEASE_EPOCH_STORAGE_KEY = 'tc-frontend-lease-epoch';
 
 interface StoredFrontendLease {
   frontendId: string;
   ownerLabel: string;
   leaseToken: string | null;
+  leaseEpoch: number | null;
 }
 
 type FrontendLeaseConflictListener = (
@@ -53,6 +50,7 @@ export function getStoredFrontendLease(): StoredFrontendLease {
     frontendId,
     ownerLabel,
     leaseToken: readSessionValue(FRONTEND_LEASE_TOKEN_STORAGE_KEY),
+    leaseEpoch: readSessionIntegerValue(FRONTEND_LEASE_EPOCH_STORAGE_KEY),
   };
 }
 
@@ -60,10 +58,30 @@ export function writeStoredFrontendLease(lease: FrontendSessionLease): void {
   writeSessionValue(FRONTEND_ID_STORAGE_KEY, lease.frontendId);
   writeSessionValue(FRONTEND_OWNER_LABEL_STORAGE_KEY, lease.ownerLabel);
   writeSessionValue(FRONTEND_LEASE_TOKEN_STORAGE_KEY, lease.leaseToken);
+  writeSessionValue(FRONTEND_LEASE_EPOCH_STORAGE_KEY, String(lease.leaseEpoch));
 }
 
 export function clearStoredFrontendLeaseToken(): void {
   removeSessionValue(FRONTEND_LEASE_TOKEN_STORAGE_KEY);
+  removeSessionValue(FRONTEND_LEASE_EPOCH_STORAGE_KEY);
+}
+
+export function getStoredFrontendSocketAuth(): {
+  frontendId: string;
+  leaseToken: string;
+  leaseEpoch: number;
+} | null {
+  const frontendLease = getStoredFrontendLease();
+
+  if (!frontendLease.leaseToken || frontendLease.leaseEpoch === null) {
+    return null;
+  }
+
+  return {
+    frontendId: frontendLease.frontendId,
+    leaseToken: frontendLease.leaseToken,
+    leaseEpoch: frontendLease.leaseEpoch,
+  };
 }
 
 export async function acquireFrontendLease(options?: {
@@ -89,7 +107,9 @@ export async function acquireFrontendLease(options?: {
   }
 
   if (!response.ok) {
-    throw new Error(`Frontend lease request failed with ${response.status}`);
+    throw new Error(
+      formatLeaseRequestError('Failed to acquire workspace control', response),
+    );
   }
 
   const lease = frontendSessionLeaseSchema.parse(await response.json());
@@ -104,7 +124,12 @@ export async function fetchFrontendSessionStatus(): Promise<FrontendSessionStatu
   });
 
   if (!response.ok) {
-    throw new Error(`Frontend session status failed with ${response.status}`);
+    throw new Error(
+      formatLeaseRequestError(
+        'Failed to refresh browser ownership status',
+        response,
+      ),
+    );
   }
 
   return frontendSessionStatusResponseSchema.parse(await response.json());
@@ -130,18 +155,36 @@ export async function releaseFrontendLease(options?: {
     typeof navigator !== 'undefined' &&
     typeof navigator.sendBeacon === 'function'
   ) {
-    const sent = navigator.sendBeacon(
-      '/api/frontend-session/release',
-      new Blob([payload], {
-        type: 'application/json',
-      }),
-    );
-    clearStoredFrontendLeaseToken();
-    return sent;
+    try {
+      const sent = navigator.sendBeacon(
+        '/api/frontend-session/release',
+        new Blob([payload], {
+          type: 'application/json',
+        }),
+      );
+
+      if (sent) {
+        clearStoredFrontendLeaseToken();
+        logStateDebug('frontendLease', 'releaseDispatched', {
+          transport: 'beacon',
+        });
+        return true;
+      }
+
+      logStateDebug('frontendLease', 'releaseDispatchFailed', {
+        transport: 'beacon',
+        error: 'sendBeacon returned false',
+      });
+    } catch (error) {
+      logStateDebug('frontendLease', 'releaseDispatchFailed', {
+        transport: 'beacon',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   try {
-    const response = await fetch('/api/frontend-session/release', {
+    const responsePromise = fetch('/api/frontend-session/release', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -152,29 +195,27 @@ export async function releaseFrontendLease(options?: {
     });
 
     clearStoredFrontendLeaseToken();
+    logStateDebug('frontendLease', 'releaseDispatched', {
+      transport: 'fetch',
+    });
+
+    const response = await responsePromise;
+
+    if (!response.ok) {
+      logStateDebug('frontendLease', 'releaseResponseFailed', {
+        transport: 'fetch',
+        status: response.status,
+      });
+    }
+
     return response.ok;
-  } catch {
+  } catch (error) {
+    logStateDebug('frontendLease', 'releaseDispatchFailed', {
+      transport: 'fetch',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return false;
   }
-}
-
-export function appendFrontendLeaseToUrl(url: string): string {
-  if (typeof window === 'undefined') {
-    return url;
-  }
-
-  const frontendLease = getStoredFrontendLease();
-  const nextUrl = new URL(url, window.location.href);
-  nextUrl.searchParams.set(FRONTEND_ID_QUERY_PARAM, frontendLease.frontendId);
-
-  if (frontendLease.leaseToken) {
-    nextUrl.searchParams.set(
-      FRONTEND_LEASE_TOKEN_QUERY_PARAM,
-      frontendLease.leaseToken,
-    );
-  }
-
-  return appendStateDebugSessionToUrl(nextUrl.toString());
 }
 
 export async function fetchWithFrontendLease(
@@ -263,6 +304,17 @@ function readSessionValue(key: string): string | null {
   return value?.trim() ? value : null;
 }
 
+function readSessionIntegerValue(key: string): number | null {
+  const value = readSessionValue(key);
+
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function writeSessionValue(key: string, value: string): void {
   if (typeof window === 'undefined') {
     return;
@@ -288,4 +340,11 @@ function createFrontendId(): string {
   }
 
   return `frontend-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function formatLeaseRequestError(prefix: string, response: Response): string {
+  const statusText = response.statusText.trim();
+  return statusText
+    ? `${prefix} (${response.status} ${statusText}).`
+    : `${prefix} (${response.status}).`;
 }
