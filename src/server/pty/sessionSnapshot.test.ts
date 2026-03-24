@@ -4,6 +4,7 @@ import type { TerminalNode } from '../../shared/workspace';
 import {
   DEFAULT_TERMINAL_COLS,
   DEFAULT_TERMINAL_ROWS,
+  estimateTerminalDimensionsFromNodeBounds,
 } from '../../shared/terminalSizeConstraints';
 import {
   applyAttentionEventSnapshot,
@@ -36,11 +37,25 @@ const terminal: TerminalNode = {
 };
 
 describe('session snapshot helpers', () => {
-  it('uses conservative default PTY dimensions before frontend sizing sync', () => {
+  it('uses conservative default PTY dimensions when no node bounds hint is provided', () => {
     const snapshot = createInitialSnapshot(terminal.id, 'local', terminal.agentType);
 
     expect(snapshot.cols).toBe(DEFAULT_TERMINAL_COLS);
     expect(snapshot.rows).toBe(DEFAULT_TERMINAL_ROWS);
+  });
+
+  it('estimates PTY dimensions from terminal node bounds with clamping', () => {
+    const snapshot = createInitialSnapshot(
+      terminal.id,
+      'local',
+      terminal.agentType,
+      null,
+      terminal.bounds,
+    );
+    const expected = estimateTerminalDimensionsFromNodeBounds(terminal.bounds);
+
+    expect(snapshot.cols).toBe(expected.cols);
+    expect(snapshot.rows).toBe(expected.rows);
   });
 
   it('creates a running snapshot with cleared output state', () => {

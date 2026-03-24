@@ -114,6 +114,8 @@ export function App() {
   const [createMarkdownError, setCreateMarkdownError] = useState<string | null>(
     null,
   );
+  const [terminalResizeSyncError, setTerminalResizeSyncError] =
+    useState<TerminalResizeSyncError | null>(null);
   const [fileSystemPicker, setFileSystemPicker] =
     useState<FileSystemPickerState | null>(null);
   const [isAttentionFeedExpanded, setIsAttentionFeedExpanded] = useState(false);
@@ -849,6 +851,28 @@ export function App() {
     bumpNodeInteraction(sessionId, 1_000);
     sendInput(sessionId, data);
   }, [bumpNodeInteraction, sendInput]);
+  const handleTerminalResize = useCallback((sessionId: string, cols: number, rows: number) => {
+    return resizeSession(sessionId, cols, rows);
+  }, [resizeSession]);
+  const handleTerminalResizeSyncError = useCallback((details: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+    timeoutMs: number;
+  }) => {
+    setTerminalResizeSyncError((current) => {
+      if (
+        current &&
+        current.sessionId === details.sessionId &&
+        current.cols === details.cols &&
+        current.rows === details.rows
+      ) {
+        return current;
+      }
+
+      return details;
+    });
+  }, []);
 
   const handleTerminalRestart = useCallback((sessionId: string) => {
     bumpNodeInteraction(sessionId);
@@ -930,7 +954,8 @@ export function App() {
         markdownLinks={activeMarkdownLinks}
         socketState={socketState}
         onTerminalInput={handleTerminalInput}
-        onTerminalResize={resizeSession}
+        onTerminalResize={handleTerminalResize}
+        onTerminalResizeSyncError={handleTerminalResizeSyncError}
         onTerminalRestart={handleTerminalRestart}
         onTerminalChange={updateTerminal}
         onPathSelectRequest={openTerminalDirectoryPicker}
@@ -1162,6 +1187,57 @@ export function App() {
         </button>
       </footer>
 
+      {terminalResizeSyncError ? (
+        <div
+          className="workspace-modal-backdrop"
+          onClick={() => {
+            setTerminalResizeSyncError(null);
+          }}
+        >
+          <section
+            className="workspace-modal"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <div className="workspace-modal-header">
+              <div>
+                <p className="eyebrow">Terminal Error</p>
+                <h2>Failed to sync terminal size</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTerminalResizeSyncError(null);
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+            <p className="workspace-modal-help">
+              The frontend could not sync PTY size for terminal{' '}
+              <code>{terminalResizeSyncError.sessionId}</code> after{' '}
+              {Math.round(terminalResizeSyncError.timeoutMs / 1_000)} seconds.
+            </p>
+            <p className="workspace-modal-help">
+              Requested size <code>{terminalResizeSyncError.cols}</code> x{' '}
+              <code>{terminalResizeSyncError.rows}</code>. Restart the terminal or
+              reload the app to recover.
+            </p>
+            <div className="workspace-modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setTerminalResizeSyncError(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {isCreateMarkdownDialogOpen ? (
         <div
           className="workspace-modal-backdrop"
@@ -1262,6 +1338,13 @@ interface FileSystemPickerState {
   confirmLabel: string;
   terminalId?: string;
   extensions?: string[];
+}
+
+interface TerminalResizeSyncError {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  timeoutMs: number;
 }
 
 interface AttentionFeedProps {

@@ -6,6 +6,8 @@ import type {
 import {
   DEFAULT_TERMINAL_COLS,
   DEFAULT_TERMINAL_ROWS,
+  estimateTerminalDimensionsFromNodeBounds,
+  type NodeBoundsSize,
 } from '../../shared/terminalSizeConstraints';
 import type { AgentType } from '../../shared/workspace';
 import type { AttentionEvent } from '../../shared/events';
@@ -18,7 +20,12 @@ export function createInitialSnapshot(
   backendId: string,
   agentType: AgentType,
   liveCwd: string | null = null,
+  bounds?: NodeBoundsSize,
 ): TerminalSessionSnapshot {
+  const { cols, rows } = bounds
+    ? estimateTerminalDimensionsFromNodeBounds(bounds)
+    : { cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
+
   return {
     sessionId,
     backendId,
@@ -37,8 +44,8 @@ export function createInitialSnapshot(
     summary: 'Session not started yet.',
     exitCode: null,
     disconnectReason: null,
-    cols: DEFAULT_TERMINAL_COLS,
-    rows: DEFAULT_TERMINAL_ROWS,
+    cols,
+    rows,
     liveCwd,
     projectRoot: null,
     integration: createInitialIntegrationState(agentType),

@@ -71,7 +71,7 @@ export function TerminalFocusSurface(props: {
   snapshotCols?: number;
   scrollResetKey?: string | number | boolean;
   onInput: (sessionId: string, data: string) => void;
-  onResize: (sessionId: string, cols: number, rows: number) => void;
+  onResize: (sessionId: string, cols: number, rows: number) => boolean | void;
 }) {
   return (
     <TerminalSurface

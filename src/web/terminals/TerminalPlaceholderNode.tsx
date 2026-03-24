@@ -29,6 +29,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
     onBoundsChange,
     onInput,
     onResize,
+    onResizeSyncError,
     onRestart,
     onMarkRead,
     onTerminalChange,
@@ -294,6 +295,7 @@ function TerminalPlaceholderNodeComponent(props: NodeProps<TerminalFlowNode>) {
                 autoFocusAtMs={surfaceKind === 'interactive' ? data.autoFocusAtMs : null}
                 onInput={onInput}
                 onResize={onResize}
+                onResizeSyncError={onResizeSyncError}
               />
             </div>
           ) : (
@@ -375,6 +377,7 @@ function areTerminalNodePropsEqual(
     previousData.onRemove === nextData.onRemove &&
     previousData.onInput === nextData.onInput &&
     previousData.onResize === nextData.onResize &&
+    previousData.onResizeSyncError === nextData.onResizeSyncError &&
     previousData.onRestart === nextData.onRestart &&
     previousData.onMarkRead === nextData.onMarkRead &&
     previousData.onMarkdownDrop === nextData.onMarkdownDrop

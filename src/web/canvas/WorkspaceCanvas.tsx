@@ -44,7 +44,17 @@ interface WorkspaceCanvasProps {
   markdownLinks: MarkdownLinkState[];
   socketState: 'connecting' | 'open' | 'closed' | 'error';
   onTerminalInput: (sessionId: string, data: string) => void;
-  onTerminalResize: (sessionId: string, cols: number, rows: number) => void;
+  onTerminalResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => boolean | void;
+  onTerminalResizeSyncError?: (details: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+    timeoutMs: number;
+  }) => void;
   onTerminalRestart: (sessionId: string) => void;
   onTerminalChange: (
     nodeId: string,
@@ -90,6 +100,7 @@ export function WorkspaceCanvas({
   socketState,
   onTerminalInput,
   onTerminalResize,
+  onTerminalResizeSyncError,
   onTerminalRestart,
   onTerminalChange,
   onPathSelectRequest,
@@ -134,6 +145,7 @@ export function WorkspaceCanvas({
   const onTerminalRemoveRef = useRef(onTerminalRemove);
   const onTerminalInputRef = useRef(onTerminalInput);
   const onTerminalResizeRef = useRef(onTerminalResize);
+  const onTerminalResizeSyncErrorRef = useRef(onTerminalResizeSyncError);
   const onTerminalRestartRef = useRef(onTerminalRestart);
   const onMarkTerminalReadRef = useRef(onMarkTerminalRead);
   const onMarkdownDropRef = useRef(onMarkdownDrop);
@@ -145,6 +157,7 @@ export function WorkspaceCanvas({
   onTerminalRemoveRef.current = onTerminalRemove;
   onTerminalInputRef.current = onTerminalInput;
   onTerminalResizeRef.current = onTerminalResize;
+  onTerminalResizeSyncErrorRef.current = onTerminalResizeSyncError;
   onTerminalRestartRef.current = onTerminalRestart;
   onMarkTerminalReadRef.current = onMarkTerminalRead;
   onMarkdownDropRef.current = onMarkdownDrop;
@@ -196,7 +209,7 @@ export function WorkspaceCanvas({
   const handleTerminalResize = useCallback<
     WorkspaceCanvasProps['onTerminalResize']
   >((sessionId, cols, rows) => {
-    onTerminalResizeRef.current(sessionId, cols, rows);
+    return onTerminalResizeRef.current(sessionId, cols, rows);
   }, []);
   const handleTerminalRestart = useCallback<
     WorkspaceCanvasProps['onTerminalRestart']
@@ -470,6 +483,7 @@ export function WorkspaceCanvas({
         onRemove: handleTerminalRemove,
         onInput: handleTerminalInput,
         onResize: handleTerminalResize,
+        onResizeSyncError: onTerminalResizeSyncErrorRef.current,
         onRestart: handleTerminalRestart,
         onMarkRead: handleMarkTerminalRead,
         onMarkdownDrop: handleMarkdownDrop,

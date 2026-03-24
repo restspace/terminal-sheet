@@ -1,6 +1,9 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_TERMINAL_COLS,
+  DEFAULT_TERMINAL_ROWS,
+  estimateTerminalDimensionsFromNodeBounds,
   MIN_TERMINAL_COLS,
   MIN_TERMINAL_ROWS,
 } from '../../shared/terminalSizeConstraints';
@@ -13,16 +16,27 @@ import { PtySessionManager } from './ptySessionManager';
 const spawnedPtys: FakePty[] = [];
 
 vi.mock('node-pty', () => ({
-  spawn: vi.fn((file: string, args: string[]) => {
-    const pty = new FakePty(file, args);
-    spawnedPtys.push(pty);
-    return pty;
-  }),
+  spawn: vi.fn(
+    (
+      file: string,
+      args: string[],
+      options?: { cols?: number; rows?: number },
+    ) => {
+      const pty = new FakePty(file, args, options);
+      spawnedPtys.push(pty);
+      return pty;
+    },
+  ),
 }));
 
 describe('PtySessionManager', () => {
   beforeEach(() => {
     spawnedPtys.length = 0;
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('tracks live cwd changes and prepares each project root once', async () => {
@@ -57,6 +71,7 @@ describe('PtySessionManager', () => {
         agentType: 'claude',
       }),
     );
+    primeDeferredSpawn(manager, 'terminal-1');
 
     await vi.waitFor(() => {
       expect(provider.prepareForProject).toHaveBeenCalledTimes(1);
@@ -98,6 +113,7 @@ describe('PtySessionManager', () => {
         agentType: 'shell',
       }),
     );
+    primeDeferredSpawn(manager, 'terminal-2');
 
     const pty = expectSpawnedPty();
     pty.emitData(`build complete\r\n${createCwdMarker('C:\\workspace')}`);
@@ -131,6 +147,7 @@ describe('PtySessionManager', () => {
         agentType: 'codex',
       }),
     );
+    primeDeferredSpawn(manager, 'terminal-3');
 
     await vi.waitFor(() => {
       expect(manager.getSnapshots()[0]?.integration.status).toBe('not-required');
@@ -198,6 +215,7 @@ describe('PtySessionManager', () => {
       agentType: 'claude',
     });
     await manager.syncWithWorkspace(workspace);
+    primeDeferredSpawn(manager, 'terminal-dispose');
     await vi.waitFor(() => {
       expect(provider.prepareForProject).toHaveBeenCalledTimes(1);
     });
@@ -279,7 +297,13 @@ describe('PtySessionManager', () => {
       }),
     );
 
+    expect(spawnedPtys.length).toBe(0);
+    expect(manager.resizeSession('terminal-clamp', 15, 4)).toBe(true);
     const pty = expectSpawnedPty();
+    expect(pty.spawnOptions).toMatchObject({
+      cols: MIN_TERMINAL_COLS,
+      rows: MIN_TERMINAL_ROWS,
+    });
     expect(manager.resizeSession('terminal-clamp', 15, 4)).toBe(true);
     expect(pty.resize).toHaveBeenCalledWith(
       MIN_TERMINAL_COLS,
@@ -295,6 +319,142 @@ describe('PtySessionManager', () => {
       }),
       'Clamped PTY resize request to allowed bounds',
     );
+  });
+
+  it('does not spawn a PTY until the first resize message arrives', async () => {
+    const manager = createManager({
+      get: vi.fn(() => null),
+    });
+
+    await manager.syncWithWorkspace(
+      createWorkspace({
+        id: 'terminal-defer',
+        shell: 'powershell.exe',
+        cwd: '.',
+        agentType: 'shell',
+      }),
+    );
+
+    expect(spawnedPtys.length).toBe(0);
+
+    expect(manager.resizeSession('terminal-defer', 100, 40)).toBe(true);
+    const pty = expectSpawnedPty();
+    expect(pty.spawnOptions).toMatchObject({ cols: 100, rows: 40 });
+  });
+
+  it('spawns with estimated snapshot dimensions after the deferred fallback timeout', async () => {
+    vi.useFakeTimers();
+    const manager = createManager({
+      get: vi.fn(() => null),
+    });
+    const ws = createWorkspace({
+      id: 'terminal-fallback',
+      shell: 'powershell.exe',
+      cwd: '.',
+      agentType: 'shell',
+    });
+
+    await manager.syncWithWorkspace(ws);
+
+    expect(spawnedPtys.length).toBe(0);
+
+    const estimated = estimateTerminalDimensionsFromNodeBounds(
+      ws.terminals[0]!.bounds,
+    );
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(spawnedPtys.length).toBe(1);
+    expect(spawnedPtys[0]?.spawnOptions).toMatchObject({
+      cols: estimated.cols,
+      rows: estimated.rows,
+    });
+  });
+
+  it('exposes initial snapshot dimensions estimated from node bounds, not 80x24 defaults', async () => {
+    const manager = createManager({
+      get: vi.fn(() => null),
+    });
+    const ws = createWorkspace({
+      id: 'terminal-initial-snapshot',
+      shell: 'powershell.exe',
+      cwd: '.',
+      agentType: 'shell',
+    });
+
+    await manager.syncWithWorkspace(ws);
+
+    const snapshot = manager.getSnapshots()[0];
+    const expected = estimateTerminalDimensionsFromNodeBounds(
+      ws.terminals[0]!.bounds,
+    );
+
+    expect(snapshot?.cols).toBe(expected.cols);
+    expect(snapshot?.rows).toBe(expected.rows);
+    expect(snapshot?.cols).not.toBe(DEFAULT_TERMINAL_COLS);
+    expect(snapshot?.rows).not.toBe(DEFAULT_TERMINAL_ROWS);
+    expect(spawnedPtys.length).toBe(0);
+  });
+
+  it('refreshes idle unspawned snapshot dimensions when workspace sync updates bounds', async () => {
+    vi.useFakeTimers();
+    const manager = createManager({
+      get: vi.fn(() => null),
+    });
+    const ws = createWorkspace({
+      id: 'terminal-bounds-sync',
+      shell: 'powershell.exe',
+      cwd: '.',
+      agentType: 'shell',
+    });
+
+    await manager.syncWithWorkspace(ws);
+    const first = estimateTerminalDimensionsFromNodeBounds(
+      ws.terminals[0]!.bounds,
+    );
+    expect(manager.getSnapshots()[0]?.cols).toBe(first.cols);
+
+    const wider = {
+      ...ws,
+      terminals: [
+        {
+          ...ws.terminals[0]!,
+          bounds: { ...ws.terminals[0]!.bounds, width: 960, height: 640 },
+        },
+      ],
+    };
+    await manager.syncWithWorkspace(wider);
+
+    const next = estimateTerminalDimensionsFromNodeBounds(
+      wider.terminals[0]!.bounds,
+    );
+    expect(manager.getSnapshots()[0]?.cols).toBe(next.cols);
+    expect(manager.getSnapshots()[0]?.rows).toBe(next.rows);
+    expect(next.cols).toBeGreaterThan(first.cols);
+    expect(spawnedPtys.length).toBe(0);
+  });
+
+  it('restartSession spawns a new PTY immediately using current snapshot dimensions', async () => {
+    const manager = createManager({
+      get: vi.fn(() => null),
+    });
+
+    await manager.syncWithWorkspace(
+      createWorkspace({
+        id: 'terminal-restart',
+        shell: 'powershell.exe',
+        cwd: '.',
+        agentType: 'shell',
+      }),
+    );
+
+    expect(manager.resizeSession('terminal-restart', 88, 36)).toBe(true);
+    expect(spawnedPtys.length).toBe(1);
+    expect(spawnedPtys[0]?.spawnOptions).toMatchObject({ cols: 88, rows: 36 });
+
+    expect(manager.restartSession('terminal-restart')).toBe(true);
+    expect(spawnedPtys.length).toBe(2);
+    expect(spawnedPtys[1]?.spawnOptions).toMatchObject({ cols: 88, rows: 36 });
   });
 });
 
@@ -316,6 +476,7 @@ class FakePty {
   constructor(
     readonly file: string,
     readonly args: string[],
+    readonly spawnOptions?: { cols?: number; rows?: number },
   ) {}
 
   onData(handler: (data: string) => void) {
@@ -433,4 +594,8 @@ function expectSpawnedPty(): FakePty {
 
   expect(pty).toBeDefined();
   return pty as FakePty;
+}
+
+function primeDeferredSpawn(manager: PtySessionManager, sessionId: string): void {
+  manager.resizeSession(sessionId, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS);
 }

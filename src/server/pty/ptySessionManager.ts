@@ -5,7 +5,10 @@ import { spawn, type IDisposable, type IPty } from 'node-pty';
 
 import { LOCAL_BACKEND_ID } from '../../shared/backends';
 import type { AttentionEvent } from '../../shared/events';
-import { clampTerminalDimensions } from '../../shared/terminalSizeConstraints';
+import {
+  clampTerminalDimensions,
+  estimateTerminalDimensionsFromNodeBounds,
+} from '../../shared/terminalSizeConstraints';
 import {
   type TerminalIntegrationState,
   type TerminalServerSocketMessage,
@@ -59,9 +62,14 @@ interface SessionRuntimeState {
   currentIntegrationProjectRoot: string | null;
   queuedIntegrationProjectRoot: string | null;
   integrationTask: Promise<void> | null;
+  deferredSpawnTimer: ReturnType<typeof setTimeout> | null;
+  spawnInFlight: boolean;
 }
 
 type SessionListener = (message: TerminalServerSocketMessage) => void;
+
+/** When the client never sends `terminal.resize`, spawn using snapshot dimensions after this delay. */
+const DEFERRED_PTY_SPAWN_MS = 2000;
 
 export class PtySessionManager {
   private readonly sessions = new Map<string, SessionRecord>();
@@ -112,6 +120,24 @@ export class PtySessionManager {
 
       if (existing) {
         existing.terminal = terminal;
+        if (
+          !existing.pty &&
+          existing.snapshot.status === 'idle' &&
+          existing.snapshot.recoveryState !== 'spawn-failed'
+        ) {
+          const { cols, rows } = estimateTerminalDimensionsFromNodeBounds(
+            terminal.bounds,
+          );
+          if (
+            cols !== existing.snapshot.cols ||
+            rows !== existing.snapshot.rows
+          ) {
+            this.setSnapshot(
+              existing,
+              createResizeSnapshot(existing.snapshot, cols, rows),
+            );
+          }
+        }
         continue;
       }
 
@@ -197,11 +223,32 @@ export class PtySessionManager {
       );
     }
 
-    record.pty?.resize(nextCols, nextRows);
+    this.clearDeferredSpawnTimer(record);
     this.setSnapshot(
       record,
       createResizeSnapshot(record.snapshot, nextCols, nextRows),
     );
+
+    if (record.pty) {
+      record.pty.resize(nextCols, nextRows);
+      return true;
+    }
+
+    if (record.runtime.spawnInFlight) {
+      return true;
+    }
+
+    record.runtime.spawnInFlight = true;
+    void this.spawnTerminal(record).finally(() => {
+      record.runtime.spawnInFlight = false;
+      if (record.pty) {
+        const latest = clampTerminalDimensions(
+          record.snapshot.cols,
+          record.snapshot.rows,
+        );
+        record.pty.resize(latest.cols, latest.rows);
+      }
+    });
 
     return true;
   }
@@ -214,7 +261,9 @@ export class PtySessionManager {
     }
 
     this.options.markdownService.clearTerminalLink(sessionId);
+    this.clearDeferredSpawnTimer(record);
     this.disposePty(record);
+    record.runtime.spawnInFlight = false;
     void this.spawnTerminal(record);
     return true;
   }
@@ -253,6 +302,7 @@ export class PtySessionManager {
         this.options.backendId ?? LOCAL_BACKEND_ID,
         terminal.agentType,
         liveCwd,
+        terminal.bounds,
       ),
       runtime: {
         liveCwd,
@@ -264,14 +314,64 @@ export class PtySessionManager {
         currentIntegrationProjectRoot: null,
         queuedIntegrationProjectRoot: null,
         integrationTask: null,
+        deferredSpawnTimer: null,
+        spawnInFlight: false,
       },
     };
 
     this.sessions.set(terminal.id, record);
-    await this.spawnTerminal(record);
+    this.scheduleDeferredSpawn(record);
+  }
+
+  private clearDeferredSpawnTimer(record: SessionRecord): void {
+    if (record.runtime.deferredSpawnTimer !== null) {
+      clearTimeout(record.runtime.deferredSpawnTimer);
+      record.runtime.deferredSpawnTimer = null;
+    }
+  }
+
+  private scheduleDeferredSpawn(record: SessionRecord): void {
+    this.clearDeferredSpawnTimer(record);
+    record.runtime.deferredSpawnTimer = setTimeout(() => {
+      record.runtime.deferredSpawnTimer = null;
+      this.onDeferredSpawnDeadline(record);
+    }, DEFERRED_PTY_SPAWN_MS);
+  }
+
+  private onDeferredSpawnDeadline(record: SessionRecord): void {
+    if (this.sessions.get(record.terminal.id) !== record) {
+      return;
+    }
+
+    if (record.pty || record.runtime.spawnInFlight) {
+      return;
+    }
+
+    if (
+      record.snapshot.recoveryState === 'spawn-failed' ||
+      record.snapshot.status !== 'idle'
+    ) {
+      return;
+    }
+
+    record.runtime.spawnInFlight = true;
+    void this.spawnTerminal(record).finally(() => {
+      record.runtime.spawnInFlight = false;
+      if (record.pty) {
+        const latest = clampTerminalDimensions(
+          record.snapshot.cols,
+          record.snapshot.rows,
+        );
+        record.pty.resize(latest.cols, latest.rows);
+      }
+    });
   }
 
   private async spawnTerminal(record: SessionRecord): Promise<void> {
+    if (record.pty) {
+      return;
+    }
+
     const command = parseCommand(record.terminal.shell);
     const cwd = resolve(
       this.options.workspaceRoot ?? process.cwd(),
@@ -284,6 +384,7 @@ export class PtySessionManager {
     record.runtime.liveCwd = cwd;
     record.runtime.pendingOutput = '';
     record.runtime.contextVersion += 1;
+    this.clearDeferredSpawnTimer(record);
 
     try {
       const pty = spawn(command.file, args, {
@@ -490,6 +591,7 @@ export class PtySessionManager {
     }
 
     record.runtime.disposeEpoch += 1;
+    this.clearDeferredSpawnTimer(record);
     this.disposePty(record);
     this.options.markdownService.clearTerminalLink(sessionId);
     this.sessions.delete(sessionId);

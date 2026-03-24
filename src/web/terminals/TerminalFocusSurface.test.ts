@@ -935,6 +935,529 @@ describe('TerminalFocusSurface', () => {
     expect(terminal.clearSelectionCalls).toBe(1);
   });
 
+  it('uses xterm screen dimensions for cols/rows when available', () => {
+    const onResize = vi.fn().mockReturnValue(true);
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-canvas-measure',
+          scrollback: '',
+          onInput: vi.fn(),
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => 800,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    const screenElement = document.createElement('div');
+    screenElement.className = 'xterm-screen';
+    Object.defineProperty(screenElement, 'clientWidth', {
+      configurable: true,
+      get: () => 750,
+    });
+    Object.defineProperty(screenElement, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal.element.appendChild(screenElement);
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    terminal.resizeCalls.length = 0;
+    onResize.mockClear();
+    emitResizeObservers(resizeObserverCallbacks);
+
+    expect(terminal.resizeCalls.at(-1)).toEqual({ cols: 75, rows: 20 });
+    expect(onResize).toHaveBeenLastCalledWith('terminal-canvas-measure', 75, 20);
+  });
+
+  it('skips measured resize and backend sync when the surface cannot fit one cell', () => {
+    const onResize = vi.fn().mockReturnValue(true);
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-degenerate',
+          scrollback: '',
+          onInput: vi.fn(),
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+              canvas?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => 800,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    emitResizeObservers(resizeObserverCallbacks);
+    const lastResizeBefore = terminal.resizeCalls.at(-1);
+    expect(lastResizeBefore).toBeDefined();
+
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => 0,
+    });
+    terminal.resizeCalls.length = 0;
+    onResize.mockClear();
+    emitResizeObservers(resizeObserverCallbacks);
+
+    expect(terminal.resizeCalls).toEqual([]);
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
+  it('retries rejected backend resizes with bounded backoff until sync succeeds', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const onResize = vi.fn().mockReturnValue(true);
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-backoff',
+          scrollback: '',
+          onInput: vi.fn(),
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    let surfaceWidth = 800;
+    const surfaceHeight = 400;
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => surfaceWidth,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => surfaceHeight,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    onResize.mockClear();
+    emitResizeObservers(resizeObserverCallbacks);
+    onResize.mockClear();
+
+    onResize
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+
+    surfaceWidth = 790;
+    emitResizeObservers(resizeObserverCallbacks);
+
+    expect(onResize).toHaveBeenCalledTimes(1);
+    expect(onResize).toHaveBeenLastCalledWith('terminal-backoff', 79, 20);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(onResize).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(onResize).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(onResize).toHaveBeenCalledTimes(4);
+    expect(onResize).toHaveBeenLastCalledWith('terminal-backoff', 79, 20);
+
+    vi.useRealTimers();
+  });
+
+  it('keeps retrying rejected backend resizes at the capped delay until sync succeeds', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const onResize = vi.fn().mockReturnValue(true);
+
+    act(() => {
+      root.render(
+        createElement(TerminalFocusSurface, {
+          sessionId: 'terminal-retry-cap',
+          scrollback: '',
+          onInput: vi.fn(),
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    let surfaceWidth = 800;
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => surfaceWidth,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    onResize.mockClear();
+    emitResizeObservers(resizeObserverCallbacks);
+    onResize.mockClear();
+
+    onResize
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+
+    surfaceWidth = 790;
+    emitResizeObservers(resizeObserverCallbacks);
+    expect(onResize).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(onResize).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(onResize).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(onResize).toHaveBeenCalledTimes(4);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(onResize).toHaveBeenCalledTimes(5);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(onResize).toHaveBeenCalledTimes(6);
+    expect(onResize).toHaveBeenLastCalledWith('terminal-retry-cap', 79, 20);
+
+    vi.useRealTimers();
+  });
+
+  it('stops retrying after 10 seconds and reports a resize sync error', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const onResize = vi.fn().mockReturnValue(false);
+    const onResizeSyncError = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-timeout',
+          scrollback: '',
+          interactionMode: 'interactive',
+          sizeSource: 'measured',
+          resizeAuthority: 'owner',
+          onInput: vi.fn(),
+          onResize,
+          onResizeSyncError,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => 790,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    onResize.mockClear();
+    emitResizeObservers(resizeObserverCallbacks);
+    expect(onResize).toHaveBeenCalledTimes(1);
+    expect(onResize).toHaveBeenLastCalledWith('terminal-timeout', 79, 20);
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    expect(onResizeSyncError).toHaveBeenCalledTimes(1);
+    expect(onResizeSyncError).toHaveBeenLastCalledWith({
+      sessionId: 'terminal-timeout',
+      cols: 79,
+      rows: 20,
+      timeoutMs: 10_000,
+    });
+
+    const attemptsAfterTimeout = onResize.mock.calls.length;
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(onResize.mock.calls.length).toBe(attemptsAfterTimeout);
+
+    emitResizeObservers(resizeObserverCallbacks);
+    expect(onResize.mock.calls.length).toBe(attemptsAfterTimeout);
+
+    vi.useRealTimers();
+  });
+
+  it('does not report a timeout while startup sync is blocked before first send attempt', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const onResize = vi.fn().mockReturnValue(true);
+    const onResizeSyncError = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-startup-blocked',
+          scrollback: '',
+          interactionMode: 'interactive',
+          sizeSource: 'measured',
+          resizeAuthority: 'owner',
+          canSyncResize: false,
+          onInput: vi.fn(),
+          onResize,
+          onResizeSyncError,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => 790,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    emitResizeObservers(resizeObserverCallbacks);
+    expect(onResize).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(onResizeSyncError).not.toHaveBeenCalled();
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-startup-blocked',
+          scrollback: '',
+          interactionMode: 'interactive',
+          sizeSource: 'measured',
+          resizeAuthority: 'owner',
+          canSyncResize: true,
+          onInput: vi.fn(),
+          onResize,
+          onResizeSyncError,
+        }),
+      );
+    });
+
+    expect(onResize).toHaveBeenCalledTimes(1);
+    expect(onResize).toHaveBeenLastCalledWith(
+      'terminal-startup-blocked',
+      79,
+      20,
+    );
+    expect(onResizeSyncError).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
   it('serializes focused resizes behind pending writes', () => {
     const onResize = vi.fn();
 

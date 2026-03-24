@@ -28,7 +28,17 @@ export interface TerminalNodeData extends Record<string, unknown> {
   onPathSelectRequest: (terminalId: string) => void;
   onRemove: (terminalId: string) => void;
   onInput: (sessionId: string, data: string) => void;
-  onResize: (sessionId: string, cols: number, rows: number) => void;
+  onResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => boolean | void;
+  onResizeSyncError?: (details: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+    timeoutMs: number;
+  }) => void;
   onRestart: (sessionId: string) => void;
   onMarkRead: (sessionId: string) => void;
   onMarkdownDrop: (markdownNodeId: string, terminalId: string) => void;
