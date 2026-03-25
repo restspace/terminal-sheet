@@ -12,6 +12,7 @@ import open from 'open';
 import type { ServerRole } from '../shared/backends';
 import { LOCAL_BACKEND_ID } from '../shared/backends';
 import { createServer } from '../server/app';
+import { runSpawnCommand } from './spawn';
 import {
   loadOrCreateServerIdentity,
   resolveServerIdentityFilePath,
@@ -48,6 +49,9 @@ async function main(): Promise<void> {
       return;
     case 'backend':
       await runBackendCommand(rest);
+      return;
+    case 'spawn':
+      await runSpawnCommand(rest);
       return;
     case 'remote':
       await runRemoteCommand(rest);
@@ -514,6 +518,7 @@ function printHelp(): void {
   console.log(`tsheet commands:
   tsheet serve [--port <n>] [--workspace <path>] [--role <standalone|home|remote>] [--no-open]
   tsheet open <path> [--server <url>]
+  tsheet spawn --command "..." [--label "..."] [--cwd "."] [--agent-type shell] [--wait] [--timeout 300]
   tsheet token <show|rotate> [--workspace <path>]
   tsheet backend add --label <name> --url <remote-url> --token <token> [--server <url>]
   tsheet backend list [--server <url>]

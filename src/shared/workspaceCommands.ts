@@ -6,6 +6,7 @@ import {
   agentTypeSchema,
   cameraViewportSchema,
   createTerminalNode,
+  createSpawnedTerminalNode,
   createWorkspaceMarkdownNode,
   nodeBoundsSchema,
   markdownNodeSchema,
@@ -28,6 +29,8 @@ export const workspaceAddTerminalCommandInputSchema = z.object({
   repoLabel: z.string().optional(),
   taskLabel: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  parentTerminalId: z.string().optional(),
+  spawnGroup: z.string().optional(),
 });
 
 export const workspaceAddMarkdownCommandInputSchema = z.object({
@@ -232,16 +235,21 @@ export function addTerminalToWorkspace(
 ): Workspace {
   const terminalInput = normalizeTerminalInput(workspace, input);
 
-  return {
-    ...workspace,
-    terminals: [
-      ...workspace.terminals,
-      createTerminalNode(
+  const parentTerminal = terminalInput.parentTerminalId
+    ? workspace.terminals.find((t) => t.id === terminalInput.parentTerminalId)
+    : undefined;
+
+  const newTerminal = parentTerminal
+    ? createSpawnedTerminalNode(terminalInput, parentTerminal, workspace)
+    : createTerminalNode(
         terminalInput,
         workspace.terminals.length,
         workspace.currentViewport,
-      ),
-    ],
+      );
+
+  return {
+    ...workspace,
+    terminals: [...workspace.terminals, newTerminal],
   };
 }
 
@@ -419,6 +427,8 @@ function normalizeTerminalInput(
     repoLabel: normalizeOptionalText(input?.repoLabel, 'local workspace'),
     taskLabel: normalizeOptionalText(input?.taskLabel, 'live terminal session'),
     tags: input?.tags ?? [],
+    parentTerminalId: normalizeOptionalText(input?.parentTerminalId, undefined),
+    spawnGroup: normalizeOptionalText(input?.spawnGroup, undefined),
   };
 }
 

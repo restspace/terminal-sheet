@@ -94,6 +94,7 @@ export class PtySessionManager {
       markdownService: MarkdownService;
       workspaceRoot?: string;
       backendId?: string;
+      spawnBaseUrl?: string;
       integrationRegistry?: AgentIntegrationRegistry;
     },
   ) {
@@ -385,18 +386,33 @@ export class PtySessionManager {
     this.clearDeferredSpawnTimer(record);
 
     try {
+      const spawnEnv: Record<string, string> = {
+        ...augmentShellEnvironmentForTracking(command.file, process.env),
+        TERMINAL_CANVAS_SESSION_ID: record.terminal.id,
+        TERMINAL_CANVAS_ATTENTION_URL: this.options.attentionReceiverUrl,
+        TERMINAL_CANVAS_ATTENTION_TOKEN: this.options.attentionToken,
+        TERMINAL_CANVAS_AGENT_TYPE: record.terminal.agentType,
+      };
+
+      if (this.options.spawnBaseUrl) {
+        spawnEnv.TERMINAL_CANVAS_SPAWN_URL = this.options.spawnBaseUrl;
+      }
+
+      if (record.terminal.parentTerminalId) {
+        spawnEnv.TERMINAL_CANVAS_PARENT_ID = record.terminal.parentTerminalId;
+
+        if (this.options.spawnBaseUrl) {
+          spawnEnv.TERMINAL_CANVAS_RESULT_URL =
+            `${this.options.spawnBaseUrl}/${record.terminal.id}/result`;
+        }
+      }
+
       const pty = spawn(command.file, args, {
         name: 'xterm-256color',
         cwd,
         cols: spawnResize.cols,
         rows: spawnResize.rows,
-        env: {
-          ...augmentShellEnvironmentForTracking(command.file, process.env),
-          TERMINAL_CANVAS_SESSION_ID: record.terminal.id,
-          TERMINAL_CANVAS_ATTENTION_URL: this.options.attentionReceiverUrl,
-          TERMINAL_CANVAS_ATTENTION_TOKEN: this.options.attentionToken,
-          TERMINAL_CANVAS_AGENT_TYPE: record.terminal.agentType,
-        },
+        env: spawnEnv,
       });
 
       record.pty = pty;
@@ -635,15 +651,29 @@ export class PtySessionManager {
     this.disposePty(record, false);
     this.options.markdownService.clearTerminalLink(record.terminal.id);
 
+    const timestamp = new Date().toISOString();
+
     this.setSnapshot(
       record,
       createExitSnapshot({
         snapshot: record.snapshot,
         exitCode,
         signal,
-        timestamp: new Date().toISOString(),
+        timestamp,
       }),
     );
+
+    if (record.terminal.parentTerminalId) {
+      this.options.attentionService.record({
+        sessionId: record.terminal.parentTerminalId,
+        source: 'pty',
+        eventType: exitCode === 0 ? 'completed' : 'failed',
+        timestamp,
+        title: `Child terminal exited (code ${exitCode})`,
+        detail: `${record.terminal.label}: ${record.snapshot.lastOutputLine ?? ''}`.trim(),
+        confidence: 'high',
+      });
+    }
   }
 
   private setSnapshot(record: SessionRecord, snapshot: TerminalSessionSnapshot): void {

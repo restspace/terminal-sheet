@@ -17,6 +17,7 @@ import { registerDebugStateRoutes } from './routes/debugState';
 import { registerFileSystemRoutes } from './routes/filesystem';
 import { registerFrontendSessionRoutes } from './routes/frontendSession';
 import { registerMarkdownRoutes } from './routes/markdown';
+import { registerSpawnRoutes } from './routes/spawn';
 import { registerTokenRoutes } from './routes/token';
 import { registerWorkspaceRoutes } from './routes/workspace';
 import { AttentionService } from './integrations/attentionService';
@@ -87,6 +88,7 @@ export async function createServer(
       markdownService,
       backendId: localBackendId,
       workspaceRoot: contentRoot,
+      spawnBaseUrl: `http://127.0.0.1:${options.port}/api/spawn`,
     },
   );
   const runtimeManager = new BackendRuntimeManager(
@@ -176,6 +178,12 @@ export async function createServer(
   await registerWorkspaceRoutes(app, {
     workspaceService,
     workspaceCommitService,
+  });
+  await registerSpawnRoutes(app, {
+    attentionService,
+    workspaceService,
+    workspaceCommitService,
+    runtimeManager,
   });
   await registerTokenRoutes(app, {
     serverIdentityFilePath,

@@ -52,6 +52,8 @@ export const terminalNodeSchema = z.object({
   status: terminalStatusSchema,
   bounds: nodeBoundsSchema,
   tags: z.array(z.string()),
+  parentTerminalId: z.string().optional(),
+  spawnGroup: z.string().optional(),
 });
 
 export const markdownNodeSchema = z.object({
@@ -123,6 +125,8 @@ export interface CreateTerminalNodeInput {
   repoLabel?: string;
   taskLabel?: string;
   tags?: string[];
+  parentTerminalId?: string;
+  spawnGroup?: string;
 }
 
 export interface CreateMarkdownNodeInput {
@@ -219,6 +223,80 @@ export function createTerminalNode(
       height: 280,
     },
     tags: input.tags ?? [],
+    parentTerminalId: input.parentTerminalId,
+    spawnGroup: input.spawnGroup,
+  };
+}
+
+export function createSpawnedTerminalNode(
+  input: CreateTerminalNodeInput,
+  parentTerminal: TerminalNode,
+  workspace: Workspace,
+): TerminalNode {
+  const id = createId('terminal');
+  const defaultBounds = { width: 400, height: 280 };
+  const gap = 40;
+
+  const preferredPositions = [
+    {
+      x: parentTerminal.bounds.x + parentTerminal.bounds.width + gap,
+      y: parentTerminal.bounds.y,
+    },
+    {
+      x: parentTerminal.bounds.x,
+      y: parentTerminal.bounds.y + parentTerminal.bounds.height + gap,
+    },
+    {
+      x: parentTerminal.bounds.x - defaultBounds.width - gap,
+      y: parentTerminal.bounds.y,
+    },
+    {
+      x: parentTerminal.bounds.x,
+      y: parentTerminal.bounds.y - defaultBounds.height - gap,
+    },
+  ];
+
+  let bounds = {
+    ...defaultBounds,
+    x: preferredPositions[0]!.x,
+    y: preferredPositions[0]!.y,
+  };
+
+  for (const position of preferredPositions) {
+    const candidate = { ...defaultBounds, x: position.x, y: position.y };
+
+    if (!hasNodeOverlap(candidate, workspace)) {
+      bounds = candidate;
+      break;
+    }
+  }
+
+  if (hasNodeOverlap(bounds, workspace)) {
+    bounds = {
+      ...defaultBounds,
+      x: parentTerminal.bounds.x + parentTerminal.bounds.width + gap,
+      y: parentTerminal.bounds.y,
+    };
+
+    while (hasNodeOverlap(bounds, workspace)) {
+      bounds = { ...bounds, y: bounds.y + bounds.height + 32 };
+    }
+  }
+
+  return {
+    id,
+    backendId: input.backendId ?? LOCAL_BACKEND_ID,
+    label: input.label,
+    repoLabel: input.repoLabel,
+    taskLabel: input.taskLabel,
+    shell: input.shell,
+    cwd: input.cwd,
+    agentType: input.agentType,
+    status: 'idle',
+    bounds,
+    tags: input.tags ?? [],
+    parentTerminalId: input.parentTerminalId,
+    spawnGroup: input.spawnGroup,
   };
 }
 
