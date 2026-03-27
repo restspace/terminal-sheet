@@ -121,20 +121,22 @@ export class FrontendLeaseManager {
       };
     }
 
-    if (
-      activeLease.frontendId === request.frontendId &&
-      request.leaseToken === activeLease.leaseToken
-    ) {
-      activeLease.ownerLabel = request.ownerLabel;
-      const lease = this.touchLease(activeLease);
-      this.logInfo('Frontend lease refreshed', lease, {
-        event: 'acquireRefreshed',
-        takeover: false,
-      });
-      return {
-        ok: true,
-        lease,
-      };
+    if (activeLease.frontendId === request.frontendId) {
+      if (
+        request.leaseToken === activeLease.leaseToken ||
+        request.leaseToken === undefined
+      ) {
+        activeLease.ownerLabel = request.ownerLabel;
+        const lease = this.touchLease(activeLease);
+        this.logInfo('Frontend lease refreshed', lease, {
+          event: 'acquireRefreshed',
+          takeover: false,
+        });
+        return {
+          ok: true,
+          lease,
+        };
+      }
     }
 
     if (request.takeover) {
