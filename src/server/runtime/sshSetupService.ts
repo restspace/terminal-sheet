@@ -13,6 +13,7 @@ interface SshSetupServiceOptions {
 interface SshInstallResult {
   detectedOs: 'linux' | 'windows';
   capturedToken: string | null;
+  availableNodeVersion: string | null;
 }
 
 interface SshCommandOptions {
@@ -65,11 +66,17 @@ export class SshSetupService {
     runInstall: boolean,
   ): Promise<SshInstallResult> {
     const detectedOs = await this.detectRemoteOs(sshTarget, sshOptions);
+    const availableNodeVersion = await this.detectAvailableNodeVersion(
+      sshTarget,
+      sshOptions,
+      detectedOs,
+    );
 
     if (!runInstall) {
       return {
         detectedOs,
         capturedToken: null,
+        availableNodeVersion,
       };
     }
 
@@ -83,22 +90,26 @@ export class SshSetupService {
     if (result.code !== 0) {
       if (capturedToken) {
         this.logger.warn(
-          { sshTarget, exitCode: result.code },
+          { sshTarget, exitCode: result.code, availableNodeVersion },
           'SSH install exited non-zero after emitting TSHEET_TOKEN; continuing with captured token.',
         );
 
         return {
           detectedOs,
           capturedToken,
+          availableNodeVersion,
         };
       }
 
-      throw new Error(summarizeInstallFailure(result));
+      throw new Error(
+        `${summarizeInstallFailure(result)}${formatAvailableNodeVersionHint(availableNodeVersion)}`,
+      );
     }
 
     return {
       detectedOs,
       capturedToken,
+      availableNodeVersion,
     };
   }
 
@@ -130,6 +141,19 @@ export class SshSetupService {
       `Unable to detect remote OS over SSH for ${sshTarget}. ` +
         `Linux probe: ${linuxReason}. Windows probe: ${windowsReason}.`,
     );
+  }
+
+  private async detectAvailableNodeVersion(
+    sshTarget: string,
+    sshOptions: SshCommandOptions,
+    detectedOs: 'linux' | 'windows',
+  ): Promise<string | null> {
+    const probeCommand =
+      detectedOs === 'windows'
+        ? 'powershell -NoProfile -Command "node --version"'
+        : 'node --version 2>/dev/null || true';
+    const result = await this.runSshCommand(sshTarget, probeCommand, sshOptions);
+    return parseNodeVersionFromText(`${result.stdout}\n${result.stderr}`);
   }
 
   private async runSshCommand(
@@ -719,4 +743,37 @@ function summarizeInstallFailure(result: {
   }
 
   return 'Remote install failed.';
+}
+
+function parseNodeVersionFromText(input: string): string | null {
+  const match = input.match(/(?:^|\s)(v?\d+\.\d+\.\d+)(?:\s|$)/m);
+
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return match[1].startsWith('v') ? match[1] : `v${match[1]}`;
+}
+
+export function formatAvailableNodeVersionHint(availableNodeVersion: string | null): string {
+  if (!availableNodeVersion) {
+    return '';
+  }
+
+  const requirementHint = isSupportedNodeVersion(availableNodeVersion)
+    ? ''
+    : ' Terminal Sheet requires Node.js v20+ in the SSH session.';
+
+  return ` Available Node.js in SSH session: ${availableNodeVersion}.${requirementHint}`;
+}
+
+function isSupportedNodeVersion(version: string): boolean {
+  const match = version.match(/^v?(\d+)\./);
+
+  if (!match?.[1]) {
+    return false;
+  }
+
+  const major = Number.parseInt(match[1], 10);
+  return Number.isFinite(major) && major >= 20;
 }

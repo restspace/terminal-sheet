@@ -11,7 +11,10 @@ import {
 } from '../../shared/backends';
 import type { WorkspaceService } from '../persistence/workspaceService';
 import type { BackendRuntimeManager } from '../runtime/backendRuntimeManager';
-import { SshSetupService } from '../runtime/sshSetupService';
+import {
+  formatAvailableNodeVersionHint,
+  SshSetupService,
+} from '../runtime/sshSetupService';
 import type { SshTunnelManager } from '../runtime/sshTunnelManager';
 import {
   BackendProvisioningError,
@@ -117,6 +120,8 @@ export async function registerBackendRoutes(
       workspace.backends.map((backend) => backend.id),
     );
 
+    let availableNodeVersion: string | null = null;
+
     try {
       const localPort = await findAvailablePort(body.localPort);
       const localHost = '127.0.0.1';
@@ -138,6 +143,7 @@ export async function registerBackendRoutes(
         body.remotePort,
         body.runInstall,
       );
+      availableNodeVersion = installResult.availableNodeVersion;
       const token = installResult.capturedToken ?? resolvedToken;
 
       if (!token) {
@@ -192,7 +198,7 @@ export async function registerBackendRoutes(
         throw enrichedError;
       }
     } catch (error) {
-      return sendBackendError(reply, error);
+      return sendBackendError(reply, appendNodeVersionHint(error, availableNodeVersion));
     }
   });
 
@@ -334,4 +340,22 @@ function sendBackendError(reply: FastifyReply, error: unknown) {
 
   const message = error instanceof Error ? error.message : 'Backend setup failed.';
   return reply.code(500).send({ message });
+}
+
+function appendNodeVersionHint(
+  error: unknown,
+  availableNodeVersion: string | null,
+): unknown {
+  if (!(error instanceof BackendProvisioningError) || !availableNodeVersion) {
+    return error;
+  }
+
+  if (error.message.includes('Available Node.js in SSH session:')) {
+    return error;
+  }
+
+  return new BackendProvisioningError(
+    error.status,
+    `${error.message}${formatAvailableNodeVersionHint(availableNodeVersion)}`,
+  );
 }

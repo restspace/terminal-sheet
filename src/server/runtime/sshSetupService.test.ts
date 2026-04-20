@@ -91,6 +91,11 @@ describe('SshSetupService.runInstall', () => {
         sshTarget: string,
         sshOptions: { sshPort?: number; sshIdentityFile?: string },
       ) => Promise<'linux' | 'windows'>;
+      detectAvailableNodeVersion: (
+        sshTarget: string,
+        sshOptions: { sshPort?: number; sshIdentityFile?: string },
+        detectedOs: 'linux' | 'windows',
+      ) => Promise<string | null>;
       runSshCommand: (
         sshTarget: string,
         remoteCommand: string,
@@ -99,6 +104,7 @@ describe('SshSetupService.runInstall', () => {
     };
 
     internals.detectRemoteOs = async () => 'linux';
+    internals.detectAvailableNodeVersion = async () => 'v12.16.0';
     internals.runSshCommand = async () => ({
       code: 255,
       stdout: 'TSHEET_TOKEN=token-from-install\n',
@@ -115,15 +121,21 @@ describe('SshSetupService.runInstall', () => {
 
     expect(result.detectedOs).toBe('linux');
     expect(result.capturedToken).toBe('token-from-install');
+    expect(result.availableNodeVersion).toBe('v12.16.0');
   });
 
-  it('throws a clear error when install fails without token output', async () => {
+  it('includes the available Node.js version when install fails without token output', async () => {
     const service = new SshSetupService(logger, { contentRoot: process.cwd() });
     const internals = service as unknown as {
       detectRemoteOs: (
         sshTarget: string,
         sshOptions: { sshPort?: number; sshIdentityFile?: string },
       ) => Promise<'linux' | 'windows'>;
+      detectAvailableNodeVersion: (
+        sshTarget: string,
+        sshOptions: { sshPort?: number; sshIdentityFile?: string },
+        detectedOs: 'linux' | 'windows',
+      ) => Promise<string | null>;
       runSshCommand: (
         sshTarget: string,
         remoteCommand: string,
@@ -132,6 +144,7 @@ describe('SshSetupService.runInstall', () => {
     };
 
     internals.detectRemoteOs = async () => 'linux';
+    internals.detectAvailableNodeVersion = async () => 'v12.16.0';
     internals.runSshCommand = async () => ({
       code: 1,
       stdout: 'Created symlink /tmp/service\n',
@@ -141,7 +154,7 @@ describe('SshSetupService.runInstall', () => {
     await expect(
       service.runInstall('ubuntu@example', {}, 'http://127.0.0.1:4312', 4312, true),
     ).rejects.toThrow(
-      'Remote install failed (exit code 1): ERROR: remote backend started but failed health check on port 4312.',
+      'Remote install failed (exit code 1): ERROR: remote backend started but failed health check on port 4312. Available Node.js in SSH session: v12.16.0. Terminal Sheet requires Node.js v20+ in the SSH session.',
     );
   });
 });
