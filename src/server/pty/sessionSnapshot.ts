@@ -142,18 +142,12 @@ export function createOutputSnapshot(options: {
   const { snapshot, terminal, chunk, timestamp } = options;
   const nextScrollback = appendScrollback(snapshot.scrollback, chunk);
 
-  // renderTerminalText is O(scrollback length) — running it on every raw PTY
-  // chunk (including single echoed characters) causes ~1 s input lag once the
-  // scrollback grows large.  Preview lines are only shown on the overview card
-  // and don't need to refresh on every byte; refreshing whenever a complete
-  // line of output arrives is sufficient.
-  const hasCompleteLine = chunk.includes('\n');
-  const previewLines = hasCompleteLine
-    ? extractPreviewLines(renderTerminalText(nextScrollback))
-    : snapshot.previewLines;
-  const lastOutputLine = hasCompleteLine
-    ? (previewLines.at(-1) ?? snapshot.lastOutputLine)
-    : snapshot.lastOutputLine;
+  // renderTerminalText is O(scrollback length) — it is now deferred to a
+  // periodic timer in PtySessionManager so the hot path stays fast.
+  // Preview lines and lastOutputLine are updated asynchronously via
+  // createPreviewSnapshot().
+  const previewLines = snapshot.previewLines;
+  const lastOutputLine = snapshot.lastOutputLine;
   const unreadDelta = chunk.trim().length > 0 ? 1 : 0;
 
   return {
@@ -168,6 +162,28 @@ export function createOutputSnapshot(options: {
     scrollback: nextScrollback,
     unreadCount: snapshot.unreadCount + unreadDelta,
     summary: lastOutputLine ?? `Running ${terminal.shell} in ${terminal.cwd}`,
+  };
+}
+
+export function createPreviewSnapshot(
+  snapshot: TerminalSessionSnapshot,
+): TerminalSessionSnapshot {
+  const previewLines = extractPreviewLines(renderTerminalText(snapshot.scrollback));
+  const lastOutputLine = previewLines.at(-1) ?? snapshot.lastOutputLine;
+
+  if (
+    lastOutputLine === snapshot.lastOutputLine &&
+    previewLines.length === snapshot.previewLines.length &&
+    previewLines.every((line, i) => line === snapshot.previewLines[i])
+  ) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    previewLines,
+    lastOutputLine,
+    summary: lastOutputLine ?? snapshot.summary,
   };
 }
 

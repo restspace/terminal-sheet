@@ -11,7 +11,6 @@ import {
 } from '../../shared/events';
 import type { TerminalSessionSnapshot } from '../../shared/terminalSessions';
 import type { TerminalNode } from '../../shared/workspace';
-import { renderTerminalText } from '../pty/outputPreview';
 import { renderCodexNotifyTomlSnippet } from './codexNotifySetup';
 
 const EVENT_HISTORY_LIMIT = 48;
@@ -317,8 +316,7 @@ function detectPtyAttentionSignal(chunk: string): {
   title: string;
   confidence: AttentionEventConfidence;
 } | null {
-  const renderedChunk = renderTerminalText(chunk);
-  const combinedText = `${chunk}\n${renderedChunk}`.toLowerCase();
+  const combinedText = stripAnsiEscapes(chunk).toLowerCase();
 
   if (hasOscSequence(chunk)) {
     return {
@@ -524,6 +522,13 @@ function getStringArrayProperty(
 
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? '';
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_RE = /\x1b(?:\[[^a-zA-Z]*[a-zA-Z]|\][^\x07]*\x07|\].)/g;
+
+function stripAnsiEscapes(text: string): string {
+  return text.replace(ANSI_ESCAPE_RE, '');
 }
 
 function buildBashSnippet(source: 'claude'): string {

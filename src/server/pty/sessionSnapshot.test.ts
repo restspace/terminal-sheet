@@ -8,6 +8,7 @@ import {
   createExitSnapshot,
   createInitialSnapshot,
   createOutputSnapshot,
+  createPreviewSnapshot,
   createReadSnapshot,
   createRunningSnapshot,
 } from './sessionSnapshot';
@@ -67,7 +68,7 @@ describe('session snapshot helpers', () => {
   });
 
   it('tracks output preview and unread counts', () => {
-    const snapshot = createOutputSnapshot({
+    const outputSnapshot = createOutputSnapshot({
       snapshot: createRunningSnapshot({
         snapshot: createInitialSnapshot(terminal.id, 'local', terminal.agentType),
         terminal,
@@ -79,9 +80,14 @@ describe('session snapshot helpers', () => {
       timestamp: '2026-03-09T20:00:01.000Z',
     });
 
+    // Preview lines are deferred — createOutputSnapshot no longer computes them.
+    expect(outputSnapshot.unreadCount).toBe(1);
+    expect(outputSnapshot.commandState).toBe('running-command');
+
+    // createPreviewSnapshot computes preview lines from scrollback.
+    const snapshot = createPreviewSnapshot(outputSnapshot);
+
     expect(snapshot.previewLines.at(-1)).toBe('hello world');
-    expect(snapshot.unreadCount).toBe(1);
-    expect(snapshot.commandState).toBe('running-command');
   });
 
   it('clears unread counts and updates size/exit state', () => {

@@ -15,7 +15,11 @@ import { Terminal } from '@xterm/xterm';
 
 import { MAX_SCROLLBACK_CHARS } from '../../shared/scrollback';
 import { logStateDebug } from '../debug/stateDebug';
-import { getIncrementalWrite } from './incrementalWrite';
+import {
+  captureScrollbackRef,
+  getIncrementalWrite,
+  type ScrollbackRef,
+} from './incrementalWrite';
 import { measureLiveTerminalGeometry } from './terminalGeometry';
 import {
   observeAppliedTerminalResizeGeneration,
@@ -128,7 +132,7 @@ export function useXtermSurfaceController({
   const readOnly = !acceptsInput;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const lastRenderedScrollbackRef = useRef('');
+  const lastRenderedScrollbackRef = useRef<ScrollbackRef>({ length: 0, tail: '' });
   const lastFitStateKeyRef = useRef('');
   const lastRenderedTerminalSizeRef = useRef('');
   const pendingResizeRequestRef = useRef<PendingResizeRequest | null>(null);
@@ -414,7 +418,7 @@ export function useXtermSurfaceController({
     applyTerminalInteractivity(terminal, readOnlyRef.current);
     markTerminalDomAsCanvasSafe(terminal);
 
-    lastRenderedScrollbackRef.current = '';
+    lastRenderedScrollbackRef.current = { length: 0, tail: '' };
     shouldStickToBottomRef.current = true;
     terminalRef.current = terminal;
     logStateDebug('terminalSurface', 'mount', {
@@ -672,7 +676,7 @@ export function useXtermSurfaceController({
       rendererController.dispose();
       terminal.dispose();
       terminalRef.current = null;
-      lastRenderedScrollbackRef.current = '';
+      lastRenderedScrollbackRef.current = { length: 0, tail: '' };
       lastFitStateKeyRef.current = '';
       lastRenderedTerminalSizeRef.current = '';
       logStateDebug('terminalSurface', 'unmount', {
@@ -805,14 +809,20 @@ export function useXtermSurfaceController({
 
   useEffect(() => {
     const terminal = terminalRef.current;
-    const previousScrollback = lastRenderedScrollbackRef.current;
+    const previous = lastRenderedScrollbackRef.current;
 
-    if (!terminal || scrollback === previousScrollback) {
+    if (!terminal) {
       return;
     }
 
-    const incrementalWrite = getIncrementalWrite(previousScrollback, scrollback);
+    const incrementalWrite = getIncrementalWrite(previous, scrollback);
     const shouldRestoreFocus = shouldRestoreTerminalFocus(terminal, readOnly);
+
+    if (incrementalWrite !== null && incrementalWrite.length === 0) {
+      // No new data — scrollback reference changed but content is the same.
+      lastRenderedScrollbackRef.current = captureScrollbackRef(scrollback);
+      return;
+    }
 
     if (incrementalWrite !== null) {
       terminal.write(incrementalWrite, () => {
@@ -826,11 +836,11 @@ export function useXtermSurfaceController({
         sessionId,
         readOnly,
         scrollbackLength: scrollback.length,
-        previousScrollbackLength: previousScrollback.length,
+        previousScrollbackLength: previous.length,
       });
     }
 
-    lastRenderedScrollbackRef.current = scrollback;
+    lastRenderedScrollbackRef.current = captureScrollbackRef(scrollback);
   }, [readOnly, scrollback, sessionId]);
 
   useEffect(() => {

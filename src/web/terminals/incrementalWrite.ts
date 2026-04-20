@@ -1,52 +1,50 @@
-const SLIDING_SCROLLBACK_PROBE_CHARS = 1_024;
+const TAIL_PROBE_LENGTH = 1_024;
 
+export interface ScrollbackRef {
+  length: number;
+  tail: string;
+}
+
+export function captureScrollbackRef(scrollback: string): ScrollbackRef {
+  return {
+    length: scrollback.length,
+    tail: scrollback.length <= TAIL_PROBE_LENGTH
+      ? scrollback
+      : scrollback.slice(scrollback.length - TAIL_PROBE_LENGTH),
+  };
+}
+
+/**
+ * Compute the incremental text that needs to be written to xterm, or `null` if
+ * a full reset is required.
+ *
+ * The common case (new data appended, no truncation) is O(1) — a single
+ * `slice` call.  Truncation (scrollback cap reached) triggers a full reset,
+ * which is the correct behaviour since xterm needs to re-render from scratch.
+ */
 export function getIncrementalWrite(
-  previousScrollback: string,
+  previous: ScrollbackRef,
   nextScrollback: string,
 ): string | null {
-  if (nextScrollback.startsWith(previousScrollback)) {
-    return nextScrollback.slice(previousScrollback.length);
-  }
-
-  const overlap = getSlidingScrollbackOverlap(previousScrollback, nextScrollback);
-
-  if (overlap === 0) {
+  // Scrollback only grows unless the 120K cap triggered a trim from the front.
+  if (nextScrollback.length < previous.length) {
     return null;
   }
 
-  return nextScrollback.slice(overlap);
-}
+  // Fast path: verify the tail of the previous scrollback is still in the
+  // expected position.  This catches the truncation case where length grew but
+  // the beginning was sliced off.
+  if (previous.tail.length > 0) {
+    const expectedTailStart = previous.length - previous.tail.length;
+    const actualTail = nextScrollback.slice(
+      expectedTailStart,
+      expectedTailStart + previous.tail.length,
+    );
 
-function getSlidingScrollbackOverlap(
-  previousScrollback: string,
-  nextScrollback: string,
-): number {
-  const maxOverlap = Math.min(previousScrollback.length, nextScrollback.length);
-
-  if (maxOverlap === 0) {
-    return 0;
+    if (actualTail !== previous.tail) {
+      return null;
+    }
   }
 
-  const probeLength = Math.min(SLIDING_SCROLLBACK_PROBE_CHARS, maxOverlap);
-  const probe = nextScrollback.slice(0, probeLength);
-  let candidateStart = previousScrollback.lastIndexOf(probe);
-
-  while (candidateStart !== -1) {
-    const overlap = previousScrollback.length - candidateStart;
-
-    if (
-      overlap <= nextScrollback.length &&
-      nextScrollback.startsWith(previousScrollback.slice(candidateStart))
-    ) {
-      return overlap;
-    }
-
-    if (candidateStart === 0) {
-      break;
-    }
-
-    candidateStart = previousScrollback.lastIndexOf(probe, candidateStart - 1);
-  }
-
-  return 0;
+  return nextScrollback.slice(previous.length);
 }

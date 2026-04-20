@@ -293,7 +293,7 @@ import {
   ReadOnlyTerminalSurface,
   TerminalSurface,
 } from './TerminalFocusSurface';
-import { getIncrementalWrite } from './incrementalWrite';
+import { captureScrollbackRef, getIncrementalWrite } from './incrementalWrite';
 import { resetTerminalResizeGenerationStateForTests } from './terminalResizeGeneration';
 import { measureCellSize } from './terminalSizing';
 
@@ -346,31 +346,26 @@ describe('measureCellSize', () => {
 
 describe('getIncrementalWrite', () => {
   it('returns the appended tail for normal incremental output', () => {
-    expect(getIncrementalWrite('hello', 'hello world')).toBe(' world');
+    expect(getIncrementalWrite(captureScrollbackRef('hello'), 'hello world')).toBe(' world');
   });
 
-  it('returns the appended tail when scrollback slides forward at the cap', () => {
+  it('returns null when scrollback was truncated from front (sliding window)', () => {
     const previous = `${'a'.repeat(2_000)}${'b'.repeat(2_000)}${'c'.repeat(2_000)}`;
     const next = `${previous.slice(1_750)}tail`;
 
-    expect(getIncrementalWrite(previous, next)).toBe('tail');
+    // The front was trimmed, so the tail probe won't match — triggers full reset.
+    expect(getIncrementalWrite(captureScrollbackRef(previous), next)).toBeNull();
   });
 
-  it('returns the appended tail when the overlap starts in the middle of the old buffer', () => {
-    const previous =
-      'header:' +
-      'x'.repeat(1_800) +
-      'body:' +
-      'y'.repeat(1_800) +
-      'footer:' +
-      'z'.repeat(1_800);
-    const next = `${previous.slice(1_237)}delta`;
+  it('returns appended data when scrollback grew without truncation', () => {
+    const previous = 'x'.repeat(3_000);
+    const next = `${previous}delta`;
 
-    expect(getIncrementalWrite(previous, next)).toBe('delta');
+    expect(getIncrementalWrite(captureScrollbackRef(previous), next)).toBe('delta');
   });
 
   it('forces a reset when the replacement buffer is unrelated', () => {
-    expect(getIncrementalWrite('hello world', 'goodbye world')).toBeNull();
+    expect(getIncrementalWrite(captureScrollbackRef('hello world'), 'goodbye world')).toBeNull();
   });
 });
 

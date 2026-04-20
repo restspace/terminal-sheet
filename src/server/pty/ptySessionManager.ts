@@ -39,6 +39,7 @@ import {
   createInitialSnapshot,
   createInputSnapshot,
   createOutputSnapshot,
+  createPreviewSnapshot,
   createReadSnapshot,
   createRunningSnapshot,
   createSpawnFailedSnapshot,
@@ -70,6 +71,9 @@ interface SessionRuntimeState {
   deferredSpawnTimer: ReturnType<typeof setTimeout> | null;
   spawnInFlight: boolean;
   requestedResize: ResizeRequest | null;
+  outputBuffer: string;
+  outputFlushTimer: ReturnType<typeof setTimeout> | null;
+  previewDirty: boolean;
 }
 
 type SessionListener = (message: TerminalServerSocketMessage) => void;
@@ -78,12 +82,27 @@ type SessionListener = (message: TerminalServerSocketMessage) => void;
 const DEFERRED_PTY_SPAWN_MS = 2000;
 const FALLBACK_RESIZE_GENERATION = 0;
 
+/**
+ * Coalesce rapid PTY output into batches.  Small chunks (likely interactive
+ * keystroke echoes) are forwarded immediately so the user sees no delay.
+ * Larger bursts are buffered for up to OUTPUT_BATCH_INTERVAL_MS before being
+ * flushed, which dramatically reduces the frequency of snapshot creation,
+ * JSON serialization, and WebSocket sends during bulk output.
+ */
+const OUTPUT_BATCH_INTERVAL_MS = 16;
+const OUTPUT_IMMEDIATE_THRESHOLD_BYTES = 64;
+
+/** How often to recompute preview lines for sessions with new output. */
+const PREVIEW_REFRESH_INTERVAL_MS = 500;
+
 export class PtySessionManager {
   private readonly sessions = new Map<string, SessionRecord>();
 
   private readonly listeners = new Set<SessionListener>();
 
   private readonly integrationRegistry: AgentIntegrationRegistry;
+
+  private readonly previewTimer: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly logger: FastifyBaseLogger,
@@ -103,6 +122,10 @@ export class PtySessionManager {
       createAgentIntegrationRegistry({
         attentionReceiverUrl: options.attentionReceiverUrl,
       });
+
+    this.previewTimer = setInterval(() => {
+      this.refreshDirtyPreviews();
+    }, PREVIEW_REFRESH_INTERVAL_MS);
   }
 
   async syncWithWorkspace(workspace: Workspace): Promise<void> {
@@ -285,6 +308,8 @@ export class PtySessionManager {
   }
 
   close(): void {
+    clearInterval(this.previewTimer);
+
     for (const [sessionId] of this.sessions) {
       this.disposeSession(sessionId);
     }
@@ -320,6 +345,9 @@ export class PtySessionManager {
         deferredSpawnTimer: null,
         spawnInFlight: false,
         requestedResize: null,
+        outputBuffer: '',
+        outputFlushTimer: null,
+        previewDirty: false,
       },
     };
 
@@ -613,18 +641,50 @@ export class PtySessionManager {
       return;
     }
 
+    const output = cwdResult.output;
+
+    // Small chunks (e.g. keystroke echoes) are flushed immediately so the user
+    // sees no latency.  Larger bursts are coalesced into a single batch.
+    if (
+      record.runtime.outputBuffer.length === 0 &&
+      output.length <= OUTPUT_IMMEDIATE_THRESHOLD_BYTES
+    ) {
+      this.processOutput(record, output);
+      return;
+    }
+
+    record.runtime.outputBuffer += output;
+
+    if (record.runtime.outputFlushTimer === null) {
+      record.runtime.outputFlushTimer = setTimeout(() => {
+        this.flushOutputBuffer(record);
+      }, OUTPUT_BATCH_INTERVAL_MS);
+    }
+  }
+
+  private flushOutputBuffer(record: SessionRecord): void {
+    record.runtime.outputFlushTimer = null;
+    const buffered = record.runtime.outputBuffer;
+    record.runtime.outputBuffer = '';
+
+    if (buffered.length > 0) {
+      this.processOutput(record, buffered);
+    }
+  }
+
+  private processOutput(record: SessionRecord, chunk: string): void {
     const timestamp = new Date().toISOString();
     let nextSnapshot = createOutputSnapshot({
       snapshot: record.snapshot,
       terminal: record.terminal,
-      chunk: cwdResult.output,
+      chunk,
       timestamp,
     });
     const attentionEvent = this.options.attentionService.detectFromPtyOutput({
       sessionId: record.terminal.id,
       terminal: record.terminal,
       snapshot: nextSnapshot,
-      chunk: cwdResult.output,
+      chunk,
       timestamp,
     });
 
@@ -632,15 +692,34 @@ export class PtySessionManager {
       nextSnapshot = applyAttentionEventSnapshot(nextSnapshot, attentionEvent);
     }
 
+    if (chunk.includes('\n')) {
+      record.runtime.previewDirty = true;
+    }
+
     this.broadcast({
       type: 'session.output',
       sessionId: record.terminal.id,
       backendId: this.options.backendId ?? LOCAL_BACKEND_ID,
-      data: cwdResult.output,
+      data: chunk,
       state: buildSessionOutputState(nextSnapshot),
     });
 
     record.snapshot = nextSnapshot;
+  }
+
+  private refreshDirtyPreviews(): void {
+    for (const record of this.sessions.values()) {
+      if (!record.runtime.previewDirty) {
+        continue;
+      }
+
+      record.runtime.previewDirty = false;
+      const updated = createPreviewSnapshot(record.snapshot);
+
+      if (updated !== record.snapshot) {
+        this.setSnapshot(record, updated);
+      }
+    }
   }
 
   private handleExit(
@@ -685,6 +764,12 @@ export class PtySessionManager {
   }
 
   private disposePty(record: SessionRecord, kill = true): void {
+    // Flush any buffered output before tearing down so nothing is lost.
+    if (record.runtime.outputFlushTimer !== null) {
+      clearTimeout(record.runtime.outputFlushTimer);
+    }
+    this.flushOutputBuffer(record);
+
     for (const disposable of record.disposables) {
       disposable.dispose();
     }

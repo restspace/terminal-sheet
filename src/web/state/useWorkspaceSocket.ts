@@ -227,6 +227,25 @@ export function useWorkspaceSocket({
 export function parseServerMessage(
   payload: unknown,
 ): TerminalServerSocketMessage | null {
+  // Fast path: skip Zod validation for high-frequency session.output messages.
+  // The server is trusted, so we only need structural validation for the hot
+  // path.  All other (low-frequency) message types still go through Zod.
+  try {
+    const parsed = JSON.parse(String(payload));
+
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      parsed.type === 'session.output' &&
+      typeof parsed.sessionId === 'string' &&
+      typeof parsed.data === 'string'
+    ) {
+      return parsed as TerminalServerSocketMessage;
+    }
+  } catch {
+    return null;
+  }
+
   return parseJsonMessage(payload, terminalServerSocketMessageSchema);
 }
 
