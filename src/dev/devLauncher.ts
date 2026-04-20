@@ -67,7 +67,10 @@ async function main(): Promise<void> {
         resolve(rootDir, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
         'watch',
         'src/cli/index.ts',
-        '--no-open',
+        'serve',
+        '--role',
+        'home',
+        '--no-open'
       ],
       env: {
         NODE_ENV: 'development',
