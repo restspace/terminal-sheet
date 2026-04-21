@@ -63,6 +63,95 @@ describe('MarkdownPlaceholderNode', () => {
     expect(previewBody?.className).toContain('nodrag');
   });
 
+  it('opens the inspect-mode editor when the Open editor button is clicked', () => {
+    const markdown = createPlaceholderMarkdown(0);
+    const onFocusRequest = vi.fn();
+    const props = createNodeProps({
+      markdown,
+      document: createDocumentState(markdown.id, markdown.filePath),
+      semanticZoomMode: 'inspect',
+    });
+    props.data.onFocusRequest = onFocusRequest;
+
+    act(() => {
+      root.render(createElement(MarkdownPlaceholderNode, props));
+    });
+
+    const openEditorButton = getButtonByText(container, 'Open editor');
+
+    act(() => {
+      openEditorButton.click();
+    });
+
+    const editor = container.querySelector('textarea');
+
+    expect(onFocusRequest).toHaveBeenCalledWith(markdown.id);
+    expect(editor).not.toBeNull();
+    expect(editor?.value).toContain('# Title');
+    expect(editor?.readOnly).toBe(false);
+    expect(container.querySelector('.markdown-rendered-content')).toBeNull();
+  });
+
+  it('keeps the visible top source line when switching inspect editor and preview modes', () => {
+    const offsetTopSpy = vi
+      .spyOn(HTMLElement.prototype, 'offsetTop', 'get')
+      .mockImplementation(function getOffsetTop(this: HTMLElement) {
+        const line = Number(this.dataset.markdownSourceLine);
+
+        return Number.isFinite(line) ? (line - 1) * 20 : 0;
+      });
+    const markdown = createPlaceholderMarkdown(0);
+    const props = createNodeProps({
+      markdown,
+      document: {
+        ...createDocumentState(markdown.id, markdown.filePath),
+        content: '# Title\n\nFirst paragraph\n\nSecond paragraph',
+      },
+      semanticZoomMode: 'inspect',
+    });
+
+    try {
+      act(() => {
+        root.render(createElement(MarkdownPlaceholderNode, props));
+      });
+
+      act(() => {
+        getButtonByText(container, 'Open editor').click();
+      });
+
+      const editor = container.querySelector('textarea');
+
+      if (!editor) {
+        throw new Error('Expected Markdown editor to render.');
+      }
+
+      act(() => {
+        editor.scrollTop = 40;
+        getButtonByText(container, 'Preview').click();
+      });
+
+      const previewBody = container.querySelector<HTMLDivElement>(
+        '.markdown-preview-card .markdown-panel-body',
+      );
+
+      expect(previewBody).not.toBeNull();
+      expect(previewBody?.scrollTop).toBe(40);
+
+      act(() => {
+        if (!previewBody) {
+          throw new Error('Expected Markdown preview body to render.');
+        }
+
+        previewBody.scrollTop = 80;
+        getButtonByText(container, 'Open editor').click();
+      });
+
+      expect(container.querySelector('textarea')?.scrollTop).toBe(80);
+    } finally {
+      offsetTopSpy.mockRestore();
+    }
+  });
+
   it('marks focus-mode markdown editor and preview bodies as nowheel regions', () => {
     const markdown = createPlaceholderMarkdown(0);
 
@@ -171,4 +260,19 @@ function createDocumentState(
     error: null,
     conflict: null,
   };
+}
+
+function getButtonByText(
+  container: HTMLElement,
+  text: string,
+): HTMLButtonElement {
+  const button = [...container.querySelectorAll('button')].find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}" to render.`);
+  }
+
+  return button;
 }
