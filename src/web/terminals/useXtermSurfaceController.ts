@@ -436,13 +436,19 @@ export function useXtermSurfaceController({
       forwardInput(data);
     });
 
+    const updateStickToBottomState = () => {
+      if (terminalRef.current === terminal) {
+        shouldStickToBottomRef.current = isViewportNearBottom(terminal);
+      }
+    };
     const handleUserScroll = () => {
       window.requestAnimationFrame(() => {
-        if (terminalRef.current === terminal) {
-          shouldStickToBottomRef.current = isViewportNearBottom(terminal);
-        }
+        updateStickToBottomState();
       });
     };
+    const scrollDisposable = terminal.onScroll(() => {
+      updateStickToBottomState();
+    });
 
     container.addEventListener('wheel', handleUserScroll, { passive: true });
 
@@ -672,6 +678,7 @@ export function useXtermSurfaceController({
       pendingResizeRequestRef.current = null;
       setIsResizePending(false);
       dataDisposable?.dispose();
+      scrollDisposable?.dispose();
       container.removeEventListener('wheel', handleUserScroll);
       rendererController.dispose();
       terminal.dispose();
@@ -829,7 +836,9 @@ export function useXtermSurfaceController({
         restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
       });
     } else {
+      const viewportSnapshot = captureTerminalViewport(terminal);
       terminal.write('\x1bc' + scrollback, () => {
+        restoreTerminalViewport(terminal, viewportSnapshot);
         restoreInteractiveFocusIfNeeded(terminal, shouldRestoreFocus);
       });
       logStateDebug('terminalSurface', 'fullResetWrite', {
@@ -1373,6 +1382,43 @@ function syncReadOnlyViewport(
     terminal.scrollToBottom();
   } catch {
     // Ignore viewport-sync races during terminal disposal/remount.
+  }
+}
+
+interface TerminalViewportSnapshot {
+  wasNearBottom: boolean;
+  distanceFromBottom: number;
+}
+
+function captureTerminalViewport(
+  terminal: Terminal,
+): TerminalViewportSnapshot {
+  const activeBuffer = terminal.buffer.active;
+  const distanceFromBottom = Math.max(
+    0,
+    activeBuffer.baseY - activeBuffer.viewportY,
+  );
+
+  return {
+    wasNearBottom: distanceFromBottom <= 1,
+    distanceFromBottom,
+  };
+}
+
+function restoreTerminalViewport(
+  terminal: Terminal,
+  snapshot: TerminalViewportSnapshot,
+): void {
+  if (snapshot.wasNearBottom) {
+    return;
+  }
+
+  try {
+    terminal.scrollToLine(
+      Math.max(0, terminal.buffer.active.baseY - snapshot.distanceFromBottom),
+    );
+  } catch {
+    // Ignore viewport restore races during terminal disposal/remount.
   }
 }
 

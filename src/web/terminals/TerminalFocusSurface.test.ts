@@ -18,6 +18,8 @@ const mockTerminalState = vi.hoisted(() => ({
 
     readonly refreshCalls: Array<{ start: number; end: number }> = [];
 
+    readonly scrollToLineCalls: number[] = [];
+
     readonly buffer = {
       active: {
         baseY: 0,
@@ -130,6 +132,11 @@ const mockTerminalState = vi.hoisted(() => ({
     scrollToBottom(): void {
       this.scrollToBottomCalls += 1;
       this.buffer.active.viewportY = this.buffer.active.baseY;
+    }
+
+    scrollToLine(line: number): void {
+      this.scrollToLineCalls.push(line);
+      this.buffer.active.viewportY = line;
     }
 
     refresh(start: number, end: number): void {
@@ -293,6 +300,7 @@ import {
   ReadOnlyTerminalSurface,
   TerminalSurface,
 } from './TerminalFocusSurface';
+import { MAX_SCROLLBACK_CHARS } from '../../shared/scrollback';
 import { captureScrollbackRef, getIncrementalWrite } from './incrementalWrite';
 import { resetTerminalResizeGenerationStateForTests } from './terminalResizeGeneration';
 import { measureCellSize } from './terminalSizing';
@@ -349,12 +357,12 @@ describe('getIncrementalWrite', () => {
     expect(getIncrementalWrite(captureScrollbackRef('hello'), 'hello world')).toBe(' world');
   });
 
-  it('returns null when scrollback was truncated from front (sliding window)', () => {
-    const previous = `${'a'.repeat(2_000)}${'b'.repeat(2_000)}${'c'.repeat(2_000)}`;
-    const next = `${previous.slice(1_750)}tail`;
+  it('returns appended data when scrollback was truncated from front', () => {
+    const previous = buildUniqueScrollback(1_200);
+    const chunk = '\nnew capped output';
+    const next = `${previous.slice(chunk.length)}${chunk}`;
 
-    // The front was trimmed, so the tail probe won't match — triggers full reset.
-    expect(getIncrementalWrite(captureScrollbackRef(previous), next)).toBeNull();
+    expect(getIncrementalWrite(captureScrollbackRef(previous), next)).toBe(chunk);
   });
 
   it('returns appended data when scrollback grew without truncation', () => {
@@ -466,6 +474,37 @@ describe('ReadOnlyTerminalSurface', () => {
     expect(terminal.writeCalls).toEqual(['hello', ' world']);
   });
 
+  it('continues incrementally when the capped scrollback window slides', () => {
+    const previous = buildUniqueScrollback(10_000).slice(0, MAX_SCROLLBACK_CHARS);
+    const chunk = '\nnew capped output\n';
+    const next = `${previous.slice(chunk.length)}${chunk}`;
+
+    act(() => {
+      root.render(
+        createElement(ReadOnlyTerminalSurface, {
+          sessionId: 'terminal-capped',
+          scrollback: previous,
+          className: 'terminal-preview-surface',
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal();
+
+    act(() => {
+      root.render(
+        createElement(ReadOnlyTerminalSurface, {
+          sessionId: 'terminal-capped',
+          scrollback: next,
+          className: 'terminal-preview-surface',
+        }),
+      );
+    });
+
+    expect(terminal.writeCalls.at(-1)).toBe(chunk);
+    expect(terminal.writeCalls).not.toContain(`\x1bc${next}`);
+  });
+
   it('replays the full scrollback after a read-only remount', () => {
     act(() => {
       root.render(
@@ -543,6 +582,36 @@ describe('ReadOnlyTerminalSurface', () => {
     });
 
     expect(terminal.scrollToBottomCalls).toBeGreaterThan(initialScrollCalls);
+  });
+
+  it('restores the viewport when an unrelated replacement forces a full reset', () => {
+    act(() => {
+      root.render(
+        createElement(ReadOnlyTerminalSurface, {
+          sessionId: 'terminal-reset',
+          scrollback: 'first buffer',
+          scrollResetKey: 'inspect',
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal();
+    terminal.buffer.active.baseY = 20;
+    terminal.buffer.active.viewportY = 5;
+
+    act(() => {
+      root.render(
+        createElement(ReadOnlyTerminalSurface, {
+          sessionId: 'terminal-reset',
+          scrollback: 'replacement',
+          scrollResetKey: 'inspect',
+        }),
+      );
+    });
+
+    expect(terminal.writeCalls.at(-1)).toBe('\x1bcreplacement');
+    expect(terminal.scrollToLineCalls).toHaveLength(1);
+    expect(terminal.scrollToLineCalls[0]).toBeLessThan(terminal.buffer.active.baseY);
   });
 
   it('uses the same webgl-first renderer path for read-only surfaces', () => {
@@ -1732,6 +1801,73 @@ describe('TerminalFocusSurface', () => {
     expectLastResizeCall(onResize, 'terminal-frozen', 79, 20);
   });
 
+  it('does not force a read-only terminal back to bottom after xterm scrolls upward', () => {
+    const onResize = vi.fn().mockReturnValue(true);
+
+    act(() => {
+      root.render(
+        createElement(TerminalSurface, {
+          sessionId: 'terminal-scroll-preserve',
+          scrollback: 'line 1\nline 2',
+          acceptsInput: false,
+          onResize,
+        }),
+      );
+    });
+
+    const terminal = getSingleMockTerminal() as InstanceType<
+      typeof mockTerminalState.MockTerminal
+    > & {
+      _core?: {
+        _renderService?: {
+          dimensions?: {
+            css?: {
+              cell?: {
+                width?: number;
+                height?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+    const surface = getTerminalSurfaceElement(container);
+
+    let surfaceWidth = 800;
+    Object.defineProperty(surface, 'clientWidth', {
+      configurable: true,
+      get: () => surfaceWidth,
+    });
+    Object.defineProperty(surface, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    });
+    terminal._core = {
+      _renderService: {
+        dimensions: {
+          css: {
+            cell: {
+              width: 10,
+              height: 20,
+            },
+          },
+        },
+      },
+    };
+
+    emitResizeObservers(resizeObserverCallbacks);
+    const scrollCallsAfterInitialFit = terminal.scrollToBottomCalls;
+
+    terminal.buffer.active.baseY = 40;
+    terminal.buffer.active.viewportY = 10;
+    terminal.emitScroll();
+
+    surfaceWidth = 790;
+    emitResizeObservers(resizeObserverCallbacks);
+
+    expect(terminal.scrollToBottomCalls).toBe(scrollCallsAfterInitialFit);
+  });
+
   it('flushes pending read-only live resize requests after socket recovery', () => {
     const onResize = vi.fn().mockReturnValue(true);
 
@@ -1916,6 +2052,13 @@ function getSingleMockTerminal(): InstanceType<typeof mockTerminalState.MockTerm
   return mockTerminalState.instances[0] as InstanceType<
     typeof mockTerminalState.MockTerminal
   >;
+}
+
+function buildUniqueScrollback(lineCount: number): string {
+  return Array.from(
+    { length: lineCount },
+    (_, index) => `line-${index.toString().padStart(5, '0')}-unique-output`,
+  ).join('\n');
 }
 
 function createDomRect(width: number, height: number): DOMRect {
